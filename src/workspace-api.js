@@ -69,7 +69,7 @@ function mount(app, { store, audit, SYS }) {
     const gv = await git.version().catch(() => ({ available: false }));
     res.json({ root: c.root || '', rootExists: !!c.root && fs.existsSync(c.root) && fs.statSync(c.root).isDirectory(), aliases: c.aliases || {}, suggestions: suggestions(), git: gv, vscode: !!findVsCode() });
   });
-  app.put('/api/wsm', (req, res) => {
+  app.put('/api/wsm', async (req, res) => {
     const c = cfg();
     if (req.body.root !== undefined) {
       const root = checkRoot(req.body.root);
@@ -89,7 +89,7 @@ function mount(app, { store, audit, SYS }) {
       c.aliases ||= {};
       if (name) c.aliases[p] = name; else delete c.aliases[p];
     }
-    store.save();
+    await store.save();
     res.json({ ok: true, root: c.root, aliases: c.aliases || {} });
   });
 

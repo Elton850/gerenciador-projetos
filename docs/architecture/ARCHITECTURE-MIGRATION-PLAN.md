@@ -165,7 +165,9 @@ Os módulos de regra já trabalham sobre agregados inteiros (projeto, ciclo, che
   `EvidenceRepository`, `UserRepository`, `AuditRepository`. Só eles conhecem Supabase. A UI continua falando só com a API local.
 - Backends: **SupabaseBackend** (produção) e **LocalJsonBackend** (o comportamento atual — usado pela suíte de testes e como fonte da migração).
   Os 187 testes continuam válidos sobre o LocalJsonBackend; testes novos cobrem o SupabaseBackend com fake + testes SQL/RLS.
-- Mudança mecânica: handlers que gravam passam a `async` (Express 5 já propaga rejeições ao error handler).
+- Mudança mecânica: handlers que gravam passam a `async` (Express 5 já propaga rejeições ao error handler). **Feito na Fase 3.**
+- Projeto: em claro só a lista `PROJECT_PLAIN` (mapping.js); todo campo novo nasce cifrado. Campo novo na RAIZ do estado sem classificação faz o mapeamento falhar (não some em silêncio).
+- Erros para a tela: `STALE_DATA` 409 (outra pessoa alterou; memória recarregada), `FORBIDDEN` 403, `OFFLINE` 503, `AUTH_REQUIRED` 401. Após falha, a memória volta ao estado confirmado (recarga; sem rede, snapshot) e gravações já enfileiradas são recusadas — nunca há “salvo” falso.
 - **Gravação atômica**: o Unit of Work envia o lote inteiro para `public.apply_changes` (SECURITY INVOKER — RLS vale; uma transação; `expected_revision` obrigatório em update). Assim um “salvar” que toca vários agregados (ex.: excluir estágio limpa checklists e documentos) nunca fica pela metade.
 
 ### 6.2 Tabelas (resumo; SQL na Fase 2)
@@ -370,7 +372,8 @@ Conformidade depende também de base legal, política de privacidade, contratos,
 | **0** | Inventário, este plano, DATA-CLASSIFICATION, threat model | — ✔ **concluída 2026-10-05** |
 | **1** | `.gitignore` endurecido, `scripts/scan-secrets.js` + hook `pre-commit` (com canários de dados reais), `.env.example`, anonimização de nomes reais de clientes/IP em testes. Git local: **aguardando sua autorização** (SETUP-GITHUB §3). `src/paths.js` movido para a Fase 5, onde é usado | não ✔ **concluída 2026-10-05** |
 | **2** | 10 migrations (schema, profiles/estados, RBAC, RLS, `apply_changes`, RPCs admin, `key_access`, auditoria append-only, Storage, MASTER protegido), Edge Functions `gp-keys`/`gp-admin`, `src/crypto/envelope.js`, testes: 20 de RLS (PGlite) + 6 de cifra; `rls-smoke.sql` e rollback de DEV validados | escrever: ✔ **concluída 2026-10-05** · aplicar no dev: **AÇÃO SUA** (SETUP-SUPABASE) |
-| **3** | Camada de persistência: Store/UnitOfWork, Repositories, LocalJsonBackend, SupabaseBackend, CryptoService, vínculos locais, segredos locais | não |
+| **3** | `src/store.js` (fachada: fila de gravações, geração, recuperação, attach/detach/refresh) · `src/persistence/` (`LocalJsonBackend` = comportamento antigo; `CloudBackend` = Unit of Work + cifra + `apply_changes`; `mapping.js` = os “repositories” por entidade; `supabase-rest.js`; `keys.js`; `local-user-data.js`) · `src/auth/permissions.js` · 98 gravações agora `await store.save()` · mapeamento validado em memória sobre os dados reais (ida e volta idêntica; 0 caminhos/senhas/nomes em claro) | não ✔ **concluída 2026-10-05** |
+| **3b** | Arquivos na nuvem: evidências e imagens de e-mail no Storage (cifradas, D1); conteúdo e versões dos scripts SQL no banco com cópia de trabalho local (D5). Até lá, no modo nuvem esses arquivos continuam na pasta local | não |
 | **4** | Login/logout/sessão/estados PENDING/SUSPENDED, middleware de autenticação, identidade = UUID | testar: **sim** (projeto dev) |
 | **5** | Horas isoladas por usuário + export/import cifrado | não |
 | **6** | Ferramenta de migração + dry-run na **cópia** + migração no projeto dev | **sim** (usuários de teste no dev) |
@@ -378,7 +381,7 @@ Conformidade depende também de base legal, política de privacidade, contratos,
 | **8** | Administração: Usuários e Permissões, acesso a projetos, Infraestrutura | não |
 | **9** | Central de Atualizações (app + configurações funcionais) | **sim** (chave de assinatura) |
 | **10** | Varredura de vazamento, regressão, SECURITY/SETUP/MIGRATION/BACKUP docs, Vault, ADRs | não |
-Cada fase termina com a suíte verde e um checkpoint. Checkpoint das fases 1–2: **216/216** (187 do baseline + 29 novos), varredura de segredos limpa.
+Cada fase termina com a suíte verde e um checkpoint. Checkpoint da fase 3: **247/247** (216 + 31 novos: mapeamento, CloudBackend ponta a ponta no PGlite com RLS, API com backend da nuvem, transporte, dados locais, permissões). Checkpoint das fases 1–2: **216/216** (187 do baseline + 29 novos), varredura de segredos limpa.
 Não testado localmente: Edge Functions (sem Deno nesta máquina) — validar no projeto dev. Fases 1–3 e 5 podem andar antes de existir o projeto Supabase.
 
 ## 21. Validação anti-retrabalho

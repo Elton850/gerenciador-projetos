@@ -127,26 +127,26 @@ function mount(app, { store, audit, dataDir, SYS }) {
   });
 
   // ---------- Configuração da jornada ----------
-  app.put('/api/hours/config', (req, res) => {
+  app.put('/api/hours/config', async (req, res) => {
     const today = H.localParts(nowMs()).date;
     const next = H.cleanConfig(req.body || {}, data().hours);
     data().hours = next;
     if (!next.trackingFrom) next.trackingFrom = H.trackingFrom(data(), today);
-    store.save();
+    await store.save();
     log('horas-config', { detalhe: `Jornada ${next.schedule.start}–${next.schedule.end}, intervalo ${H.fmtHM(next.schedule.breakMin)}` });
     res.json({ config: data().hours });
   });
-  app.post('/api/hours/overrides', (req, res) => {
+  app.post('/api/hours/overrides', async (req, res) => {
     const o = H.cleanOverride(req.body || {});
     const list = data().hours.overrides.filter((x) => x.date !== o.date);
     data().hours.overrides = [...list, o].sort((a, b) => a.date.localeCompare(b.date));
-    store.save();
+    await store.save();
     log('horas-config', { detalhe: `Exceção de meta em ${o.date}: ${H.fmtHM(o.targetMin)}${o.reason ? ` (${o.reason})` : ''}` });
     res.json({ config: data().hours });
   });
-  app.delete('/api/hours/overrides/:date', (req, res) => {
+  app.delete('/api/hours/overrides/:date', async (req, res) => {
     data().hours.overrides = data().hours.overrides.filter((x) => x.date !== req.params.date);
-    store.save();
+    await store.save();
     res.json({ config: data().hours });
   });
 
@@ -169,7 +169,7 @@ function mount(app, { store, audit, dataDir, SYS }) {
     auditTimer('horas-pausada', cur, { resultado: 'pausada para iniciar outra' });
   }
 
-  app.post('/api/hours/timers/start', (req, res) => {
+  app.post('/api/hours/timers/start', async (req, res) => {
     const now = nowMs();
     const b = req.body || {};
     const projectId = str(b.projectId, 40);
@@ -185,22 +185,22 @@ function mount(app, { store, audit, dataDir, SYS }) {
       date: H.localParts(now).date, startedAt: now, status: 'running', pauses: [], lastActionAt: now, createdAt: new Date(now).toISOString(),
     };
     data().timers.push(t);
-    store.save();
+    await store.save();
     auditTimer('horas-iniciada', t);
     res.json({ timer: timerView(t, now) });
   });
 
-  app.post('/api/hours/timers/:id/pause', (req, res) => {
+  app.post('/api/hours/timers/:id/pause', async (req, res) => {
     const now = nowMs();
     const t = timerOrThrow(req.params.id);
     if (t.status !== 'running') throw httpError(400, 'Esta atividade já está pausada.');
     pauseNow(t, now);
-    store.save();
+    await store.save();
     auditTimer('horas-pausada', t);
     res.json({ timer: timerView(t, now) });
   });
 
-  app.post('/api/hours/timers/:id/resume', (req, res) => {
+  app.post('/api/hours/timers/:id/resume', async (req, res) => {
     const now = nowMs();
     const t = timerOrThrow(req.params.id);
     if (t.status !== 'paused') throw httpError(400, 'Esta atividade não está pausada.');
@@ -209,17 +209,17 @@ function mount(app, { store, audit, dataDir, SYS }) {
     if (open) open.to = now;
     t.status = 'running';
     t.lastActionAt = now;
-    store.save();
+    await store.save();
     auditTimer('horas-retomada', t);
     res.json({ timer: timerView(t, now) });
   });
 
   // "Continuar" depois de reabrir o app: reconhece o cronômetro (segue contando de verdade desde o início).
-  app.post('/api/hours/timers/:id/ack', (req, res) => {
+  app.post('/api/hours/timers/:id/ack', async (req, res) => {
     const now = nowMs();
     const t = timerOrThrow(req.params.id);
     t.lastActionAt = now;
-    store.save();
+    await store.save();
     res.json({ timer: timerView(t, now) });
   });
 
@@ -232,7 +232,7 @@ function mount(app, { store, audit, dataDir, SYS }) {
   });
 
   // Transforma o cronômetro em apontamento CONFIRMADO. endMs é o instante mostrado no resumo (não o do clique). edits = correções manuais.
-  app.post('/api/hours/timers/:id/confirm', (req, res) => {
+  app.post('/api/hours/timers/:id/confirm', async (req, res) => {
     const now = nowMs();
     const t = timerOrThrow(req.params.id);
     const b = req.body || {};
@@ -251,15 +251,15 @@ function mount(app, { store, audit, dataDir, SYS }) {
     data().timeEntries.push(entry);
     data().timers = data().timers.filter((x) => x.id !== t.id);
     if (!data().hours.trackingFrom || data().hours.trackingFrom > entry.date) data().hours.trackingFrom = entry.date;
-    store.save();
+    await store.save();
     log('horas-confirmada', { project: entry.projectName, detalhe: entry.activity, etapa: entry.date, resultado: `${H.fmtHM(entry.startMin)}–${H.fmtHM(entry.endMin)} · ${H.fmtHM(H.netMin(entry))}` });
     res.json({ entry: entryView(entry), day: dayView(entry.date) });
   });
 
-  app.post('/api/hours/timers/:id/discard', (req, res) => {
+  app.post('/api/hours/timers/:id/discard', async (req, res) => {
     const t = timerOrThrow(req.params.id);
     data().timers = data().timers.filter((x) => x.id !== t.id);
-    store.save();
+    await store.save();
     auditTimer('horas-descartada', t);
     res.json({ ok: true });
   });
@@ -269,7 +269,7 @@ function mount(app, { store, audit, dataDir, SYS }) {
   const entryOrThrow = (id) => data().timeEntries.find((e) => e.id === id) || (() => { throw httpError(404, 'Apontamento não encontrado.'); })();
   const trackFrom = (date) => { if (!data().hours.trackingFrom || data().hours.trackingFrom > date) data().hours.trackingFrom = date; };
 
-  app.post('/api/hours/entries', (req, res) => {
+  app.post('/api/hours/entries', async (req, res) => {
     const now = nowMs();
     const fields = H.cleanEntry(pickBody(req.body || {}), { data: data(), nowMs: now });
     H.assertNoOverlap(data(), fields, null);
@@ -277,12 +277,12 @@ function mount(app, { store, audit, dataDir, SYS }) {
     const entry = { id: uid(), ...fields, source: 'manual', createdAt: iso, updatedAt: iso };
     data().timeEntries.push(entry);
     trackFrom(entry.date);
-    store.save();
+    await store.save();
     log('horas-criada', { project: entry.projectName, detalhe: entry.activity, etapa: entry.date, resultado: `${H.fmtHM(entry.startMin)}–${H.fmtHM(entry.endMin)} · ${H.fmtHM(H.netMin(entry))}` });
     res.json({ entry: entryView(entry), day: dayView(entry.date) });
   });
 
-  app.put('/api/hours/entries/:id', (req, res) => {
+  app.put('/api/hours/entries/:id', async (req, res) => {
     const now = nowMs();
     const e = entryOrThrow(req.params.id);
     const fields = H.cleanEntry(pickBody(req.body || {}), { data: data(), nowMs: now, existing: e });
@@ -291,15 +291,15 @@ function mount(app, { store, audit, dataDir, SYS }) {
     for (const k of ['pauses']) delete e[k];
     Object.assign(e, fields, { updatedAt: new Date(now).toISOString() });
     trackFrom(e.date);
-    store.save();
+    await store.save();
     log('horas-editada', { project: e.projectName, detalhe: e.activity, etapa: e.date, resultado: `${H.fmtHM(e.startMin)}–${H.fmtHM(e.endMin)} · ${H.fmtHM(H.netMin(e))}` });
     res.json({ entry: entryView(e), day: dayView(e.date), previousDay: oldDate !== e.date ? dayView(oldDate) : null });
   });
 
-  app.delete('/api/hours/entries/:id', (req, res) => {
+  app.delete('/api/hours/entries/:id', async (req, res) => {
     const e = entryOrThrow(req.params.id);
     data().timeEntries = data().timeEntries.filter((x) => x.id !== e.id);
-    store.save();
+    await store.save();
     log('horas-excluida', { project: e.projectName, detalhe: e.activity, etapa: e.date, resultado: `${H.fmtHM(e.startMin)}–${H.fmtHM(e.endMin)} · ${H.fmtHM(H.netMin(e))}` });
     res.json({ ok: true, day: dayView(e.date) });
   });
@@ -310,35 +310,35 @@ function mount(app, { store, audit, dataDir, SYS }) {
   const evOfNote = (n, eid) => n.evidences.find((x) => x.id === eid) || (() => { throw httpError(404, 'Evidência não encontrada.'); })();
   const auditNote = (action, n, extra = {}) => log(action, { project: n.projectName || undefined, etapa: H.datesOfNote(n).join(', ').slice(0, 300), detalhe: n.title, ...extra });
 
-  app.post('/api/hours/notes', (req, res) => {
+  app.post('/api/hours/notes', async (req, res) => {
     const now = nowMs();
     const iso = new Date(now).toISOString();
     const fields = H.cleanNote(noteBody(req.body || {}), { data: data(), nowMs: now });
     const n = { id: uid(), ...fields, evidences: [], createdAt: iso, updatedAt: iso, createdBy: who(), updatedBy: who() };
     data().timeNotes.push(n);
-    store.save();
+    await store.save();
     auditNote('observacao-criada', n, { resultado: H.noteCategory(data().hours, n.category).label });
     res.json({ note: noteView(n), day: dayView(n.date) });
   });
 
   // Editar: título, texto, projeto, categoria (e data). As evidências já anexadas NUNCA são mexidas por aqui.
-  app.put('/api/hours/notes/:id', (req, res) => {
+  app.put('/api/hours/notes/:id', async (req, res) => {
     const now = nowMs();
     const n = noteOrThrow(req.params.id);
     const fields = H.cleanNote({ ...noteBody(req.body || {}), category: req.body.category || n.category }, { data: data(), nowMs: now, existing: n });
     const oldDate = n.date;
     Object.assign(n, fields, { updatedAt: new Date(now).toISOString(), updatedBy: who() });
-    store.save();
+    await store.save();
     auditNote('observacao-editada', n);
     res.json({ note: noteView(n), day: dayView(n.date), previousDay: oldDate !== n.date ? dayView(oldDate) : null });
   });
 
   // Excluir: os arquivos das evidências vão para evidencias\.removidas (mesma estratégia do checklist; nada fica órfão nem é apagado).
-  app.delete('/api/hours/notes/:id', (req, res) => {
+  app.delete('/api/hours/notes/:id', async (req, res) => {
     const n = noteOrThrow(req.params.id);
     for (const ev of n.evidences) files.trash(ev.file);
     data().timeNotes = data().timeNotes.filter((x) => x.id !== n.id);
-    store.save();
+    await store.save();
     auditNote('observacao-excluida', n, { resultado: n.evidences.length ? `${n.evidences.length} evidência(s) movida(s) para .removidas` : undefined });
     res.json({ ok: true, day: dayView(n.date) });
   });
@@ -350,7 +350,7 @@ function mount(app, { store, audit, dataDir, SYS }) {
     const rec = await EH.receiveUpload(req, { files, cfg: E.getConfig(data().settings), type: 'imageOrDocument', folder: files.folderForNote(n.date) });
     n.evidences.push(rec);
     n.updatedAt = rec.at; n.updatedBy = who();
-    store.save();
+    await store.save();
     auditNote('observacao-evidencia-adicionada', n, { arquivo: rec.name, bytes: rec.size });
     res.json({ note: noteView(n), day: dayView(n.date) });
   });
@@ -363,13 +363,13 @@ function mount(app, { store, audit, dataDir, SYS }) {
     EH.openEvidence(explorer, files, evOfNote(n, req.params.eid), { folder: !!(req.body || {}).folder });
     res.json({ ok: true });
   });
-  app.delete('/api/hours/notes/:id/evidences/:eid', (req, res) => {
+  app.delete('/api/hours/notes/:id/evidences/:eid', async (req, res) => {
     const n = noteOrThrow(req.params.id);
     const ev = evOfNote(n, req.params.eid);
     files.trash(ev.file);
     n.evidences = n.evidences.filter((x) => x.id !== ev.id);
     n.updatedAt = new Date(nowMs()).toISOString(); n.updatedBy = who();
-    store.save();
+    await store.save();
     auditNote('observacao-evidencia-removida', n, { arquivo: ev.name });
     res.json({ note: noteView(n), day: dayView(n.date) });
   });

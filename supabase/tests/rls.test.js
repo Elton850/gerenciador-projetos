@@ -285,7 +285,9 @@ test('rls-smoke.sql (roteiro para o Supabase real) roda limpo e não deixa rastr
   }
   const notices = [];
   const sql = fs.readFileSync(path.join(__dirname, 'rls-smoke.sql'), 'utf8')
-    .replace('<UUID_MASTER>', U.master).replace('<UUID_TESTE_A>', U.smokeA).replace('<UUID_TESTE_B>', U.smokeB);
+    // troca as 3 atribuições (com marcador ou já preenchidas na cópia local de quem rodou no Supabase real)
+    .replace(/(\bm uuid := )'[^']*'/, `$1'${U.master}'`).replace(/(\ba uuid := )'[^']*'/, `$1'${U.smokeA}'`)
+    .replace(/(\bb uuid := )'[^']*'/, `$1'${U.smokeB}'`);
   await db.exec(sql, { onNotice: (n) => notices.push(n.message) });
   await db.exec('reset role');
   assert.ok(notices.includes('TODOS OS CASOS OK — a transação será desfeita (ROLLBACK).'), notices.join('\n'));

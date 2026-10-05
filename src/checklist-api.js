@@ -24,9 +24,9 @@ function mount(app, { store, audit, getProject, getIn, dataDir, SYS, publicProje
   const log = (action, p, extra = {}) => audit.log({ action, project: p?.name, by: whoAmI(), ...extra });
 
   // ---------- Configuração de evidências (tamanho máximo e extensões por tipo) ----------
-  app.put('/api/settings/evidence', (req, res) => {
+  app.put('/api/settings/evidence', async (req, res) => {
     data().settings.evidence = E.cleanConfig(req.body || {});
-    store.save();
+    await store.save();
     log('evidencia-config', null, { detalhe: `máx. ${data().settings.evidence.maxMB} MB` });
     res.json({ evidence: E.getConfig(data().settings) });
   });
@@ -51,29 +51,29 @@ function mount(app, { store, audit, getProject, getIn, dataDir, SYS, publicProje
     return name;
   }
 
-  app.post('/api/checklists', (req, res) => {
+  app.post('/api/checklists', async (req, res) => {
     if (data().checklists.length >= MAX_CHECKLISTS) throw httpError(400, `No máximo ${MAX_CHECKLISTS} checklists cadastrados.`);
     const stageId = cleanListStage(req.body);
     const c = { id: uid(), name: cleanListName(req.body, stageId), stageId };
     data().checklists.push(c);
-    store.save();
+    await store.save();
     log('checklist-modelo-alterado', null, { detalhe: `Checklist “${c.name}” criado` });
     res.json(c);
   });
-  app.put('/api/checklists/:cid', (req, res) => {
+  app.put('/api/checklists/:cid', async (req, res) => {
     const c = listOrThrow(req.params.cid);
     const old = c.name;
     const stageId = req.body.stageId === undefined ? (c.stageId || null) : cleanListStage(req.body);
     // Nome repetido já existente continua aceito enquanto nem o nome nem o estágio mudam.
     c.name = str(req.body.name, 80) === old && stageId === (c.stageId || null) ? old : cleanListName(req.body, stageId, c.id);
     c.stageId = stageId; // só muda o conjunto disponível do estágio: as etapas de ciclo que já usam o checklist continuam usando
-    store.save();
+    await store.save();
     if (old !== c.name) log('checklist-modelo-alterado', null, { detalhe: `Checklist “${old}” renomeado para “${c.name}”` });
     res.json(c);
   });
   // Não exclui em silêncio: se algum ciclo usa o checklist, a resposta lista onde (“Ciclo / Estágio”) e nada é removido.
   // Fora disso remove só o modelo; projetos que já receberam os itens ficam com a cópia deles até sincronizar.
-  app.delete('/api/checklists/:cid', (req, res) => {
+  app.delete('/api/checklists/:cid', async (req, res) => {
     const c = listOrThrow(req.params.cid);
     const usage = cycles.checklistUsage(data(), c.id);
     if (usage.length) {
@@ -86,21 +86,21 @@ function mount(app, { store, audit, getProject, getIn, dataDir, SYS, publicProje
     const n = mine.length;
     data().checklistItems = data().checklistItems.filter((d) => d.checklistId !== c.id);
     data().checklists = data().checklists.filter((x) => x.id !== c.id);
-    store.save();
+    await store.save();
     log('checklist-modelo-alterado', null, { detalhe: `Checklist “${c.name}” removido do modelo (${n} item(ns))` });
     res.json({ ok: true });
   });
 
-  app.post('/api/checklists/:cid/items', (req, res) => {
+  app.post('/api/checklists/:cid/items', async (req, res) => {
     const list = listOrThrow(req.params.cid);
     if (data().checklistItems.filter((d) => d.checklistId === list.id).length >= C.MAX_ITEMS_PER_CHECKLIST) throw httpError(400, `No máximo ${C.MAX_ITEMS_PER_CHECKLIST} itens por checklist.`);
     const item = { id: uid(), checklistId: list.id, ...C.cleanDefinition(req.body, data()) };
     data().checklistItems.push(item);
-    store.save();
+    await store.save();
     log('checklist-modelo-alterado', null, { detalhe: `Item “${item.title}” criado no checklist ${list.name}` });
     res.json(item);
   });
-  app.put('/api/checklist-items/:iid', (req, res) => {
+  app.put('/api/checklist-items/:iid', async (req, res) => {
     const item = defOrThrow(req.params.iid);
     const before = item.checklistId;
     let checklistId = before;
@@ -113,17 +113,17 @@ function mount(app, { store, audit, getProject, getIn, dataDir, SYS, publicProje
     if (!clean.emailTemplateId) delete item.emailTemplateId; // campo opcional: tirar o modelo de e-mail remove o campo
     Object.assign(item, clean, { checklistId });
     if (checklistId !== before) data().checklistItems = [...data().checklistItems.filter((d) => d.id !== item.id), item]; // vai para o fim do destino
-    store.save();
+    await store.save();
     log('checklist-modelo-alterado', null, { detalhe: `Item “${item.title}” alterado no checklist ${listOrThrow(item.checklistId).name}` });
     res.json(item);
   });
   // Remove só do modelo: projetos que já receberam o item continuam com a cópia deles até alguém sincronizar.
-  app.delete('/api/checklist-items/:iid', (req, res) => {
+  app.delete('/api/checklist-items/:iid', async (req, res) => {
     const item = defOrThrow(req.params.iid);
     const deps = C.dependentsOf(data(), [item.id]);
     if (deps.length) throw httpError(409, C.dependentsMessage(data(), `Este item (“${item.title}”)`, deps), { code: 'ITEM_IS_DEPENDENCY', dependents: deps.map((d) => C.defLabel(data(), d)) });
     data().checklistItems = data().checklistItems.filter((d) => d.id !== item.id);
-    store.save();
+    await store.save();
     log('checklist-modelo-alterado', null, { detalhe: `Item “${item.title}” removido do modelo` });
     res.json({ ok: true });
   });
@@ -134,10 +134,10 @@ function mount(app, { store, audit, getProject, getIn, dataDir, SYS, publicProje
     const set = new Set(ids);
     data().checklistItems = [...data().checklistItems.filter((d) => !set.has(d.id)), ...[...mine].sort((x, y) => rank.get(x.id) - rank.get(y.id))];
   }
-  app.put('/api/checklists/:cid/order', (req, res) => {
+  app.put('/api/checklists/:cid/order', async (req, res) => {
     const list = listOrThrow(req.params.cid);
     reorder(data().checklistItems.filter((d) => d.checklistId === list.id), Array.isArray(req.body.ids) ? req.body.ids : []);
-    store.save();
+    await store.save();
     res.json({ ok: true });
   });
 
@@ -224,17 +224,17 @@ function mount(app, { store, audit, getProject, getIn, dataDir, SYS, publicProje
   const auditItem = (action, p, inst, it, extra = {}) => log(action, p, { etapa: inst.stageName, item: it.title, detalhe: it.title, ...extra });
 
   // Abre (e cria, na primeira vez) o checklist do passo: cópia dos checklists que o passo tem neste ciclo.
-  app.post('/api/projects/:id/checklists/:stepId/open', (req, res) => {
+  app.post('/api/projects/:id/checklists/:stepId/open', async (req, res) => {
     const p = getProject(req.params.id);
     const had = p.checklists.some((c) => c.stepId === req.params.stepId);
     const inst = C.ensureInstance(data(), p, req.params.stepId);
     if (!inst) throw httpError(404, 'Este passo não existe mais no ciclo.');
-    if (!had) { store.save(); log('checklist-iniciado', p, { etapa: inst.stageName, detalhe: `${inst.items.length} item(ns) copiados do modelo` }); }
+    if (!had) { await store.save(); log('checklist-iniciado', p, { etapa: inst.stageName, detalhe: `${inst.items.length} item(ns) copiados do modelo` }); }
     reply(res, p, inst);
   });
 
   // Marcar / desmarcar. Desmarcar NÃO apaga evidências (evita perda acidental); marcar sem a evidência exigida deixa o item "aguardando".
-  app.put('/api/projects/:id/checklists/:stepId/items/:iid', (req, res) => {
+  app.put('/api/projects/:id/checklists/:stepId/items/:iid', async (req, res) => {
     const p = getProject(req.params.id);
     const inst = findInstance(p, req.params.stepId);
     const it = findItem(inst, req.params.iid);
@@ -250,14 +250,14 @@ function mount(app, { store, audit, getProject, getIn, dataDir, SYS, publicProje
     }
     if (done !== it.done) {
       C.setDone(it, done, whoAmI(), new Date().toISOString());
-      store.save();
+      await store.save();
       auditItem(done ? 'checklist-marcado' : 'checklist-desmarcado', p, inst, it, { resultado: C.itemStatus(it) === 'awaiting_evidence' ? 'aguardando evidência' : undefined });
     }
     reply(res, p, inst);
   });
 
   // Observação do item (texto da execução deste projeto; a descrição do item é do modelo). Texto vazio remove.
-  app.put('/api/projects/:id/checklists/:stepId/items/:iid/note', (req, res) => {
+  app.put('/api/projects/:id/checklists/:stepId/items/:iid/note', async (req, res) => {
     const p = getProject(req.params.id);
     const inst = findInstance(p, req.params.stepId);
     const it = findItem(inst, req.params.iid);
@@ -265,7 +265,7 @@ function mount(app, { store, audit, getProject, getIn, dataDir, SYS, publicProje
     if (String(req.body.text ?? '').trim().length > C.MAX_NOTE) throw httpError(400, `A observação pode ter até ${C.MAX_NOTE} caracteres.`);
     const before = !!it.note;
     if (C.setNote(it, req.body.text, whoAmI())) {
-      store.save();
+      await store.save();
       auditItem('checklist-observacao', p, inst, it, { resultado: !it.note ? 'removida' : before ? 'editada' : 'criada' });
     }
     reply(res, p, inst);
@@ -273,7 +273,7 @@ function mount(app, { store, audit, getProject, getIn, dataDir, SYS, publicProje
 
   // Reverter transferência: o mesmo item volta ao passo de origem (nada é apagado nem copiado). Sempre pede confirmação: a primeira chamada
   // devolve 409 RESTORE_CONFIRM com o que vai acontecer e os avisos; só com { confirm: true } o item é movido.
-  app.post('/api/projects/:id/checklists/:stepId/items/:iid/restore', (req, res) => {
+  app.post('/api/projects/:id/checklists/:stepId/items/:iid/restore', async (req, res) => {
     const p = getProject(req.params.id);
     const inst = findInstance(p, req.params.stepId);
     const it = findItem(inst, req.params.iid);
@@ -284,19 +284,19 @@ function mount(app, { store, audit, getProject, getIn, dataDir, SYS, publicProje
         { code: 'RESTORE_CONFIRM', warnings: plan.warnings, target: { stepId: plan.to, stageName: plan.toStage }, from: { stepId: plan.from, stageName: plan.fromStage } });
     }
     C.applyRestore(it, plan, whoAmI());
-    store.save();
+    await store.save();
     auditItem('checklist-pendencia-restaurada', p, inst, it, { etapa: plan.fromStage, detalhe: `${it.title}: ${plan.fromStage} → ${plan.toStage} (restaurado ao estágio original)` });
     reply(res, p, inst);
   });
 
   // Sincronizar com o modelo: só quando pedido. dryRun mostra o que mudaria sem gravar nada.
-  app.post('/api/projects/:id/checklists/:stepId/sync', (req, res) => {
+  app.post('/api/projects/:id/checklists/:stepId/sync', async (req, res) => {
     const p = getProject(req.params.id);
     const inst = findInstance(p, req.params.stepId);
     const plan = C.syncPlan(data(), p, inst);
     if (req.body.dryRun) return res.json({ plan });
     C.applySync(data(), p, inst);
-    store.save();
+    await store.save();
     log('checklist-sincronizado', p, { etapa: inst.stageName, detalhe: `${plan.added.length} novo(s), ${plan.updated.length} atualizado(s), ${plan.archived.length} arquivado(s)` });
     res.json({ plan, instance: instanceView(p, inst), project: publicProject(p) });
   });
@@ -314,7 +314,7 @@ function mount(app, { store, audit, getProject, getIn, dataDir, SYS, publicProje
     const rec = await EH.receiveUpload(req, { files, cfg: E.getConfig(data().settings), type: it.evidence.type, folder: files.folderFor(p, stepNo, inst.stageName) });
     it.evidences.push(rec);
     C.refreshCompletion(it, whoAmI(), rec.at);
-    store.save();
+    await store.save();
     auditItem('evidencia-adicionada', p, inst, it, { arquivo: rec.name, bytes: rec.size, resultado: C.itemStatus(it) === 'done' ? 'item concluído' : undefined });
     reply(res, p, inst);
   });
@@ -337,13 +337,13 @@ function mount(app, { store, audit, getProject, getIn, dataDir, SYS, publicProje
     res.json({ ok: true });
   });
   // Remover: o arquivo vai para <data>\evidencias\.removidas (recuperável). O item volta a "aguardando evidência" se ela era exigida.
-  app.delete('/api/projects/:id/evidences/:eid', (req, res) => {
+  app.delete('/api/projects/:id/evidences/:eid', async (req, res) => {
     const p = getProject(req.params.id);
     const { inst, it, ev } = findEvidence(p, req.params.eid);
     files.trash(ev.file);
     it.evidences = it.evidences.filter((x) => x.id !== ev.id);
     C.refreshCompletion(it, whoAmI(), new Date().toISOString());
-    store.save();
+    await store.save();
     auditItem('evidencia-removida', p, inst, it, { arquivo: ev.name });
     reply(res, p, inst);
   });

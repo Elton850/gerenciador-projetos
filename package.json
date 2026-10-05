@@ -1,0 +1,28 @@
+{
+  "name": "gerenciador-projetos",
+  "version": "1.0.0",
+  "description": "Gerenciador de projetos de migração: diretórios, bases SQL Server, planilhas DE-PARA e cronograma simples.",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "build:desktop": "node scripts/build-desktop.js",
+    "test": "node --test \"test/*.test.js\" \"supabase/tests/*.test.js\"",
+    "scan:secrets": "node scripts/scan-secrets.js",
+    "test:rls": "node --test \"supabase/tests/*.test.js\""
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "express": "^5.2.1",
+    "msnodesqlv8": "^5.5.0",
+    "mssql": "^12.7.2"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "@electron/packager": "^20.3.0",
+    "electron": "^44.4.5"
+  }
+}

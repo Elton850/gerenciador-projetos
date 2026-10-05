@@ -4,7 +4,6 @@
 // apaga o arquivo ou a pasta; remover uma observação remove apenas o registro. Arquivo: caminho absoluto + extensão de documento
 // (DOC_EXT; nunca programa/script). Abrir = programa padrão do Windows (arquivo) ou Explorer (pasta); link abre no navegador.
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const { httpError, uid, str } = require('./util');
@@ -61,7 +60,7 @@ function mount(app, { store, audit, getProject, publicProject, SYS }) {
   const view = (p) => [...(p.notes || [])].sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
     .map((n) => ({ ...n, refs: n.refs.map((r) => (r.kind === 'link' ? r : { ...r, exists: exists(r) })) }));
   const reply = (p, res) => res.json({ notes: view(p), project: publicProject(p) });
-  const who = () => { try { return os.userInfo().username || null; } catch { return null; } };
+  const { who } = require('./auth/identity');
 
   app.get('/api/projects/:id/notes', (req, res) => res.json({ notes: view(getProject(req.params.id)) }));
 

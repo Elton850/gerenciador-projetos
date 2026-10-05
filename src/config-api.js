@@ -10,7 +10,6 @@ const { parseSheetUrl } = require('./sheets');
 const checklist = require('./checklist');
 const cycles = require('./cycles');
 const evidence = require('./evidence');
-const os = require('os');
 
 const HEX = /^#[0-9a-fA-F]{6}$/;
 const plural = (n, s, p) => `${n} ${n === 1 ? s : p}`;
@@ -241,7 +240,7 @@ function mount(app, { store, audit, getProject, getIn, publicProject, SYS }) {
   app.put('/api/projects/:id/step', async (req, res) => {
     const p = getProject(req.params.id);
     const stepId = req.body.stepId ?? null;
-    const who = (() => { try { return os.userInfo().username; } catch { return null; } })();
+    const who = require('./auth/identity').who();
     if (stepId !== null) {
       const steps = checklist.stepsOf(p);
       const step = steps.find((c) => c.id === stepId);

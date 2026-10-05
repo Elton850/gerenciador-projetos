@@ -4,7 +4,6 @@
 // O registro de uma evidência é sempre o mesmo: { id, name, file, mime, kind, size, description, at, by }.
 // `file` é uma referência da ÁREA de arquivos (src/files): caminho relativo na pasta local, ou "sb:<bucket>/<objeto>" na nuvem.
 // Tudo aqui é assíncrono e não sabe onde o arquivo mora (local ou Supabase Storage cifrado).
-const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const { httpError, uid } = require('./util');
@@ -13,7 +12,7 @@ const { DataError, toHttp } = require('./persistence/errors');
 
 const DRAIN_CAP = 256 * 1024 * 1024; // acima disso, um envio absurdo é cortado em vez de lido até o fim
 
-function whoAmI() { try { return os.userInfo().username || null; } catch { return null; } }
+const whoAmI = () => require('./auth/identity').who(); // identidade central (Windows no modo local; usuário logado no modo nuvem)
 
 // Lê o corpo cru da requisição (o arquivo enviado). O limite vem da configuração; o que passar dele é descartado e vira erro 413.
 function readBody(req, max, limitText) {

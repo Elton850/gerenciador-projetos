@@ -224,6 +224,6 @@ test('logout: cópias decifradas temporárias são apagadas', async () => {
   const ref = store.project('p1').checklists.find((c) => c.stepId === 'cy-1').items[0].evidences.find((e) => e.id === id).file;
   const temp = await store.files('evidence').openPath(ref, 'ultima.png');
   assert.ok(fs.existsSync(temp));
-  await store.detach({ settings: {}, projects: [] });
+  await store.detach();
   assert.ok(!fs.existsSync(temp));
 });

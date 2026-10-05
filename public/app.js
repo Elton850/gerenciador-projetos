@@ -83,6 +83,11 @@ async function api(method, url, body, opts = {}) {
     throw e;
   }
   const json = await r.json().catch(() => ({}));
+  // Sessão perdida/inexistente (modo nuvem): a tela de acesso assume (auth.js); o erro não vira aviso em cada tela.
+  if ((r.status === 401 && (json.code === 'AUTH_REQUIRED' || json.code === 'LAUNCH_REQUIRED')) || (r.status === 403 && json.code === 'ACCOUNT_PENDING')) {
+    if (typeof authLost === 'function') authLost(json);
+    throw Object.assign(new Error(json.error || 'Sessão encerrada.'), { code: json.code, status: r.status, silent: true });
+  }
   if (!r.ok) throw Object.assign(new Error(json.error || `Erro ${r.status}`), { code: json.code, status: r.status, path: json.path, details: json });
   return json;
 }
@@ -92,7 +97,7 @@ function toast(msg, kind = 'info') {
   document.getElementById('toasts').append(t);
   setTimeout(() => t.remove(), kind === 'error' ? 9000 : 3500);
 }
-const fail = (e) => toast(e.message || String(e), 'error');
+const fail = (e) => { if (e && e.silent) return; toast(e.message || String(e), 'error'); };
 
 async function busy(btn, fn, working = 'Aguarde…') {
   const label = btn.textContent;
@@ -902,4 +907,5 @@ async function renderAudit(main) {
 }
 
 // Só depois de TODOS os scripts (cycle.js, config.js, docs.js, import.js) terem carregado.
-window.addEventListener('DOMContentLoaded', () => { renderThemeToggle(); refresh().catch(fail); });
+// Modo nuvem: primeiro a sessão (auth.js decide entre a tela de acesso e o app); modo local: direto para o app.
+window.addEventListener('DOMContentLoaded', () => { renderThemeToggle(); authBoot().catch(fail); });

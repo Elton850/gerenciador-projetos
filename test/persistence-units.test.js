@@ -75,6 +75,15 @@ test('SupabaseRest Storage: upload sem sobrescrever (x-upsert false) e download 
   }
 });
 
+test('gp-keys: 500 da função (ex.: KEK ausente/trocada) vira CRYPTO, não "sem conexão"; rede caída continua OFFLINE', async () => {
+  const t = new SupabaseRest({ url: URL_, publishableKey: 'pk', getAccessToken: async () => 'jwt', fetchImpl: async () => resp(500, { error: 'Não foi possível obter as chaves.' }) });
+  await assert.rejects(t.fetchKeys(['global']), { code: 'CRYPTO' });
+  const down = new SupabaseRest({ url: URL_, publishableKey: 'pk', getAccessToken: async () => 'jwt', fetchImpl: async () => { throw new Error('ECONNREFUSED'); } });
+  await assert.rejects(down.fetchKeys(['global']), { code: 'OFFLINE' });
+  const gw = new SupabaseRest({ url: URL_, publishableKey: 'pk', getAccessToken: async () => 'jwt', fetchImpl: async () => resp(503, {}) });
+  await assert.rejects(gw.fetchKeys(['global']), { code: 'OFFLINE' });
+});
+
 test('LocalUserData: pasta por UUID, gravação atômica com .bak, arquivo de outro usuário recusado', () => {
   const uid = '11111111-2222-3333-4444-555555555555';
   assert.throws(() => new LocalUserData('Elton', tmp), { code: 'LOCAL_USER' }); // nome legível nunca segrega dados

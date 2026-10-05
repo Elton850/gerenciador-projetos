@@ -1,4 +1,6 @@
 const path = require('path');
+// Executado direto (node server.js / iniciar.bat): lê o .env da raiz (só chaves GP_* e PORT). Testes nunca leem o .env.
+if (require.main === module) require('./src/config').loadDotEnv(__dirname);
 const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
@@ -25,8 +27,13 @@ const PORT = Number(process.env.PORT) || 4317;
 const DATA_DIR = process.env.GP_DATA_DIR || path.join(__dirname, 'data');
 const PLAN_TTL_MS = 20 * 60 * 1000;
 
-const store = new Store(DATA_DIR);
-const audit = new Audit(DATA_DIR);
+// Modo: local (padrão, data\projects.json, sem login) ou nuvem (GP_MODE=cloud: login obrigatório; antes dele, NENHUM dado carregado).
+const appCfg = require('./src/config').appConfig();
+const CLOUD = appCfg.mode === 'cloud';
+const { localRoot } = require('./src/persistence/local-user-data');
+const { SignedOutBackend } = require('./src/persistence/signed-out-backend');
+const store = new Store(DATA_DIR, CLOUD ? { backend: new SignedOutBackend() } : {});
+const audit = new Audit(CLOUD ? path.join(localRoot(), 'logs') : DATA_DIR);
 const app = express();
 app.disable('x-powered-by');
 
@@ -41,8 +48,27 @@ app.use((req, res, next) => {
   }
   next();
 });
+// Modo nuvem: só quem abriu o app pelo endereço com o token desta execução recebe o cookie que a API exige (src/auth/session.js).
+const launch = CLOUD ? require('./src/auth/session').launchGuard(process.env.GP_LAUNCH_TOKEN || undefined) : null;
+if (launch) app.use(launch.middleware);
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
+
+// ---------- Sessão (Fase 4) ----------
+const session = (() => {
+  const S = require('./src/auth/session');
+  if (!CLOUD) return new S.LocalSession({ cfg: appCfg });
+  const { GoTrueClient } = require('./src/auth/gotrue');
+  const { SupabaseRest } = require('./src/persistence/supabase-rest');
+  const conn = { url: appCfg.supabaseUrl, publishableKey: appCfg.publishableKey };
+  return new S.CloudSession({
+    cfg: appCfg, store, audit, gotrue: new GoTrueClient(conn),
+    transportFactory: ({ getAccessToken }) => new SupabaseRest({ ...conn, getAccessToken }),
+    protect, unprotect,
+  });
+})();
+app.use(session.middleware());
+session.mount(app);
 
 // ---------- Helpers ----------
 const getProject = (id) => store.project(id) || (() => { throw httpError(404, 'Projeto não encontrado.'); })();
@@ -623,7 +649,12 @@ app.use((err, req, res, next) => {
 });
 
 if (require.main === module) {
-  app.listen(PORT, '127.0.0.1', () => console.log(`Gerenciador de Projetos em http://localhost:${PORT}  (dados em ${DATA_DIR})`));
+  app.listen(PORT, '127.0.0.1', async () => {
+    await session.restore().catch(() => false); // "manter conectado" (modo nuvem)
+    const url = `http://localhost:${PORT}/${launch ? `?k=${launch.token}` : ''}`;
+    console.log(CLOUD ? `Gerenciador de Projetos (nuvem: ${appCfg.env}) — abra: ${url}` : `Gerenciador de Projetos em ${url}  (dados em ${DATA_DIR})`);
+    if (process.env.GP_OPEN_BROWSER === '1') spawn(path.join(SYS, 'explorer.exe'), [url], { detached: true, stdio: 'ignore' }).unref();
+  });
 }
 
-module.exports = { app, store };
+module.exports = { app, store, session, launch };

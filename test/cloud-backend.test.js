@@ -201,7 +201,7 @@ test('fail closed: ciphertext adulterado no banco bloqueia a carga (nunca vira d
 test('logout: detach zera chaves e estado em memória', async () => {
   const ring = S.m1.backend.keys.ring;
   const someKey = [...ring.byKid.values()][0];
-  await S.m1.store.detach(empty());
+  await S.m1.store.detach();
   assert.deepEqual(S.m1.store.data.projects, []);
   assert.ok(someKey.every((b) => b === 0), 'DEK zerada');
   assert.equal(ring.byKid.size, 0);

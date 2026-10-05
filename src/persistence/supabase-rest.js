@@ -21,7 +21,7 @@ function safeJson(s) { try { return typeof s === 'string' ? JSON.parse(s) : s ||
 
 class SupabaseRest {
   constructor({ url, publishableKey, getAccessToken, timeoutMs = 20000, fetchImpl = globalThis.fetch }) {
-    if (!/^https:\/\/[^/]+$/.test(String(url || '').replace(/\/$/, ''))) throw new Error('GP_SUPABASE_URL inválida (esperado https://<ref>.supabase.co).');
+    if (!require('../config').SUPABASE_URL_RE.test(String(url || '').replace(/\/$/, ''))) throw new Error('GP_SUPABASE_URL inválida (esperado https://<ref>.supabase.co).');
     if (!publishableKey) throw new Error('GP_SUPABASE_PUBLISHABLE_KEY ausente.');
     this.url = url.replace(/\/$/, '');
     this.key = publishableKey;
@@ -46,7 +46,7 @@ class SupabaseRest {
     }
     const text = await res.text();
     const json = text ? safeJson(text) : null;
-    if (!res.ok) throw mapError(res.status, json);
+    if (!res.ok) throw Object.assign(mapError(res.status, json), { status: res.status });
     return json;
   }
 
@@ -104,8 +104,14 @@ class SupabaseRest {
   }
 
   // DEKs autorizadas pelo banco (Edge Function gp-keys). Resposta: { keys: [{scope, kid, version, key, current}], denied: [] }.
-  fetchKeys(scopes, create = false) {
-    return this.request('POST', '/functions/v1/gp-keys', { scopes, create });
+  // 500 da própria função (ex.: KEK ausente/trocada) não é "sem conexão": vira CRYPTO, para não mascarar problema de chaves.
+  async fetchKeys(scopes, create = false) {
+    try {
+      return await this.request('POST', '/functions/v1/gp-keys', { scopes, create });
+    } catch (e) {
+      if (e.code === 'OFFLINE' && e.status === 500) throw new DataError('CRYPTO', 'falha ao obter as chaves de dados (gp-keys)');
+      throw e;
+    }
   }
 }
 

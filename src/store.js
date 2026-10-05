@@ -12,6 +12,7 @@
 'use strict';
 const { LocalJsonBackend } = require('./persistence/local-json-backend');
 const { DataError, toHttp } = require('./persistence/errors');
+const { SignedOutBackend } = require('./persistence/signed-out-backend');
 
 class Store {
   constructor(dir, { backend } = {}) {
@@ -39,7 +40,7 @@ class Store {
       try {
         await this.backend.commit(this.data);
       } catch (e) {
-        if (this.backend.kind !== 'cloud') throw e; // falha de disco local: mesmo comportamento de sempre
+        if (this.backend.kind !== 'cloud') throw e instanceof DataError ? toHttp(e) : e; // local: falha de disco como sempre; sem sessão: 401
         await this._recover();
         throw e instanceof DataError ? toHttp(e) : e;
       }
@@ -72,12 +73,14 @@ class Store {
     });
   }
 
-  // Desliga o backend atual (ex.: logout) e deixa o estado vazio na memória.
-  detach(emptyState) {
+  // Desliga o backend atual (ex.: logout): descarta chaves/cópias temporárias, troca pelo backend "sem sessão" e esvazia a memória.
+  detach(next = new SignedOutBackend()) {
     return this._enqueue(async () => {
-      this.backend.dispose?.();
-      this._replace(emptyState);
+      const old = this.backend;
+      this.backend = next;
+      this._replace(next.loadSync());
       this._gen++;
+      old.dispose?.();
     });
   }
 

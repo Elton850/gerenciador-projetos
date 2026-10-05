@@ -1,6 +1,6 @@
 # =====================================================================
 # Gerenciador de Projetos — o que NUNCA entra no Git
-# Regra: Git guarda código, migrations, scripts e documentação técnica.
+# Regra: Git guarda código, scripts e documentação técnica.
 # Dados reais, dados pessoais, horas, segredos e builds ficam fora.
 # Conferir antes de cada commit: npm run scan:secrets
 # =====================================================================
@@ -26,6 +26,10 @@ audit.log.*
 *.log
 *.gphours
 *.gpexport
+*.gpbackup
+*.gpupdate
+*.gpconfig
+atualizacoes/
 *.corrompido-*
 # planilhas e exports pessoais (fixtures de teste continuam versionadas)
 *.xlsx
@@ -45,10 +49,6 @@ audit.log.*
 *.dpapi.json
 secrets/
 signing/
-supabase/.env
-supabase/functions/.env
-supabase/.temp/
-supabase/.branches/
 
 # --- Ferramentas locais ---
 .claude/settings.local.json
@@ -59,6 +59,3 @@ supabase/.branches/
 Thumbs.db
 desktop.ini
 .DS_Store
-
-# cópias locais preenchidas de roteiros SQL (UUIDs reais do seu projeto)
-*.local.sql

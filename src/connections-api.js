@@ -39,7 +39,7 @@ function mount(app, { store, audit, db, buildConn, publicConn, connPassword }) {
     const c = { id: uid(), ...(await cleanSaved(req.body)), createdAt: now, updatedAt: now };
     data().connections.push(c);
     if (!data().settings.defaultConnectionId && c.env !== 'local') data().settings.defaultConnectionId = c.id;
-    await store.save();
+    store.save();
     audit.log({ action: 'conexao-cadastrada', detalhe: `${c.name} (${ENVS[c.env]})`, server: db.label(c), database: c.database || undefined });
     res.json(publicSaved(c));
   });
@@ -49,26 +49,26 @@ function mount(app, { store, audit, db, buildConn, publicConn, connPassword }) {
     const next = await cleanSaved(req.body, c);
     if (next.env !== 'local' && usedBy(c.id).some((u) => u.env === 'local')) throw httpError(400, 'Esta conexão é usada como “Localhost (teste)” em alguma base, então precisa continuar apontando para esta máquina.');
     Object.assign(c, next, { updatedAt: new Date().toISOString() });
-    await store.save();
+    store.save();
     audit.log({ action: 'conexao-alterada', detalhe: `${c.name} (${ENVS[c.env]})`, server: db.label(c) });
     res.json(publicSaved(c));
   });
 
-  app.delete('/api/connections/:id', async (req, res) => {
+  app.delete('/api/connections/:id', (req, res) => {
     const c = orThrow(req.params.id);
     const uses = usedBy(c.id);
     if (uses.length) throw httpError(409, `A conexão “${c.name}” é usada por ${uses.length} base(s): ${uses.slice(0, 4).map((u) => `${u.project} › ${u.base}`).join(', ')}${uses.length > 4 ? '…' : ''}. Troque a conexão dessas bases antes de excluir.`);
     data().connections = data().connections.filter((x) => x.id !== c.id);
     if (data().settings.defaultConnectionId === c.id) data().settings.defaultConnectionId = null;
     for (const p of data().projects) if (p.defaultConnectionId === c.id) p.defaultConnectionId = null;
-    await store.save();
+    store.save();
     audit.log({ action: 'conexao-excluida', detalhe: c.name });
     res.json({ ok: true });
   });
 
-  app.put('/api/settings/default-connection', async (req, res) => {
+  app.put('/api/settings/default-connection', (req, res) => {
     data().settings.defaultConnectionId = req.body.id ? orThrow(req.body.id).id : null;
-    await store.save();
+    store.save();
     res.json({ ok: true });
   });
 
@@ -137,7 +137,7 @@ function mount(app, { store, audit, db, buildConn, publicConn, connPassword }) {
       created.push({ id: c.id, name, linked, total: g.bases.length });
     }
     if (!data().settings.defaultConnectionId) data().settings.defaultConnectionId = created.find((x) => byId(x.id).env !== 'local')?.id || null;
-    await store.save();
+    store.save();
     for (const c of created) audit.log({ action: 'conexao-cadastrada', detalhe: `${c.name}: ${c.linked}/${c.total} base(s) vinculada(s)` });
     res.json({ created });
   });

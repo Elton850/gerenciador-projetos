@@ -4,6 +4,7 @@
 // apaga o arquivo ou a pasta; remover uma observação remove apenas o registro. Arquivo: caminho absoluto + extensão de documento
 // (DOC_EXT; nunca programa/script). Abrir = programa padrão do Windows (arquivo) ou Explorer (pasta); link abre no navegador.
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const { httpError, uid, str } = require('./util');
@@ -60,35 +61,35 @@ function mount(app, { store, audit, getProject, publicProject, SYS }) {
   const view = (p) => [...(p.notes || [])].sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
     .map((n) => ({ ...n, refs: n.refs.map((r) => (r.kind === 'link' ? r : { ...r, exists: exists(r) })) }));
   const reply = (p, res) => res.json({ notes: view(p), project: publicProject(p) });
-  const { who } = require('./auth/identity');
+  const who = () => { try { return os.userInfo().username || null; } catch { return null; } };
 
   app.get('/api/projects/:id/notes', (req, res) => res.json({ notes: view(getProject(req.params.id)) }));
 
-  app.post('/api/projects/:id/notes', async (req, res) => {
+  app.post('/api/projects/:id/notes', (req, res) => {
     const p = getProject(req.params.id);
     if (notesOf(p).length >= MAX_NOTES) throw httpError(400, `Limite de ${MAX_NOTES} observações por projeto.`);
     const now = new Date().toISOString();
     notesOf(p).push({ id: uid(), ...cleanNote(req.body), createdAt: now, updatedAt: now, by: who() });
-    await store.save();
+    store.save();
     audit.log({ action: 'observacao-criada', project: p.name, detalhe: str(req.body?.title, 120) || 'sem título' });
     reply(p, res);
   });
 
-  app.put('/api/projects/:id/notes/:nid', async (req, res) => {
+  app.put('/api/projects/:id/notes/:nid', (req, res) => {
     const p = getProject(req.params.id);
     const n = noteOf(p, req.params.nid);
     Object.assign(n, cleanNote(req.body, n), { updatedAt: new Date().toISOString() });
-    await store.save();
+    store.save();
     audit.log({ action: 'observacao-editada', project: p.name, detalhe: n.title || 'sem título' });
     reply(p, res);
   });
 
   // Remove só o registro da observação; arquivos e pastas referenciados não são tocados.
-  app.delete('/api/projects/:id/notes/:nid', async (req, res) => {
+  app.delete('/api/projects/:id/notes/:nid', (req, res) => {
     const p = getProject(req.params.id);
     const n = noteOf(p, req.params.nid);
     p.notes = notesOf(p).filter((x) => x.id !== n.id);
-    await store.save();
+    store.save();
     audit.log({ action: 'observacao-removida', project: p.name, detalhe: n.title || 'sem título' });
     reply(p, res);
   });

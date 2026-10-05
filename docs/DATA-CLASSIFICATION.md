@@ -105,7 +105,8 @@ confidencial **sem cifra**: a regra operacional (SECURITY.md) é não fazer isso
 |---|---|---|---|
 | Controle de horas: jornada, metas, cronômetros, apontamentos, observações do dia | Local `users\<uuid>\hours\` | LOCAL-PERSONAL | **nunca** vai ao Supabase |
 | Evidências das observações de horas | Local `users\<uuid>\hours\evidencias\` | LOCAL-PERSONAL | |
-| Export de horas | arquivo escolhido pelo usuário | LOCAL-PERSONAL | cifrado com senha (scrypt + AES-256-GCM) |
+| Export de horas (`.gphours`) | arquivo escolhido pelo usuário | LOCAL-PERSONAL | sempre cifrado com senha (scrypt + AES-256-GCM, cabeçalho autenticado) |
+| Marcador do último usuário (`last-user.dpapi.json`) | Local (máquina) | INTERNAL | DPAPI; só habilita o modo offline das horas desse usuário |
 | Workspace (pasta raiz, apelidos) | Local `users\<uuid>\prefs.json` | INTERNAL | |
 | Preferências de UI (tema, pastas recentes) | `localStorage` do app | INTERNAL | já existe; sem dado sensível |
 | Backups pré-migração | Local `backups\` | CONFIDENTIAL + PERSONAL | contém tudo; fora do Git; retenção definida no MIGRATION-GUIDE |

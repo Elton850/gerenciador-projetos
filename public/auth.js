@@ -9,13 +9,19 @@ async function authBoot() {
   try { s = await api('GET', '/api/session'); } catch (e) { if (e.silent) return; throw e; }
   AUTH.session = s;
   if (s.mode === 'local' || s.status === 'active') { renderUserBox(s); return refresh(); }
+  if (s.status === 'offline_hours') { // sem conexão: só o controle de horas (local) do último usuário deste Windows
+    renderUserBox(s);
+    if (!location.hash.startsWith('#/hours')) location.hash = '#/hours';
+    render();
+    return;
+  }
   authShow(s.status === 'pending' ? 'pending' : 'login', s.message);
 }
 
 // Chamado por api() quando o servidor responde 401/403 de sessão no meio do uso.
 function authLost(json) {
   if (AUTH.shown) return;
-  if (json.code === 'LAUNCH_REQUIRED') return authShow('launch', json.error);
+  if (json.code === 'LAUNCH_REQUIRED') return authShow('launch'); // a própria tela já explica (sem mensagem repetida)
   // Recarrega: a memória e a tela do usuário anterior são descartadas (nada fica visível por trás da tela de acesso).
   location.reload();
 }
@@ -24,6 +30,12 @@ function renderUserBox(s) {
   const box = document.getElementById('userBox');
   if (!box || s.mode !== 'cloud' || !s.user) return;
   const name = s.user.displayName || s.user.username || s.user.email;
+  if (s.user.offline) {
+    box.replaceChildren(h('div', { class: 'user-box offline' },
+      h('div', { class: 'grow' }, h('b', null, name), h('span', { class: 'small muted' }, 'Modo offline · só controle de horas')),
+      h('button', { class: 'btn sm', title: 'Sair do modo offline e entrar com o usuário (precisa de conexão)', onclick: authLogout }, 'Reconectar')));
+    return;
+  }
   box.replaceChildren(h('div', { class: 'user-box' },
     h('div', { class: 'grow' }, h('b', null, name), h('span', { class: 'small muted' }, [s.user.role, s.env !== 'prod' ? `ambiente ${s.env}` : ''].filter(Boolean).join(' · '))),
     h('button', { class: 'btn sm', title: 'Sair (encerra a sessão nesta máquina)', onclick: authLogout }, 'Sair')));
@@ -60,10 +72,24 @@ function authShow(view, message) {
       const pass = authInput('password', { autocomplete: 'current-password', required: true });
       const remember = authInput('checkbox', { id: 'authRemember' });
       const btn = h('button', { class: 'btn primary', type: 'submit' }, 'Entrar');
-      return h('form', { class: 'stack', onsubmit: submit(btn, async () => done(await api('POST', '/api/auth/login', { email: email.value, password: pass.value, remember: remember.checked }))) },
+      const off = AUTH.session?.offlineHours;
+      // Nome acessível = o texto visível; a explicação vai em dica visível (não em title, que leitores de tela leem no lugar do rótulo).
+      const offBtn = off?.available ? h('button', { class: 'btn', type: 'button', 'aria-describedby': 'offHint' }, `Trabalhar offline (só controle de horas)${off.displayName ? ` — ${off.displayName}` : ''}`) : null;
+      const offHint = offBtn ? h('div', { id: 'offHint', class: 'small muted' }, 'Sem conexão com o servidor: abre só as horas guardadas neste computador.') : null;
+      if (offBtn) offBtn.onclick = submit(offBtn, async () => { await api('POST', '/api/auth/offline-hours'); location.reload(); });
+      const tryLogin = async () => {
+        try { done(await api('POST', '/api/auth/login', { email: email.value, password: pass.value, remember: remember.checked })); } catch (e) {
+          if (e.code === 'OFFLINE' && !off?.available) { // sem conexão: se houver usuário anterior neste Windows, oferece o modo offline das horas
+            try { AUTH.session = await api('GET', '/api/session'); } catch { /* */ }
+            if (AUTH.session?.offlineHours?.available) return authShow('login', e.message);
+          }
+          throw e;
+        }
+      };
+      return h('form', { class: 'stack', onsubmit: submit(btn, tryLogin) },
         field('E-mail', email), field('Senha', pass),
         h('label', { class: 'inline small' }, remember, h('span', null, 'Manter conectado neste computador')),
-        btn, h('div', { class: 'auth-links small' }, link('Primeiro acesso (tenho um código)', 'first'), link('Esqueci minha senha', 'forgot')));
+        btn, offBtn, offHint, h('div', { class: 'auth-links small' }, link('Primeiro acesso (tenho um código)', 'first'), link('Esqueci minha senha', 'forgot')));
     },
     first: () => codeForm('Primeiro acesso', 'Informe o e-mail convidado, o código recebido no convite e crie a sua senha.', '/api/auth/first-access'),
     reset: () => codeForm('Redefinir senha', 'Informe o código recebido por e-mail e a nova senha.', '/api/auth/recover'),

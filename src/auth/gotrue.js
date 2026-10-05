@@ -87,6 +87,8 @@ class GoTrueClient {
   async recover(email) {
     await this._call('POST', '/recover', { body: { email } });
   }
+  // Servidor de autenticação alcançável? (modo offline das horas só é liberado quando NÃO está)
+  async health() { await this._call('GET', '/health'); }
   // Revoga o refresh token desta sessão no servidor (escopo local: só esta sessão).
   async signOut(accessToken) {
     await this._call('POST', '/logout?scope=local', { token: accessToken });

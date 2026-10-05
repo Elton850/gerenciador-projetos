@@ -40,7 +40,7 @@ class Store {
       try {
         await this.backend.commit(this.data);
       } catch (e) {
-        if (this.backend.kind !== 'cloud') throw e instanceof DataError ? toHttp(e) : e; // local: falha de disco como sempre; sem sessão: 401
+        if (this.backend.kind !== 'cloud' && this.backend.kind !== 'offline') throw e instanceof DataError ? toHttp(e) : e; // local: falha de disco como sempre; sem sessão: 401
         await this._recover();
         throw e instanceof DataError ? toHttp(e) : e;
       }

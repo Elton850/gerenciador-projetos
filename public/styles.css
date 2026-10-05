@@ -1009,3 +1009,6 @@ body.signed-out .app { display: none; }
 .user-box { display: flex; align-items: center; gap: 8px; padding: 8px 10px; margin-bottom: 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--s1); }
 .user-box b { display: block; font-size: 12.5px; line-height: 1.2; overflow-wrap: anywhere; }
 .user-box .grow { flex: 1 1 auto; min-width: 0; }
+.user-box.offline { border-color: var(--orange); }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.modal li.soon { color: var(--orange); }

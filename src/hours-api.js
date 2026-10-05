@@ -6,6 +6,9 @@ const E = require('./evidence');
 const EH = require('./evidence-http');
 const H = require('./hours');
 const { buildWorkbook } = require('./hours-export');
+const HB = require('./hours-backup');
+const crypto = require('crypto');
+const APP_VERSION = require('../package.json').version;
 
 const BOOT_AT = Date.now(); // cronômetro "rodando" cuja última ação é anterior a esta hora sobreviveu a um reinício do app
 const clock = { now: () => Date.now() }; // trocável nos testes
@@ -384,6 +387,68 @@ function mount(app, { store, audit, dataDir, SYS }) {
     res.setHeader('Content-Disposition', `attachment; filename="${out.name}"; filename*=UTF-8''${encodeURIComponent(out.name)}`);
     res.setHeader('Cache-Control', 'no-store');
     res.send(out.buffer);
+  });
+
+  // ---------- Levar as horas para outra máquina (.gphours, sempre cifrado com senha) — Fase 5 ----------
+  // Exportar só lê. Importar = prévia (nada muda) → aplicar com o token da prévia (válido 10 min, só nesta sessão/usuário).
+  const pendingImports = new Map(); // token → { at, backend, payload }
+  const IMPORT_TTL_MS = 10 * 60 * 1000;
+  const cleanPending = () => { const now = Date.now(); for (const [k, v] of pendingImports) if (now - v.at > IMPORT_TTL_MS || v.backend !== store.backend) pendingImports.delete(k); };
+  const summarize = (plan) => ({
+    entries: { new: plan.entries.add.length, same: plan.entries.same, conflict: plan.entries.conflict, overlap: plan.entries.overlap, invalid: plan.entries.invalid },
+    notes: { new: plan.notes.add.length, same: plan.notes.same, conflict: plan.notes.conflict, invalid: plan.notes.invalid },
+    files: { new: plan.files.add.length, present: plan.files.present.length, invalid: plan.files.invalid },
+    settingsDiffer: plan.settingsDiffer,
+  });
+
+  app.post('/api/hours/backup/export', async (req, res) => {
+    const passphrase = HB.checkPassphrase(req.body?.passphrase);
+    const included = new Map();
+    if (req.body?.includeFiles !== false) {
+      for (const n of data().timeNotes) for (const ev of n.evidences || []) {
+        if (!included.has(ev.file) && files().has(ev.file)) included.set(ev.file, await files().read(ev.file));
+      }
+    }
+    const out = await HB.buildBackup(data(), included, { passphrase, appVersion: APP_VERSION });
+    const name = `Horas_${H.localParts(nowMs()).date}.gphours`;
+    log('horas-backup-exportado', { resultado: `${out.counts.entries} apontamento(s), ${out.counts.notes} observação(ões), ${out.counts.files} anexo(s)` });
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(out.buffer);
+  });
+
+  // Prévia: o arquivo vem cru no corpo; a senha no cabeçalho X-Passphrase (nunca em URL nem em log).
+  app.post('/api/hours/backup/preview', async (req, res) => {
+    const passphrase = EH.header(req, 'x-passphrase', 300);
+    const buf = await EH.readBody(req, HB.MAX_BYTES, 'O arquivo de horas pode ter no máximo 200 MB.');
+    const { header, payload } = await HB.openBackup(buf, passphrase);
+    const plan = HB.planImport(data(), payload, { hasFile: (r) => files().has(r) });
+    cleanPending();
+    if (pendingImports.size >= 3) pendingImports.delete(pendingImports.keys().next().value);
+    const token = crypto.randomBytes(16).toString('hex');
+    pendingImports.set(token, { at: Date.now(), backend: store.backend, payload });
+    res.json({ token, exportedAt: header.exportedAt, app: header.app, summary: summarize(plan) });
+  });
+
+  app.post('/api/hours/backup/apply', async (req, res) => {
+    cleanPending();
+    const token = String(req.body?.token || '');
+    const p = pendingImports.get(token);
+    if (!p) throw httpError(409, 'A prévia expirou ou é de outra sessão. Selecione o arquivo de novo.', { code: 'BACKUP_EXPIRED' });
+    pendingImports.delete(token);
+    const plan = HB.planImport(data(), p.payload, { hasFile: (r) => files().has(r) }); // refeito agora: o estado pode ter mudado
+    // Anexos ANTES dos registros: uma observação nunca aponta para arquivo que não existe.
+    for (const ref of plan.files.add) {
+      const base = ref.slice(ref.lastIndexOf('/') + 1);
+      const cut = base.indexOf('_');
+      await files().put({ folder: ref.slice(0, ref.lastIndexOf('/')), id: base.slice(0, cut), name: base.slice(cut + 1) }, Buffer.from(String(p.payload.files[ref]), 'base64'));
+    }
+    HB.applyImport(data(), p.payload, plan, { includeSettings: req.body?.includeSettings === true });
+    await store.save();
+    const summary = summarize(plan);
+    log('horas-backup-importado', { resultado: `${summary.entries.new} apontamento(s), ${summary.notes.new} observação(ões), ${summary.files.new} anexo(s) novo(s)${req.body?.includeSettings === true ? '; jornada substituída' : ''}` });
+    res.json({ summary, day: dayView(H.localParts(nowMs()).date) });
   });
 
   return { timerView, dayView };

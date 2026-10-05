@@ -51,11 +51,12 @@ class SupabaseRest {
   }
 
   // Todas as linhas visíveis (RLS) de uma tabela, paginando. `filter` = query string do PostgREST já montada pelo backend.
-  async selectAll(table, { order = 'id', filter = '' } = {}) {
+  async selectAll(table, { order = 'id', filter = '', columns = '*' } = {}) {
     if (!TABLE_RE.test(table)) throw new Error('tabela inválida');
+    if (columns !== '*' && !/^[a-z_]+(,[a-z_]+)*$/.test(columns)) throw new Error('colunas inválidas');
     const out = [];
     for (let offset = 0; ; offset += PAGE) {
-      const page = await this.request('GET', `/rest/v1/${table}?select=*&order=${encodeURIComponent(order)}&limit=${PAGE}&offset=${offset}${filter ? `&${filter}` : ''}`);
+      const page = await this.request('GET', `/rest/v1/${table}?select=${columns}&order=${encodeURIComponent(order)}&limit=${PAGE}&offset=${offset}${filter ? `&${filter}` : ''}`);
       out.push(...(page || []));
       if (!page || page.length < PAGE) return out;
     }
@@ -64,6 +65,42 @@ class SupabaseRest {
   rpc(name, args) {
     if (!TABLE_RE.test(name)) throw new Error('rpc inválida');
     return this.request('POST', `/rest/v1/rpc/${name}`, args || {});
+  }
+
+  // ---------- Storage (objetos já cifrados pelo app; o RLS do Storage decide quem lê/grava) ----------
+  _objectUrl(kind, bucket, objectPath) {
+    if (!/^[a-z-]{1,40}$/.test(bucket) || !/^[A-Za-z0-9_-]{1,64}(\/[A-Za-z0-9_-]{1,64})?$/.test(objectPath)) throw new Error('objeto inválido');
+    return `${this.url}/storage/v1/object/${kind}${bucket}/${objectPath}`;
+  }
+
+  async _raw(method, url, { body, headers = {} } = {}) {
+    const token = await this.getAccessToken();
+    if (!token) throw new DataError('AUTH', 'sem sessão');
+    let res;
+    try {
+      res = await this.fetch(url, { method, headers: { apikey: this.key, Authorization: `Bearer ${token}`, ...headers }, body, signal: AbortSignal.timeout(Math.max(this.timeoutMs, 120000)) });
+    } catch {
+      throw new DataError('OFFLINE', 'sem conexão');
+    }
+    if (res.ok) return res;
+    const json = safeJson(await res.text());
+    const st = String(json?.statusCode || res.status);
+    const msg = `${json?.error || ''} ${json?.message || ''}`;
+    if (st === '404' || /not.?found/i.test(msg)) throw new DataError('NOT_FOUND', 'objeto não encontrado');
+    if (st === '409' || /duplicate|already exists/i.test(msg)) throw new DataError('STALE', 'objeto já existe');
+    if (st === '403' || /row-level security|unauthorized/i.test(msg)) throw new DataError('FORBIDDEN', 'sem permissão');
+    if (st === '413' || /payload too large|maximum allowed size/i.test(msg)) throw new DataError('TOO_LARGE', 'arquivo grande demais');
+    throw mapError(res.status, json);
+  }
+
+  // Envia um objeto novo (nunca sobrescreve: x-upsert false).
+  async storageUpload(bucket, objectPath, buffer) {
+    await this._raw('POST', this._objectUrl('', bucket, objectPath), { body: buffer, headers: { 'Content-Type': 'application/octet-stream', 'x-upsert': 'false' } });
+  }
+
+  async storageDownload(bucket, objectPath) {
+    const res = await this._raw('GET', this._objectUrl('authenticated/', bucket, objectPath));
+    return Buffer.from(await res.arrayBuffer());
   }
 
   // DEKs autorizadas pelo banco (Edge Function gp-keys). Resposta: { keys: [{scope, kid, version, key, current}], denied: [] }.

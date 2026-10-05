@@ -13,7 +13,6 @@ const crypto = require('crypto');
 const { httpError, str } = require('./util');
 const { prepareScript, applyVariables } = require('./sqlscan');
 const { BUILTIN_VARS, cleanUserVars, checkVarValue } = require('./scripts-api');
-const { ScriptFiles } = require('./scriptstore');
 
 const sha = (t) => crypto.createHash('sha256').update(t).digest('hex');
 const who = () => { try { return os.userInfo().username || null; } catch { return null; } };
@@ -22,7 +21,7 @@ const ENV_LABEL = { prod: 'Produção', hml: 'Homologação', dev: 'Desenvolvime
 
 function mount(app, { store, audit, db, getProject, dataDir, resolveConn, connPassword, publicProject }) {
   const data = () => store.data;
-  const files = new ScriptFiles(dataDir);
+  const content = () => store.scripts(); // .sql local ou versões na nuvem, conforme o backend atual
 
   // Conexões que o projeto pode usar: as cadastradas e as das bases do próprio projeto.
   function targets(p) {
@@ -66,11 +65,11 @@ function mount(app, { store, audit, db, getProject, dataDir, resolveConn, connPa
     const scriptId = str(req.body.scriptId, 40);
     if (!item.scriptIds.includes(scriptId)) throw httpError(400, 'Este script não está relacionado a este item do checklist.');
     const s = data().scripts.find((x) => x.id === scriptId) || (() => { throw httpError(404, 'O script foi removido da lista de Scripts SQL.'); })();
-    if (!files.exists(s.file)) throw httpError(404, `O arquivo do script (${s.file}) não foi encontrado.`);
+    if (!(await content().exists(s))) throw httpError(404, `O conteúdo do script “${s.name}” não foi encontrado.`);
     const t = resolveTarget(p, req.body.target, req.body.database);
 
     // Texto lido do ARQUIVO agora (nunca da tela) + variáveis: automáticas do destino, as demais informadas na janela.
-    const raw = files.read(s.file);
+    const raw = await content().read(s);
     const vars = {
       ...cleanUserVars(req.body.vars),
       BANCO: t.conn.database, SCHEMA: 'dbo', SERVIDOR: t.conn.server, AMBIENTE: t.local ? 'LOCAL' : 'PRODUCAO', PROJETO: p.name, BASE: t.baseName,
@@ -128,9 +127,9 @@ function mount(app, { store, audit, db, getProject, dataDir, resolveConn, connPa
   });
 
   // Variáveis que o script vai pedir (as automáticas são preenchidas pelo app).
-  app.get('/api/scripts/:id/variables', (req, res) => {
+  app.get('/api/scripts/:id/variables', async (req, res) => {
     const s = data().scripts.find((x) => x.id === req.params.id) || (() => { throw httpError(404, 'Script não encontrado.'); })();
-    const { analysis } = prepareScript(files.exists(s.file) ? files.read(s.file) : '');
+    const { analysis } = prepareScript((await content().exists(s)) ? await content().read(s) : '');
     res.json({ user: analysis.variables.filter((n) => !BUILTIN_VARS[n]), builtin: analysis.variables.filter((n) => BUILTIN_VARS[n]) });
   });
 

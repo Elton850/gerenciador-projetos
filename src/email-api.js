@@ -15,7 +15,7 @@ const IMG_FOLDER = 'comunicacoes/imagens';
 
 function mount(app, { store, audit, getProject, getIn, publicProject, dataDir }) {
   const data = () => store.data;
-  const files = new E.EvidenceFiles(dataDir); // imagens do corpo ficam no mesmo armazenamento das evidências
+  const files = () => store.files('email-images'); // local: mesma pasta das evidências · nuvem: bucket email-images (cifrado)
   const images = () => (data().emailImages ||= []);
   const log = (action, p, extra = {}) => audit.log({ action, project: p?.name, by: EH.whoAmI(), ...extra });
   const tpl = (id) => data().emailTemplates.find((t) => t.id === id) || null;
@@ -147,24 +147,30 @@ function mount(app, { store, audit, getProject, getIn, publicProject, dataDir })
   }
 
   // ---------- Imagens do corpo (mesmo armazenamento das evidências; no e-mail viram data URL ao gerar/copiar) ----------
-  const imgData = (id) => {
-    const im = images().find((x) => x.id === id);
-    if (!im || !files.stat(im.file)) return null;
-    return `data:${im.mime};base64,${fs.readFileSync(files.resolve(im.file)).toString('base64')}`;
-  };
+  // As imagens citadas no corpo são carregadas ANTES de montar o e-mail (na nuvem a leitura é assíncrona); ausente = aviso, nunca erro.
+  async function imagesFor(fragment) {
+    const ids = [...new Set([...String(fragment || '').matchAll(/\/api\/email-images\/([A-Za-z0-9_-]{1,64})/g)].map((m) => m[1]))];
+    const found = new Map();
+    for (const id of ids) {
+      const im = images().find((x) => x.id === id);
+      if (!im || !files().has(im.file)) continue;
+      try { found.set(id, `data:${im.mime};base64,${(await files().read(im.file)).toString('base64')}`); } catch { /* fica de fora com aviso */ }
+    }
+    return (id) => found.get(id) || null;
+  }
   app.post('/api/email-images', async (req, res) => {
     const cfg = E.getConfig(data().settings);
-    const rec = await EH.receiveUpload(req, { files, cfg, type: 'image', folder: IMG_FOLDER });
-    if (rec.size > IMG_MAX_BYTES) { files.trash(rec.file); throw httpError(413, `Imagem grande demais (${(rec.size / 1048576).toFixed(1)} MB). O limite no e-mail é ${IMG_MAX_BYTES / 1048576} MB.`); }
+    // limite do e-mail conferido ANTES de gravar (na nuvem nada de grande demais chega ao Storage)
+    const rec = await EH.receiveUpload(req, { files: files(), cfg, type: 'image', folder: IMG_FOLDER, maxBytes: IMG_MAX_BYTES, limitText: `O limite no e-mail é ${IMG_MAX_BYTES / 1048576} MB.` });
     const im = { id: rec.id, name: rec.name, file: rec.file, mime: rec.mime, size: rec.size, at: rec.at };
     images().push(im);
     await store.save();
     log('email-imagem-adicionada', null, { detalhe: im.name, resultado: `${im.size} bytes` });
     res.json({ id: im.id, name: im.name, url: `/api/email-images/${im.id}` });
   });
-  app.get('/api/email-images/:id', (req, res) => {
+  app.get('/api/email-images/:id', async (req, res) => {
     const im = images().find((x) => x.id === req.params.id) || (() => { throw httpError(404, 'Imagem não encontrada.'); })();
-    EH.sendEvidence(res, files, { name: im.name, file: im.file }, { inline: true });
+    await EH.sendEvidence(res, files(), { name: im.name, file: im.file }, { inline: true });
   });
 
   // ---------- Anexos sugeridos (referências a Documentos e Modelos; nada é enviado nem copiado de lugar) ----------
@@ -182,14 +188,14 @@ function mount(app, { store, audit, getProject, getIn, publicProject, dataDir })
   const files_exists = (p) => { try { return fs.statSync(p).isFile(); } catch { return false; } };
 
   // Corpo final para a tela: HTML wrapper (prévia = cópia), texto puro e fragmento editável (imagens como referência).
-  const outFor = (fragment) => M.renderOut(fragment, imgData);
+  const outFor = async (fragment) => M.renderOut(fragment, await imagesFor(fragment));
 
   app.post('/api/projects/:id/emails/generate', async (req, res) => {
     const p = proj(req.params.id);
     const src = sourceOf(p, req.body);
     const g = M.generate(src.t, M.contextFor(data(), p, { item: src.item, stageName: src.stageName }));
     const attachments = resolveAttachments(src.t.attachments);
-    const out = outFor(g.bodyHtml);
+    const out = await outFor(g.bodyHtml);
     const extra = [...attachments.filter((a) => a.problem).map((a) => `⚠ ${a.title}: ${a.problem}`), ...(out.missingImages.length ? ['⚠ Uma imagem do modelo não foi encontrada e ficou de fora.'] : [])];
     const rec = M.generationRecord({ project: p, template: src.t, checklist: src.checklist, g, by: EH.whoAmI(), attachments });
     gens().push(rec);
@@ -201,10 +207,10 @@ function mount(app, { store, audit, getProject, getIn, publicProject, dataDir })
 
   // Corpo editado na tela (HTML do editor): sanitiza e devolve o MESMO HTML/texto que a prévia mostra e a cópia usa.
   // Também aceita { body } (texto simples antigo) e { html } só para sanitizar um colar (sem imagens inlinadas).
-  app.post('/api/emails/render', (req, res) => {
+  app.post('/api/emails/render', async (req, res) => {
     if (typeof req.body.bodyHtml === 'string') {
       const fragment = HS.sanitize(req.body.bodyHtml);
-      const out = outFor(fragment);
+      const out = await outFor(fragment);
       return res.json({ bodyHtml: fragment, html: out.html, text: out.text });
     }
     const body = String(req.body.body ?? '').slice(0, 20000);
@@ -231,9 +237,9 @@ function mount(app, { store, audit, getProject, getIn, publicProject, dataDir })
     const pid = str(req.query.projectId, 40);
     res.json(gens().filter((s) => !pid || s.projectId === pid).slice(-200).reverse());
   });
-  app.get('/api/email-generations/:gid', (req, res) => {
+  app.get('/api/email-generations/:gid', async (req, res) => {
     const s = genOrThrow(req.params.gid);
-    const out = s.bodyHtml ? outFor(s.bodyHtml) : null;
+    const out = s.bodyHtml ? await outFor(s.bodyHtml) : null;
     res.json({ ...s, html: out ? out.html : M.bodyToHtml(s.body), attachmentsInfo: resolveAttachments(s.attachments) });
   });
 

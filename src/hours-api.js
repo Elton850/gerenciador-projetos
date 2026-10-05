@@ -16,7 +16,7 @@ const NOW_TOLERANCE_MS = 2000;
 
 function mount(app, { store, audit, dataDir, SYS }) {
   const data = () => store.data;
-  const files = new E.EvidenceFiles(dataDir); // a mesma pasta de evidências do checklist (subpasta horas/)
+  const files = () => store.files('hours-evidence'); // SEMPRE local (horas não vão à nuvem — ADR-014); no modo nuvem, na pasta do usuário
   const explorer = path.join(SYS, 'explorer.exe');
   const log = (action, extra = {}) => audit.log({ action, by: who(), ...extra });
   const nowMs = () => clock.now();
@@ -38,7 +38,7 @@ function mount(app, { store, audit, dataDir, SYS }) {
     return {
       id: n.id, date: n.date, dates: H.datesOfNote(n), title: n.title, description: n.description, category: n.category, categoryLabel: c.label, tone: c.tone, severity: n.severity, entryId: n.entryId,
       projectId: n.projectId, projectName: n.projectId ? projectNameOf(n.projectId, n.projectName) : '', projectExists: n.projectId ? projectExists(n.projectId) : true,
-      createdAt: n.createdAt, updatedAt: n.updatedAt, createdBy: n.createdBy, updatedBy: n.updatedBy, evidences: n.evidences.map((v) => EH.evidencePublic(files, v)),
+      createdAt: n.createdAt, updatedAt: n.updatedAt, createdBy: n.createdBy, updatedBy: n.updatedBy, evidences: n.evidences.map((v) => EH.evidencePublic(files(), v)),
     };
   };
   const lastDateOf = (n) => { const d = H.datesOfNote(n); return d[d.length - 1]; }; // o dia mais recente da observação (Home)
@@ -336,7 +336,7 @@ function mount(app, { store, audit, dataDir, SYS }) {
   // Excluir: os arquivos das evidências vão para evidencias\.removidas (mesma estratégia do checklist; nada fica órfão nem é apagado).
   app.delete('/api/hours/notes/:id', async (req, res) => {
     const n = noteOrThrow(req.params.id);
-    for (const ev of n.evidences) files.trash(ev.file);
+    for (const ev of n.evidences) await files().remove(ev.file);
     data().timeNotes = data().timeNotes.filter((x) => x.id !== n.id);
     await store.save();
     auditNote('observacao-excluida', n, { resultado: n.evidences.length ? `${n.evidences.length} evidência(s) movida(s) para .removidas` : undefined });
@@ -347,26 +347,26 @@ function mount(app, { store, audit, dataDir, SYS }) {
   app.post('/api/hours/notes/:id/evidence', async (req, res) => {
     const n = noteOrThrow(req.params.id);
     if (n.evidences.length >= H.NOTE_MAX_EVIDENCES) throw httpError(400, `Esta observação já tem o máximo de ${H.NOTE_MAX_EVIDENCES} evidências. Remova uma para anexar outra.`);
-    const rec = await EH.receiveUpload(req, { files, cfg: E.getConfig(data().settings), type: 'imageOrDocument', folder: files.folderForNote(n.date) });
+    const rec = await EH.receiveUpload(req, { files: files(), cfg: E.getConfig(data().settings), type: 'imageOrDocument', folder: files().folderForNote(n.date) });
     n.evidences.push(rec);
     n.updatedAt = rec.at; n.updatedBy = who();
     await store.save();
     auditNote('observacao-evidencia-adicionada', n, { arquivo: rec.name, bytes: rec.size });
     res.json({ note: noteView(n), day: dayView(n.date) });
   });
-  app.get('/api/hours/notes/:id/evidences/:eid/file', (req, res) => {
+  app.get('/api/hours/notes/:id/evidences/:eid/file', async (req, res) => {
     const n = noteOrThrow(req.params.id);
-    EH.sendEvidence(res, files, evOfNote(n, req.params.eid), { inline: req.query.inline === '1' });
+    await EH.sendEvidence(res, files(), evOfNote(n, req.params.eid), { inline: req.query.inline === '1' });
   });
-  app.post('/api/hours/notes/:id/evidences/:eid/open', (req, res) => {
+  app.post('/api/hours/notes/:id/evidences/:eid/open', async (req, res) => {
     const n = noteOrThrow(req.params.id);
-    EH.openEvidence(explorer, files, evOfNote(n, req.params.eid), { folder: !!(req.body || {}).folder });
+    await EH.openEvidence(explorer, files(), evOfNote(n, req.params.eid), { folder: !!(req.body || {}).folder });
     res.json({ ok: true });
   });
   app.delete('/api/hours/notes/:id/evidences/:eid', async (req, res) => {
     const n = noteOrThrow(req.params.id);
     const ev = evOfNote(n, req.params.eid);
-    files.trash(ev.file);
+    await files().remove(ev.file);
     n.evidences = n.evidences.filter((x) => x.id !== ev.id);
     n.updatedAt = new Date(nowMs()).toISOString(); n.updatedBy = who();
     await store.save();

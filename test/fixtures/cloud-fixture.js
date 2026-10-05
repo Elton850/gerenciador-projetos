@@ -86,7 +86,7 @@ function fixture() {
           items: [{ id: 'ii-1', defId: 'it-1', checklistId: 'ck-1', title: 'Backup', description: 'd', required: true, evidence: { mode: 'required', type: 'image', min: 1, max: 3 },
             links: [], scriptIds: ['sc-1'], condition: null, done: true, doneAt: '2026-09-03', doneBy: 'usuario', completedAt: '2026-09-03', completedBy: 'usuario',
             note: { text: CANARY.note, updatedAt: '2026-09-03', updatedBy: 'usuario' },
-            evidences: [{ id: 'e1', name: CANARY.evidenceName, file: 'p1/01-homologacao/e1_print.png', mime: 'image/png', kind: 'image', size: 100, description: 'SENSIVEL_desc', at: '2026-09-03', by: 'usuario' }],
+            evidences: [{ id: 'e1', name: CANARY.evidenceName, file: 'sensivel-cliente-exemplo-ltda-p1/01-homologacao/e1_SENSIVEL_print_tela.png', mime: 'image/png', kind: 'image', size: 100, description: 'SENSIVEL_desc', at: '2026-09-03', by: 'usuario' }],
             runs: [{ at: '2026-09-03', by: 'usuario', scriptId: 'sc-1', target: CANARY.server, ok: true }], carriedTo: null, carriedAt: null, carryHistory: [], dependsOn: [], carryForward: false, archived: false }] },
         { id: 'ci-0', stepId: 'cy-2', stageId: 'st-b', stageName: 'Produção', createdAt: '2026-09-01T00:00:00.000Z', syncedAt: null, items: [] },
       ],

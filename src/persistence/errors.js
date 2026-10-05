@@ -15,6 +15,8 @@ const MESSAGES = {
   AUTH: [401, 'AUTH_REQUIRED', 'Sua sessão expirou. Entre novamente.'],
   CRYPTO: [500, 'CRYPTO', 'Não foi possível proteger/ler dados cifrados. Nada foi salvo.'],
   INVALID: [500, 'DATA_INVALID', 'O servidor de dados recusou a alteração. Nada foi salvo.'],
+  NOT_FOUND: [404, 'FILE_NOT_FOUND', 'O arquivo não foi encontrado no armazenamento da nuvem (ou ainda não foi migrado).'],
+  TOO_LARGE: [413, 'FILE_TOO_LARGE', 'Arquivo grande demais para o armazenamento da nuvem.'],
 };
 
 // Converte para o erro que as rotas devolvem (o error handler do server.js já repassa `code`).

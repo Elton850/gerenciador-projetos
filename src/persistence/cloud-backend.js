@@ -12,6 +12,9 @@ const { seal, open } = require('../crypto/envelope');
 const M = require('./mapping');
 const { DataError } = require('./errors');
 const { clone } = require('./split');
+const { CloudFileArea } = require('../files/cloud-area');
+const { LocalFileArea } = require('../files/local-area');
+const { CloudScriptContent } = require('../files/script-content');
 
 // Ordem/filtros de leitura por tabela. Projetos arquivados não são carregados (nem as suas execuções/contatos).
 const READ = M.TABLE_ORDER.map((table) => ({ table, order: M.pkOf(table).join(','), filter: table === 'projects' ? 'archived_at=is.null' : '' }));
@@ -26,9 +29,25 @@ class CloudBackend {
     this.userId = userId;
     this.snap = new Map(); // keyOf → { row (lógica, congelada), content, rev }
     this.localSnap = {};    // seção → JSON canônico
+    this.areas = {};
+    this._scripts = null;
   }
 
+  // Arquivos (Fase 3b): evidências e imagens de e-mail no Storage (cifradas); evidências das observações de horas ficam locais (ADR-014).
+  files(area) {
+    if (!this.areas[area]) {
+      if (area === 'evidence' || area === 'email-images') this.areas[area] = new CloudFileArea({ bucket: area, transport: this.transport, keys: this.keys, userDir: this.local.dir });
+      else if (area === 'hours-evidence') this.areas[area] = new LocalFileArea(this.local.dir);
+      else throw new Error(`área de arquivos desconhecida: ${area}`);
+    }
+    return this.areas[area];
+  }
+  scripts() { return (this._scripts ||= new CloudScriptContent({ transport: this.transport, userDir: this.local.dir })); }
+  // Cópias decifradas temporárias ("Abrir no Windows") nunca sobrevivem à sessão.
+  purgeTemp() { new CloudFileArea({ bucket: 'evidence', transport: null, keys: null, userDir: this.local.dir }).purgeTemp(); }
+
   async load() {
+    this.purgeTemp();
     const db = {};
     for (const { table, order, filter } of READ) db[table] = await this.transport.selectAll(table, { order, filter });
     const live = new Set(db.projects.map((p) => p.id));
@@ -184,6 +203,7 @@ class CloudBackend {
   }
 
   dispose() {
+    this.purgeTemp();
     this.keys.clear();
     this.snap.clear();
     this.localSnap = {};

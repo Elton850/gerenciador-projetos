@@ -105,7 +105,7 @@ function mount(app, { store, audit, getProject, getIn, resolveConn, connPassword
 
     // Scripts: os mesmos da importação de arquivo único (lidos dos arquivos agora, analisados, variáveis automáticas do destino).
     const scriptVars = { ...scriptsApi.cleanUserVars(req.body.scriptVars), BANCO: conn.database, SCHEMA: items[0].schema, SERVIDOR: conn.server, AMBIENTE: env === 'prod' ? 'PRODUCAO' : 'LOCAL', PROJETO: project.name, BASE: base.name };
-    const userScripts = scriptsMod.loadForPlan(req.body.scriptIds, scriptVars);
+    const userScripts = await scriptsMod.loadForPlan(req.body.scriptIds, scriptVars);
     const scriptsDestructiveOk = env === 'local' || !!base.allowProdOverwrite;
     const scriptPlan = userScripts.length ? plans.buildScriptPlan(userScripts, { env }) : null;
 

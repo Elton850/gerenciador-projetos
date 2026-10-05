@@ -9,7 +9,6 @@ const C = require('./checklist');
 const { applyGreeting } = require('./greeting');
 const cycles = require('./cycles');
 const E = require('./evidence');
-const { ScriptFiles } = require('./scriptstore');
 
 const EH = require('./evidence-http');
 const EM = require('./email');
@@ -18,8 +17,7 @@ const whoAmI = EH.whoAmI;
 
 function mount(app, { store, audit, getProject, getIn, dataDir, SYS, publicProject }) {
   const data = () => store.data;
-  const files = new E.EvidenceFiles(dataDir);
-  const scriptFiles = new ScriptFiles(dataDir);
+  const files = () => store.files('evidence'); // local (pasta) ou nuvem (Storage cifrado), conforme o backend atual
   const explorer = path.join(SYS, 'explorer.exe');
   const log = (action, p, extra = {}) => audit.log({ action, project: p?.name, by: whoAmI(), ...extra });
 
@@ -144,7 +142,7 @@ function mount(app, { store, audit, getProject, getIn, dataDir, SYS, publicProje
   // ---------- Visão de uma instância (o que a tela precisa; nunca caminhos do disco) ----------
   const scriptRef = (id) => {
     const s = data().scripts.find((x) => x.id === id);
-    return s ? { id, name: s.name, exists: scriptFiles.exists(s.file), missing: false } : { id, name: 'Script removido', exists: false, missing: true };
+    return s ? { id, name: s.name, exists: store.scripts().existsSync(s), missing: false } : { id, name: 'Script removido', exists: false, missing: true };
   };
   function itemView(it, cfg, p, idx) {
     const ext = it.evidence.mode === 'none' ? [] : cfg.types[it.evidence.type]?.extensions || [];
@@ -161,7 +159,7 @@ function mount(app, { store, audit, getProject, getIn, dataDir, SYS, publicProje
       links: it.links, scripts: it.scriptIds.map(scriptRef), checklistId: it.checklistId, email: emailRef(it, p),
       runs: (it.runs || []).slice(-10).reverse(),
       done: it.done, doneAt: it.doneAt, doneBy: it.doneBy, completedAt: it.completedAt, completedBy: it.completedBy, status: C.itemStatus(it), archived: !!it.archived,
-      evidences: it.evidences.map((v) => EH.evidencePublic(files, v)),
+      evidences: it.evidences.map((v) => EH.evidencePublic(files(), v)),
     };
   }
   // Ação "Gerar e-mail" do item: modelo (da cópia do item) + última geração feita a partir dele (Comunicações). Não é envio.
@@ -311,7 +309,7 @@ function mount(app, { store, audit, getProject, getIn, dataDir, SYS, publicProje
     if (it.evidence.mode === 'none') throw httpError(400, 'Este item não usa evidências.');
     if (it.evidences.length >= it.evidence.max) throw httpError(400, `Este item já tem o máximo de ${it.evidence.max} evidência(s). Remova uma para anexar outra.`);
     const stepNo = Math.max(0, C.stepsOf(p).findIndex((c) => c.id === inst.stepId)) + 1;
-    const rec = await EH.receiveUpload(req, { files, cfg: E.getConfig(data().settings), type: it.evidence.type, folder: files.folderFor(p, stepNo, inst.stageName) });
+    const rec = await EH.receiveUpload(req, { files: files(), cfg: E.getConfig(data().settings), type: it.evidence.type, folder: files().folderFor(p, stepNo, inst.stageName), projectId: p.id });
     it.evidences.push(rec);
     C.refreshCompletion(it, whoAmI(), rec.at);
     await store.save();
@@ -327,20 +325,20 @@ function mount(app, { store, audit, getProject, getIn, dataDir, SYS, publicProje
     throw httpError(404, 'Evidência não encontrada.');
   }
   // Visualizar (imagem, na própria tela) ou baixar/exportar: a entrega segura é a mesma de todas as evidências (evidence-http.js).
-  app.get('/api/projects/:id/evidences/:eid/file', (req, res) => {
+  app.get('/api/projects/:id/evidences/:eid/file', async (req, res) => {
     const { ev } = findEvidence(getProject(req.params.id), req.params.eid);
-    EH.sendEvidence(res, files, ev, { inline: req.query.inline === '1' });
+    await EH.sendEvidence(res, files(), ev, { inline: req.query.inline === '1' });
   });
-  app.post('/api/projects/:id/evidences/:eid/open', (req, res) => {
+  app.post('/api/projects/:id/evidences/:eid/open', async (req, res) => {
     const { ev } = findEvidence(getProject(req.params.id), req.params.eid);
-    EH.openEvidence(explorer, files, ev, { folder: !!req.body.folder });
+    await EH.openEvidence(explorer, files(), ev, { folder: !!req.body.folder });
     res.json({ ok: true });
   });
   // Remover: o arquivo vai para <data>\evidencias\.removidas (recuperável). O item volta a "aguardando evidência" se ela era exigida.
   app.delete('/api/projects/:id/evidences/:eid', async (req, res) => {
     const p = getProject(req.params.id);
     const { inst, it, ev } = findEvidence(p, req.params.eid);
-    files.trash(ev.file);
+    await files().remove(ev.file);
     it.evidences = it.evidences.filter((x) => x.id !== ev.id);
     C.refreshCompletion(it, whoAmI(), new Date().toISOString());
     await store.save();

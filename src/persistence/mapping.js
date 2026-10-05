@@ -16,7 +16,8 @@ const PROJECT_PLAIN = ['createdAt', 'rootDirKind', 'coordinatorId', 'analystId',
 const PROJECT_LOCAL = ['rootDir', 'bases[].directory', 'deparas[].targetDir', 'deparas[].sourceDir', 'deparas[].lastDownload',
   'environments.hml.dir', 'environments.prod.dir', 'notes[].refs[].path', 'workspace'];
 const PROJECT_SECRETS = ['bases[].prod.passwordEnc', 'bases[].local.passwordEnc'];
-const CHECKLIST_SENSITIVE = ['items[].note', 'items[].runs', 'items[].evidences[].name', 'items[].evidences[].description'];
+// evidences[].file: no modo local o caminho leva o slug do nome do projeto e o nome do arquivo → cifrado (achado da Fase 3b).
+const CHECKLIST_SENSITIVE = ['items[].note', 'items[].runs', 'items[].evidences[].name', 'items[].evidences[].description', 'items[].evidences[].file'];
 const CONNECTION_PLAIN = ['env', 'auth', 'encrypt', 'trustServerCertificate', 'allowDestructive', 'createdAt', 'updatedAt'];
 const GENERATION_PLAIN = ['at', 'by', 'projectId', 'templateId', 'templateName', 'edited', 'copied', 'copiedAt', 'attachments'];
 const TEMPLATE_SENSITIVE = ['to', 'cc', 'bcc'];

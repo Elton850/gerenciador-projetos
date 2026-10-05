@@ -45,7 +45,8 @@ Legenda: **Cloud** = Supabase · **Local** = `%LOCALAPPDATA%\GerenciadorProjetos
 | `doneBy`, `completedBy`, `by` | Cloud | PERSONAL (identificador) | não — passa a ser **UUID** + nome de exibição | do projeto | — |
 | `note.text` (observação do item) | Cloud | CONFIDENTIAL | **sim** | do projeto | sim |
 | Evidência: metadados (nome do arquivo, descrição) | Cloud | CONFIDENTIAL | **sim** | do projeto | sim |
-| Evidência: arquivo (prints, PDFs) | **[D1]** Storage privado, cifrado na aplicação | CONFIDENTIAL | **sim** | do projeto | sim |
+| Evidência: referência do arquivo (`file`) | Cloud (envelope) | CONFIDENTIAL | **sim** | do projeto | sim |
+| Evidência: arquivo (prints, PDFs) | Storage privado `evidence/<projeto>/<id>`, cifrado na aplicação (GPF1) | CONFIDENTIAL | **sim** | do projeto (RLS do Storage) | sim |
 
 ### Configurações globais (compartilháveis)
 

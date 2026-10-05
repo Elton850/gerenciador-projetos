@@ -6,6 +6,8 @@ const fs = require('fs');
 const path = require('path');
 const { applyDefaults } = require('../defaults');
 const { needsChecklistMigration } = require('../cycles');
+const { LocalFileArea } = require('../files/local-area');
+const { LocalScriptContent } = require('../files/script-content');
 
 const EMPTY = () => ({ version: 1, settings: { warnDays: 7 }, projects: [] });
 
@@ -46,6 +48,10 @@ class LocalJsonBackend {
     if (fs.existsSync(this.file)) fs.copyFileSync(this.file, `${this.file}.bak`);
     fs.renameSync(tmp, this.file);
   }
+
+  // Arquivos: tudo na pasta de dados (evidencias\, scripts\), como sempre.
+  files() { return (this._files ||= new LocalFileArea(this.dir)); }
+  scripts() { return (this._scripts ||= new LocalScriptContent(this.dir)); }
 
   hasPendingChanges() { return false; }
   dispose() {}

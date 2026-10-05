@@ -51,6 +51,13 @@ Nenhuma camada substitui outra. A tela só **reflete** permissões; quem decide 
   `{v, alg, kid, iv, ct, tag}`. O banco recusa coluna `enc` fora do formato e campos sensíveis em claro no `doc`. **[implementado: `src/crypto/envelope.js` + checks]**
 - O que é cifrado e o que não é: DATA-CLASSIFICATION.md. Ordenação/busca de campos cifrados acontecem em memória, depois de decifrar.
 - Proibido: Base64/XOR/ECB/algoritmo próprio, chave derivada de nome de usuário, chave no código.
+- **Arquivos** (evidências, imagens de e-mail): cifrados no app antes do upload — formato binário `GPF1` (kid, IV 96 bits, tag), AAD
+  `gp:file:v1:<bucket>:<caminho>`; caminho do objeto sem nome de arquivo nem de projeto (`<projeto>/<id>`). O Storage só guarda ciphertext. **[implementado]**
+  - Cache local de arquivos: **só ciphertext** (`users\<uuid>\cache\files`).
+  - **Exceção documentada**: “Abrir no Windows” precisa do arquivo em claro no disco → cópia em `users\<uuid>\tmp-open`, apagada no logout,
+    na próxima carga e após 12 h (arquivo travado pelo programa aberto fica para a próxima limpeza).
+  - Remover evidência não apaga o objeto (ADR-009); ele continua sob o prefixo do projeto — expurgo é decisão de retenção (§15).
+  - Evidências das observações de horas nunca vão ao Storage (locais, ADR-014).
 
 ## 6. Gerenciamento de chaves
 ```
@@ -139,6 +146,7 @@ RPC de anonimização de pessoa/contato: **[fase 8]**.
 | E-mails gerados | hoje: até 2.000 por instalação; definir prazo |
 | Auditoria | definir (ex.: 5 anos); append-only |
 | Backups pré-migração (locais) | apagar após validação + prazo combinado (ex.: 90 dias) |
+| Objetos do Storage de evidências removidas | hoje permanecem (nunca apagar); definir prazo de expurgo por projeto arquivado |
 | Export de horas | responsabilidade do usuário; cifrado |
 
 ## 16. Limitações conhecidas

@@ -22,6 +22,7 @@ async function createCloud() {
   let lock = Promise.resolve();
   const serial = (fn) => { const p = lock.then(fn, fn); lock = p.catch(() => {}); return p; };
   const keys = new Map(); // scope → [{ kid, version, key }]
+  const objects = new Map(); // "bucket/caminho" → bytes (o conteúdo; a linha em storage.objects é o que o RLS confere)
 
   const asUser = (uid, fn) => serial(async () => {
     const claims = JSON.stringify({ sub: uid, role: 'authenticated', amr: [{ method: 'password', timestamp: Math.floor(Date.now() / 1000) }] });
@@ -60,11 +61,25 @@ async function createCloud() {
     const guard = () => { if (state.offline) throw new DataError('OFFLINE', 'sem conexão (simulado)'); };
     return {
       state,
-      async selectAll(table, { order = 'id', filter = '' } = {}) {
+      async selectAll(table, { order = 'id', filter = '', columns = '*' } = {}) {
         guard();
-        if (!/^[a-z_]+$/.test(table) || !/^[a-z_,]+$/.test(order)) throw new Error('inválido');
+        if (!/^[a-z_]+$/.test(table) || !/^[a-z_,]+$/.test(order) || !/^(\*|[a-z_]+(,[a-z_]+)*)$/.test(columns)) throw new Error('inválido');
         const w = where(filter);
-        return asUser(uid, async () => (await db.query(`select * from public.${table}${w.sql} order by ${order}`, w.params)).rows.map(normalize));
+        return asUser(uid, async () => (await db.query(`select ${columns} from public.${table}${w.sql} order by ${order}`, w.params)).rows.map(normalize));
+      },
+      // Storage: a linha em storage.objects passa pelo RLS de produção (migration de Storage); os bytes ficam no mapa.
+      async storageUpload(bucket, objectPath, buffer) {
+        guard();
+        const k = `${bucket}/${objectPath}`;
+        if (objects.has(k)) throw new DataError('STALE', 'objeto já existe');
+        await asUser(uid, () => db.query('insert into storage.objects (bucket_id, name) values ($1, $2)', [bucket, objectPath]));
+        objects.set(k, Buffer.from(buffer));
+      },
+      async storageDownload(bucket, objectPath) {
+        guard();
+        const seen = await asUser(uid, async () => (await db.query('select 1 from storage.objects where bucket_id = $1 and name = $2', [bucket, objectPath])).rows);
+        if (!seen.length || !objects.has(`${bucket}/${objectPath}`)) throw new DataError('NOT_FOUND', 'objeto não encontrado');
+        return Buffer.from(objects.get(`${bucket}/${objectPath}`));
       },
       async rpc(name, args) {
         guard();
@@ -111,7 +126,7 @@ async function createCloud() {
   const sql = (q, params) => asOwner(async () => (await db.query(q, params)).rows);
   const sqlAs = (uid, q, params) => asUser(uid, async () => (await db.query(q, params)).rows);
 
-  return { db, transport, user, provision, sql, sqlAs, keys, close: () => db.close() };
+  return { db, transport, user, provision, sql, sqlAs, keys, objects, close: () => db.close() };
 }
 
 module.exports = { createCloud };

@@ -93,6 +93,10 @@ class Store {
     });
   }
 
+  // Áreas de arquivos e conteúdo dos scripts do backend atual (local ou nuvem). Sempre pedir na hora: o backend muda no login/logout.
+  files(area) { return this.backend.files(area); }
+  scripts() { return this.backend.scripts(); }
+
   project(id) {
     return this.data.projects.find((p) => p.id === id) || null;
   }

@@ -58,6 +58,23 @@ test('SupabaseRest: erros viram códigos do app (STALE, FORBIDDEN, AUTH, OFFLINE
   await assert.rejects(noSession.rpc('x', {}), { code: 'AUTH' });
 });
 
+test('SupabaseRest Storage: upload sem sobrescrever (x-upsert false) e download autenticado; erros do Storage viram códigos do app', async () => {
+  const f = fakeFetch((url, init) => (init.method === 'GET' ? { ok: true, status: 200, arrayBuffer: async () => Uint8Array.from([1, 2, 3]).buffer } : resp(200, {})));
+  const t = new SupabaseRest({ url: URL_, publishableKey: 'pk', getAccessToken: async () => 'jwt', fetchImpl: f });
+  await t.storageUpload('evidence', 'p1/ev1', Buffer.from('x'));
+  assert.equal(f.calls[0].url, `${URL_}/storage/v1/object/evidence/p1/ev1`);
+  assert.equal(f.calls[0].init.headers['x-upsert'], 'false');
+  assert.equal(f.calls[0].init.headers.Authorization, 'Bearer jwt');
+  assert.deepEqual(await t.storageDownload('evidence', 'p1/ev1'), Buffer.from([1, 2, 3]));
+  assert.equal(f.calls[1].url, `${URL_}/storage/v1/object/authenticated/evidence/p1/ev1`);
+  assert.throws(() => t._objectUrl('', 'evidence', '../x'), /objeto inválido/);
+  for (const [r, code] of [[resp(400, { statusCode: '404', error: 'not_found' }), 'NOT_FOUND'], [resp(400, { statusCode: '403', message: 'new row violates row-level security policy' }), 'FORBIDDEN'],
+    [resp(400, { statusCode: '409', error: 'Duplicate' }), 'STALE'], [resp(413, { statusCode: '413', message: 'Payload too large' }), 'TOO_LARGE']]) {
+    const tt = new SupabaseRest({ url: URL_, publishableKey: 'pk', getAccessToken: async () => 'jwt', fetchImpl: async () => r });
+    await assert.rejects(tt.storageUpload('evidence', 'p1/ev2', Buffer.from('x')), { code });
+  }
+});
+
 test('LocalUserData: pasta por UUID, gravação atômica com .bak, arquivo de outro usuário recusado', () => {
   const uid = '11111111-2222-3333-4444-555555555555';
   assert.throws(() => new LocalUserData('Elton', tmp), { code: 'LOCAL_USER' }); // nome legível nunca segrega dados

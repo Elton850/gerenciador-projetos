@@ -512,7 +512,7 @@ app.post('/api/import/plan', async (req, res) => {
     ...scriptsApi.cleanUserVars(req.body.scriptVars),
     BANCO: conn.database, SCHEMA: firstSchema || 'dbo', SERVIDOR: conn.server, AMBIENTE: env === 'prod' ? 'PRODUCAO' : 'LOCAL', PROJETO: project.name, BASE: base.name,
   };
-  const userScripts = scriptsMod.loadForPlan(req.body.scriptIds, scriptVars);
+  const userScripts = await scriptsMod.loadForPlan(req.body.scriptIds, scriptVars);
   // Scripts com DELETE/DROP/TRUNCATE em PRODUÇÃO seguem a mesma regra das tabelas: só se a base permitir sobrescrever/apagar.
   const scriptsDestructiveOk = env === 'local' || !!base.allowProdOverwrite;
 

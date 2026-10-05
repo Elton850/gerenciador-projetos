@@ -291,12 +291,12 @@ KEK v1 (32 bytes aleatórios) ─ secret GP_KEK_V1 da Edge Function + backup off
 ## 14. Documentos, evidências e arquivos **[D1]**
 | Tipo | Hoje | Proposta |
 |---|---|---|
-| Evidências de checklist | `data/evidencias/<proj>/…` | metadado em `project_evidence` + arquivo **cifrado** no Storage privado (projeto multi-máquina exige) |
+| Evidências de checklist | `data/evidencias/<proj>/…` | metadados no checklist (campo `file` = `sb:evidence/<projeto>/<id>`, cifrado) + arquivo **cifrado** no Storage privado. “Abrir no Windows” usa cópia decifrada temporária (apagada no logout/próxima carga/12 h). Remover = sai dos metadados; o objeto fica sob o prefixo do projeto (expurgo = decisão de retenção) |
 | Imagens dos modelos de e-mail | `data/evidencias/comunicacoes/imagens` | Storage (config global) |
 | Evidências das observações de horas | `data/evidencias/horas` | **local** (horas) |
 | Documentos e Modelos | links (11/11) | link na nuvem; documento tipo arquivo = vínculo local |
 | Planilhas DE-PARA (.xlsx) | pasta do projeto | **local** (arquivo de trabalho), só metadado na nuvem |
-| Scripts SQL **[D5]** | `data/scripts/*.sql` | conteúdo + versões na nuvem; cópia de trabalho local para abrir no SSMS/VS Code, com “Enviar alterações” |
+| Scripts SQL **[D5]** | `data/scripts/*.sql` | conteúdo em `script_versions` (uma linha por versão; gravar N+1 = controle de concorrência); cópia de trabalho local para abrir no SSMS/VS Code, com “Enviar alterações” (409 `SCRIPT_WC_CONFLICT` se alguém salvou antes). `scripts.content/current_version` não são usados (atualizá-los brigaria com a revisão do cadastro). Remover: a nuvem apaga as versões com o cadastro; fica cópia em `users\<uuid>\scripts\.removidos` |
 
 ## 15. Migração dos dados atuais
 ```
@@ -373,7 +373,7 @@ Conformidade depende também de base legal, política de privacidade, contratos,
 | **1** | `.gitignore` endurecido, `scripts/scan-secrets.js` + hook `pre-commit` (com canários de dados reais), `.env.example`, anonimização de nomes reais de clientes/IP em testes. Git local: **aguardando sua autorização** (SETUP-GITHUB §3). `src/paths.js` movido para a Fase 5, onde é usado | não ✔ **concluída 2026-10-05** |
 | **2** | 10 migrations (schema, profiles/estados, RBAC, RLS, `apply_changes`, RPCs admin, `key_access`, auditoria append-only, Storage, MASTER protegido), Edge Functions `gp-keys`/`gp-admin`, `src/crypto/envelope.js`, testes: 20 de RLS (PGlite) + 6 de cifra; `rls-smoke.sql` e rollback de DEV validados | escrever: ✔ **concluída 2026-10-05** · aplicar no dev: **AÇÃO SUA** (SETUP-SUPABASE) |
 | **3** | `src/store.js` (fachada: fila de gravações, geração, recuperação, attach/detach/refresh) · `src/persistence/` (`LocalJsonBackend` = comportamento antigo; `CloudBackend` = Unit of Work + cifra + `apply_changes`; `mapping.js` = os “repositories” por entidade; `supabase-rest.js`; `keys.js`; `local-user-data.js`) · `src/auth/permissions.js` · 98 gravações agora `await store.save()` · mapeamento validado em memória sobre os dados reais (ida e volta idêntica; 0 caminhos/senhas/nomes em claro) | não ✔ **concluída 2026-10-05** |
-| **3b** | Arquivos na nuvem: evidências e imagens de e-mail no Storage (cifradas, D1); conteúdo e versões dos scripts SQL no banco com cópia de trabalho local (D5). Até lá, no modo nuvem esses arquivos continuam na pasta local | não |
+| **3b** | `src/files/` — áreas de arquivos com a mesma interface assíncrona: `LocalFileArea` (pasta de sempre) e `CloudFileArea` (Storage: `evidence/<projeto>/<id>`, `email-images/<id>`, conteúdo cifrado no app — formato `GPF1`, `src/crypto/file-envelope.js`); `script-content.js` (local `.sql` ou `script_versions` + cópia de trabalho com “Enviar alterações”). Rotas pedem `store.files(área)` / `store.scripts()`. **Sem migration nova.** Corrigido vazamento: `evidences[].file` (slug do nome do projeto) passou a ser cifrado | não ✔ **concluída 2026-10-05** |
 | **4** | Login/logout/sessão/estados PENDING/SUSPENDED, middleware de autenticação, identidade = UUID | testar: **sim** (projeto dev) |
 | **5** | Horas isoladas por usuário + export/import cifrado | não |
 | **6** | Ferramenta de migração + dry-run na **cópia** + migração no projeto dev | **sim** (usuários de teste no dev) |
@@ -381,7 +381,7 @@ Conformidade depende também de base legal, política de privacidade, contratos,
 | **8** | Administração: Usuários e Permissões, acesso a projetos, Infraestrutura | não |
 | **9** | Central de Atualizações (app + configurações funcionais) | **sim** (chave de assinatura) |
 | **10** | Varredura de vazamento, regressão, SECURITY/SETUP/MIGRATION/BACKUP docs, Vault, ADRs | não |
-Cada fase termina com a suíte verde e um checkpoint. Checkpoint da fase 3: **247/247** (216 + 31 novos: mapeamento, CloudBackend ponta a ponta no PGlite com RLS, API com backend da nuvem, transporte, dados locais, permissões). Checkpoint das fases 1–2: **216/216** (187 do baseline + 29 novos), varredura de segredos limpa.
+Cada fase termina com a suíte verde e um checkpoint. Checkpoint da fase 3b: **265/265** (247 + 18: arquivos na nuvem pelas rotas, RLS do Storage, cifra de arquivos, transporte do Storage). Checkpoint da fase 3: **247/247** (216 + 31 novos: mapeamento, CloudBackend ponta a ponta no PGlite com RLS, API com backend da nuvem, transporte, dados locais, permissões). Checkpoint das fases 1–2: **216/216** (187 do baseline + 29 novos), varredura de segredos limpa.
 Não testado localmente: Edge Functions (sem Deno nesta máquina) — validar no projeto dev. Fases 1–3 e 5 podem andar antes de existir o projeto Supabase.
 
 ## 21. Validação anti-retrabalho

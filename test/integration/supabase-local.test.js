@@ -122,6 +122,12 @@ test('Edge Functions reais: sem JWT → 401; usuário sem acesso não recebe DEK
   assert.equal(denied.status, 403, JSON.stringify(denied.json)); // perfil pendente: key_access recusa (fail closed)
 });
 
+test('Auth real: /health responde (o modo offline das horas só é liberado quando NÃO responde)', async () => {
+  const { GoTrueClient } = require('../../src/auth/gotrue');
+  await new GoTrueClient({ url: S.api, publishableKey: S.anon }).health();
+  await assert.rejects(new GoTrueClient({ url: 'http://127.0.0.1:9', publishableKey: S.anon, timeoutMs: 3000 }).health(), { code: 'OFFLINE' });
+});
+
 test('login real do MASTER pelo app: Supabase Auth → perfil → dados; resposta sem tokens', async () => {
   const r = await login('master');
   assert.equal(r.status, 200, r.text);

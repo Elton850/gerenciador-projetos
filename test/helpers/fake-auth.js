@@ -58,6 +58,7 @@ class FakeAuth {
     if (!u) throw err('SESSION_EXPIRED');
     u.password = password;
   }
+  async health() { this._guard(); }
   async recover(email) { this._guard(); if (this.users.has(email)) this.codes.set(`recovery:${email}`, '246810'); }
   async signOut(accessToken) {
     this._guard();

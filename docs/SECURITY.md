@@ -84,7 +84,12 @@ KEK (32 bytes) — secret GP_KEK_V<n> da Edge Function gp-keys + backup offline 
 ## 8. Dados locais
 - `%LOCALAPPDATA%\GerenciadorProjetos\users\<uuid>\` — horas, vínculos de pastas, segredos DPAPI, preferências, auditoria local. **[fase 5]**
 - Segregação por UUID (nunca por nome). Dados da nuvem **não** são gravados em disco em claro (sem cache sensível).
-- Export de horas: arquivo cifrado com senha escolhida no export (scrypt + AES-256-GCM).
+- Export de horas (`.gphours`): **sempre** cifrado com a senha escolhida no export (scrypt N=2^15 → AES-256-GCM; cabeçalho como AAD — alterar versão/parâmetros invalida).
+  Senha errada e arquivo alterado dão o mesmo erro. A senha nunca é guardada; vai no corpo/cabeçalho da requisição local, nunca em URL nem log.
+  Importar valida cada registro (anexo executável/caminho inválido é descartado), mostra prévia e nunca sobrescreve nem cria sobreposição. **[implementado]**
+- **Modo offline das horas**: sem conexão com o Supabase, só o último usuário que entrou neste usuário do Windows (marcador `last-user.dpapi.json`,
+  DPAPI) pode abrir **só** as horas locais; o servidor confere que o Auth está mesmo inalcançável (com conexão, exige login). Demais rotas: 503
+  `OFFLINE_MODE`; gravação fora das horas é recusada e desfeita; nada vai à nuvem. Projetos para apontar = id/nome já presentes no próprio histórico local. **[implementado]**
 
 ## 9. Nunca commitar
 `.env`, `data/`, `backups/`, `exports/`, `*.gphours`, `projects.json*`, `audit.log`, chaves (`*.pem`, `*.key`, `*.pfx`), `*.dpapi*`,

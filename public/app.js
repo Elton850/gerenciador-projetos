@@ -88,6 +88,11 @@ async function api(method, url, body, opts = {}) {
     if (typeof authLost === 'function') authLost(json);
     throw Object.assign(new Error(json.error || 'Sessão encerrada.'), { code: json.code, status: r.status, silent: true });
   }
+  // Modo offline das horas: as outras telas avisam uma vez e não viram erro em cascata.
+  if (r.status === 503 && json.code === 'OFFLINE_MODE') {
+    if (!api.offlineWarned) { api.offlineWarned = true; toast(json.error, 'info'); }
+    throw Object.assign(new Error(json.error), { code: json.code, status: r.status, silent: true });
+  }
   if (!r.ok) throw Object.assign(new Error(json.error || `Erro ${r.status}`), { code: json.code, status: r.status, path: json.path, details: json });
   return json;
 }

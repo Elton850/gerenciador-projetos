@@ -20,6 +20,7 @@ const { httpError } = require('../util');
 const { localRoot, LocalUserData } = require('../persistence/local-user-data');
 const { KeyService } = require('../persistence/keys');
 const { CloudBackend } = require('../persistence/cloud-backend');
+const { OfflineHoursBackend } = require('../persistence/offline-hours-backend');
 
 const REFRESH_MARGIN_MS = 2 * 60 * 1000;
 const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,}$/;
@@ -28,6 +29,7 @@ const STATUS_MSG = {
   pending: 'Seu acesso foi criado e está aguardando configuração pelo administrador. Você será liberado assim que ele concluir.',
   suspended: AUTH_MESSAGES.SUSPENDED,
   expired: AUTH_MESSAGES.SESSION_EXPIRED,
+  offline: 'Modo offline: só o controle de horas está disponível. Quando a conexão voltar, entre com seu usuário para ver os projetos.',
 };
 
 const authHttp = (e) => (e && e.code && AUTH_MESSAGES[e.code]
@@ -64,6 +66,9 @@ class CloudSession {
     this.timer = null;
     this._refreshing = null;
     this.sessionFile = path.join(root, 'session.dpapi.json');
+    this.markerFile = path.join(root, 'last-user.dpapi.json'); // último usuário que entrou neste usuário do Windows (modo offline das horas)
+    this.offlineCandidate = null;
+    this.offlineUser = null;
     this.machineLogs = path.join(root, 'logs');
     identity.setProvider(() => null);
   }
@@ -71,8 +76,13 @@ class CloudSession {
   // O que a tela pode saber da sessão (sem tokens).
   view() {
     const p = this.profile;
+    if (this.status === 'offline_hours') {
+      return { mode: 'cloud', status: 'offline_hours', message: this.message, env: this.cfg.env, appVersion: this.cfg.appVersion,
+        user: { email: '', displayName: this.offlineUser?.displayName || '', username: '', role: null, permissions: [], offline: true }, offlineHours: null };
+    }
     return {
       mode: 'cloud', status: this.status, message: this.message, env: this.cfg.env, appVersion: this.cfg.appVersion,
+      offlineHours: !this.tokens && this.offlineCandidate ? { available: true, displayName: this.offlineCandidate.displayName || '' } : null,
       user: this.tokens ? { email: this.tokens.email, displayName: p?.displayName || '', username: p?.username || '', role: p?.role || null,
         permissions: this.status === 'active' ? (p?.permissions || []) : [] } : null,
     };
@@ -146,22 +156,62 @@ class CloudSession {
     this.status = 'active';
     this.message = null;
     if (this.remember) await this._saveRemember(); else this._forgetRemember();
+    await this._saveMarker(tokens.userId, profile.displayName || profile.username || tokens.email.split('@')[0]);
     this._log('login');
+  }
+
+  // ---------- Modo offline das horas ----------
+  async _saveMarker(userId, displayName) {
+    try {
+      const enc = await this.protect(JSON.stringify({ userId, displayName }));
+      fs.mkdirSync(this.root, { recursive: true });
+      fs.writeFileSync(this.markerFile, JSON.stringify({ format: 1, enc }));
+      this.offlineCandidate = { userId, displayName };
+    } catch { /* sem o marcador, só não há modo offline */ }
+  }
+  async _readMarker() {
+    try {
+      const { enc } = JSON.parse(fs.readFileSync(this.markerFile, 'utf8'));
+      const m = JSON.parse(await this.unprotect(enc)); // DPAPI: só o mesmo usuário do Windows abre
+      return /^[0-9a-f-]{36}$/.test(m.userId || '') ? { userId: m.userId, displayName: String(m.displayName || '') } : null;
+    } catch { return null; }
+  }
+
+  // Sem conexão com o Supabase: abre SÓ as horas locais do último usuário deste usuário do Windows. Com conexão, exige login.
+  async enterOfflineHours() {
+    if (this.tokens) throw httpError(409, 'Você já está conectado.', { code: 'ALREADY_SIGNED_IN' });
+    const c = this.offlineCandidate || (this.offlineCandidate = await this._readMarker());
+    if (!c) throw httpError(400, 'Nenhum usuário entrou antes neste computador: o primeiro acesso precisa de conexão.', { code: 'OFFLINE_UNAVAILABLE' });
+    let reachable = true;
+    try { await this.gotrue.health(); } catch (e) { reachable = e.code !== 'OFFLINE'; }
+    if (reachable) throw httpError(409, 'Há conexão com o servidor: entre normalmente com seu usuário.', { code: 'ONLINE' });
+    const local = new LocalUserData(c.userId, this.root);
+    await this.store.attach(new OfflineHoursBackend(local));
+    identity.setProvider(() => c.displayName || null);
+    this.audit.setDir(local.dir);
+    this.offlineUser = c;
+    this.status = 'offline_hours';
+    this.message = STATUS_MSG.offline;
+    this._log('offline-horas', { usuario: c.userId });
   }
 
   async login(email, password, remember) {
     const e = checkEmail(email);
     if (typeof password !== 'string' || !password) throw httpError(400, 'Informe a senha.', { code: 'INVALID_CREDENTIALS' });
-    if (this.tokens) await this.logout({ quiet: true });
+    if (this.tokens || this.status === 'offline_hours') await this.logout({ quiet: true });
     let t;
-    try { t = await this.gotrue.signIn(e, password); } catch (err) { this._log('login-recusado', { motivo: err.code }); throw authHttp(err); }
+    try { t = await this.gotrue.signIn(e, password); } catch (err) {
+      this._log('login-recusado', { motivo: err.code });
+      if (err.code === 'OFFLINE' && !this.offlineCandidate) this.offlineCandidate = await this._readMarker(); // a tela passa a oferecer o modo offline
+      throw authHttp(err);
+    }
     await this._establish(t, { remember });
   }
 
   // Primeiro acesso: código do convite + senha definida pelo próprio usuário (nunca senha padrão).
   async firstAccess(email, code, newPassword) {
     const e = checkEmail(email); const c = checkCode(code); checkPassword(newPassword);
-    if (this.tokens) await this.logout({ quiet: true });
+    if (this.tokens || this.status === 'offline_hours') await this.logout({ quiet: true });
     try {
       const t = await this.gotrue.verifyOtp('invite', e, c);
       await this.gotrue.setPassword(t.accessToken, newPassword);
@@ -177,7 +227,7 @@ class CloudSession {
 
   async recover(email, code, newPassword) {
     const e = checkEmail(email); const c = checkCode(code); checkPassword(newPassword);
-    if (this.tokens) await this.logout({ quiet: true });
+    if (this.tokens || this.status === 'offline_hours') await this.logout({ quiet: true });
     try {
       const t = await this.gotrue.verifyOtp('recovery', e, c);
       await this.gotrue.setPassword(t.accessToken, newPassword);
@@ -196,8 +246,9 @@ class CloudSession {
 
   async logout({ reason = null, quiet = false } = {}) {
     const t = this.tokens;
+    const wasOffline = this.status === 'offline_hours';
     await this._end(reason, { revoke: t });
-    this._forgetRemember();
+    if (!wasOffline) this._forgetRemember(); // sair do modo offline não apaga a sessão guardada para quando a conexão voltar
     if (!quiet) this._log('logout');
   }
 
@@ -206,6 +257,7 @@ class CloudSession {
     clearTimeout(this.timer);
     this.tokens = null;
     this.profile = null;
+    this.offlineUser = null;
     this.status = 'signed_out';
     this.message = reason ? STATUS_MSG[reason] || null : null;
     identity.setProvider(() => null);
@@ -216,6 +268,7 @@ class CloudSession {
 
   // Inicialização: “manter conectado” → renova a sessão guardada (DPAPI). Sem rede: fica na tela de login com o aviso.
   async restore() {
+    this.offlineCandidate = await this._readMarker();
     let saved;
     try { saved = JSON.parse(fs.readFileSync(this.sessionFile, 'utf8')); } catch { return false; }
     try {
@@ -241,15 +294,16 @@ class CloudSession {
   _forgetRemember() { try { fs.rmSync(this.sessionFile, { force: true }); } catch { /* */ } }
 
   _log(action, extra = {}) {
-    try { this.audit.log({ action: `sessao-${action}`, usuario: this.tokens?.userId || null, ...extra }); } catch { /* auditoria local não derruba o login */ }
+    try { this.audit.log({ action: `sessao-${action}`, usuario: this.tokens?.userId || this.offlineUser?.userId || null, ...extra }); } catch { /* auditoria local não derruba o login */ }
   }
 
   // ---------- HTTP ----------
   // Bloqueio no servidor local: sem sessão → 401; pendente → 403. Liberado só o necessário para entrar.
   middleware() {
-    const open = new Set(['/api/session', '/api/auth/login', '/api/auth/first-access', '/api/auth/recover-request', '/api/auth/recover', '/api/auth/logout', '/api/auth/check']);
+    const open = new Set(['/api/session', '/api/auth/login', '/api/auth/first-access', '/api/auth/recover-request', '/api/auth/recover', '/api/auth/logout', '/api/auth/check', '/api/auth/offline-hours']);
     return (req, res, next) => {
       if (!req.path.startsWith('/api/') || open.has(req.path)) return next();
+      if (this.status === 'offline_hours') return req.path.startsWith('/api/hours/') ? next() : res.status(503).json({ error: STATUS_MSG.offline, code: 'OFFLINE_MODE' });
       if (!this.tokens) return res.status(401).json({ error: this.message || 'Entre com seu usuário para continuar.', code: 'AUTH_REQUIRED' });
       if (this.status !== 'active') return res.status(403).json({ error: STATUS_MSG.pending, code: 'ACCOUNT_PENDING' });
       return next();
@@ -267,6 +321,7 @@ class CloudSession {
     app.post('/api/auth/recover', async (req, res) => { await this.recover(req.body?.email, req.body?.code, req.body?.password); res.json(this.view()); });
     app.post('/api/auth/check', async (req, res) => { await this.check(); res.json(this.view()); });
     app.post('/api/auth/logout', async (req, res) => { await this.logout(); res.json(this.view()); });
+    app.post('/api/auth/offline-hours', async (req, res) => { await this.enterOfflineHours(); res.json(this.view()); });
   }
 }
 

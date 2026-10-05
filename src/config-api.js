@@ -53,20 +53,20 @@ function mount(app, { store, audit, getProject, getIn, publicProject, SYS }) {
     return { name, role: str(b.role, 120), email, phone, notes: str(b.notes, 500) };
   }
 
-  app.post('/api/coordinators', (req, res) => {
+  app.post('/api/coordinators', async (req, res) => {
     const c = { id: uid(), ...cleanCoordinator(req.body) };
     data().coordinators.push(c);
-    store.save();
+    await store.save();
     res.json(publicCoordinator(c));
   });
-  app.put('/api/coordinators/:id', (req, res) => {
+  app.put('/api/coordinators/:id', async (req, res) => {
     const c = getIn(data().coordinators, req.params.id, 'Coordenador');
     Object.assign(c, cleanCoordinator(req.body));
-    store.save();
+    await store.save();
     res.json(publicCoordinator(c));
   });
   // Projetos que tinham este coordenador ficam sem coordenador (nada é apagado além do cadastro).
-  app.delete('/api/coordinators/:id', (req, res) => {
+  app.delete('/api/coordinators/:id', async (req, res) => {
     getIn(data().coordinators, req.params.id, 'Coordenador');
     data().coordinators = data().coordinators.filter((c) => c.id !== req.params.id);
     let unassigned = 0;
@@ -76,7 +76,7 @@ function mount(app, { store, audit, getProject, getIn, publicProject, SYS }) {
       if (p.analystId === req.params.id) { p.analystId = null; hit = true; }
       if (hit) unassigned++;
     }
-    store.save();
+    await store.save();
     res.json({ ok: true, unassigned });
   });
 
@@ -90,25 +90,25 @@ function mount(app, { store, audit, getProject, getIn, publicProject, SYS }) {
       if (list().some((s) => s.id !== ignoreId && nameKey(s.name) === nameKey(name))) throw httpError(409, `Já existe um(a) ${label.toLowerCase()} chamado(a) “${name}”.`);
       return { name, color: b.color.toUpperCase() };
     }
-    app.post(`/api/${path}`, (req, res) => {
+    app.post(`/api/${path}`, async (req, res) => {
       const s = { id: uid(), ...cleanTag(req.body) };
       list().push(s);
-      store.save();
+      await store.save();
       res.json(s);
     });
-    app.put(`/api/${path}/:id`, (req, res) => {
+    app.put(`/api/${path}/:id`, async (req, res) => {
       const s = getIn(list(), req.params.id, label);
       Object.assign(s, cleanTag(req.body, s.id));
-      store.save();
+      await store.save();
       res.json(s);
     });
     // Remove o cadastro; projetos que usavam esta tag ficam sem ela (nada mais é alterado).
-    app.delete(`/api/${path}/:id`, (req, res) => {
+    app.delete(`/api/${path}/:id`, async (req, res) => {
       getIn(list(), req.params.id, label);
       data()[key] = list().filter((s) => s.id !== req.params.id);
       let unassigned = 0;
       for (const p of data().projects) if (p[field] === req.params.id) { p[field] = null; unassigned++; }
-      store.save();
+      await store.save();
       res.json({ ok: true, unassigned });
     });
   }
@@ -123,19 +123,19 @@ function mount(app, { store, audit, getProject, getIn, publicProject, SYS }) {
     if (data().stages.some((s) => s.id !== ignoreId && nameKey(s.name) === nameKey(name))) throw httpError(409, `Já existe um estágio chamado “${name}”.`);
     return { name, color: b.color.toUpperCase() };
   }
-  app.post('/api/stages', (req, res) => {
+  app.post('/api/stages', async (req, res) => {
     const s = { id: uid(), ...cleanStage(req.body) };
     data().stages.push(s);
-    store.save();
+    await store.save();
     res.json(s);
   });
-  app.put('/api/stages/:id', (req, res) => {
+  app.put('/api/stages/:id', async (req, res) => {
     const s = getIn(data().stages, req.params.id, 'Estágio');
     Object.assign(s, cleanStage(req.body, s.id));
-    store.save();
+    await store.save();
     res.json(s);
   });
-  app.delete('/api/stages/:id', (req, res) => {
+  app.delete('/api/stages/:id', async (req, res) => {
     const s = getIn(data().stages, req.params.id, 'Estágio');
     // Estágio é um cadastro reutilizável: enquanto algum ciclo o usa, não é removido (a mensagem diz onde).
     const inCycles = data().cycles.filter((c) => c.steps.some((x) => x.stageId === s.id));
@@ -146,7 +146,7 @@ function mount(app, { store, audit, getProject, getIn, publicProject, SYS }) {
     data().stages = data().stages.filter((x) => x.id !== s.id);
     for (const c of data().checklists) if (c.stageId === s.id) c.stageId = null; // os checklists são cadastro à parte: ficam, sem estágio
     for (const d of data().documents) if (d.stageId === s.id) d.stageId = null;
-    store.save();
+    await store.save();
     res.json({ ok: true });
   });
 
@@ -155,7 +155,7 @@ function mount(app, { store, audit, getProject, getIn, publicProject, SYS }) {
   // quando alguém revisa e aplica (POST /api/projects/:id/cycle/apply). Nada é alterado silenciosamente.
   const cycleOr404 = (id) => getIn(data().cycles, id, 'Ciclo');
   const usage = (c) => ({ projects: data().projects.filter((p) => p.cycleId === c.id).length, types: data().projectTypes.filter((t) => t.cycleId === c.id).length });
-  app.post('/api/cycles', (req, res) => {
+  app.post('/api/cycles', async (req, res) => {
     const from = req.body.copyFrom ? cycleOr404(req.body.copyFrom) : null;
     // Copiar de outro ciclo leva também os checklists de cada estágio (só as referências: nenhum checklist é duplicado).
     const body = { ...req.body, steps: req.body.steps || (from ? from.steps.map((x) => ({ stageId: x.stageId, checklistIds: cycles.listIds(x) })) : null) };
@@ -165,25 +165,25 @@ function mount(app, { store, audit, getProject, getIn, publicProject, SYS }) {
     }
     const c = { id: uid(), ...cycles.cleanCycle(data(), body, null), version: 1, updatedAt: new Date().toISOString() };
     data().cycles.push(c);
-    store.save();
+    await store.save();
     audit.log({ action: 'ciclo-alterado', detalhe: `Ciclo “${c.name}” criado (${c.steps.length} passos)` });
     res.json(c);
   });
-  app.put('/api/cycles/:id', (req, res) => {
+  app.put('/api/cycles/:id', async (req, res) => {
     const c = cycleOr404(req.params.id);
     const next = cycles.cleanCycle(data(), { name: req.body.name ?? c.name, description: req.body.description ?? c.description, steps: req.body.steps ?? c.steps }, c);
     const changed = !cycles.sameSteps(c.steps, next.steps);
     Object.assign(c, next);
     // Versão nova só importa para quem já usa o ciclo: enquanto nenhum projeto o usa, editar não gera versões (evita v1 → v7 ao montar).
     if (changed) { if (data().projects.some((p) => p.cycleId === c.id)) c.version += 1; c.updatedAt = new Date().toISOString(); }
-    store.save();
+    await store.save();
     if (changed) audit.log({ action: 'ciclo-alterado', detalhe: `Ciclo “${c.name}” versão ${c.version} (${c.steps.length} passos; ${usage(c).projects} projeto(s) poderão aplicar)` });
     res.json(c);
   });
   // Checklists de UM estágio dentro de UM ciclo (ciclo + estágio + checklists; a ordem do array é a ordem de exibição). Só mexe neste ciclo:
   // os outros ciclos, mesmo usando o mesmo estágio ou os mesmos checklists, não mudam. Em ciclo em uso gera nova versão (os projetos só
   // recebem quando alguém revisa e aplica).
-  app.put('/api/cycles/:id/steps/:stepId/checklists', (req, res) => {
+  app.put('/api/cycles/:id/steps/:stepId/checklists', async (req, res) => {
     const c = cycleOr404(req.params.id);
     const step = c.steps.find((x) => x.id === req.params.stepId);
     if (!step) throw httpError(404, 'Este passo não existe neste ciclo.');
@@ -193,43 +193,43 @@ function mount(app, { store, audit, getProject, getIn, publicProject, SYS }) {
       step.checklistIds = ids;
       if (data().projects.some((p) => p.cycleId === c.id)) c.version += 1;
       c.updatedAt = new Date().toISOString();
-      store.save();
+      await store.save();
       audit.log({ action: 'ciclo-checklists-alterados', detalhe: `Ciclo “${c.name}” / ${stage?.name || '?'}: ${ids.length ? ids.map((id) => data().checklists.find((k) => k.id === id)?.name || '?').join(', ') : 'nenhum checklist'} (versão ${c.version}; ${usage(c).projects} projeto(s) poderão aplicar)` });
     }
     res.json(c);
   });
-  app.delete('/api/cycles/:id', (req, res) => {
+  app.delete('/api/cycles/:id', async (req, res) => {
     const c = cycleOr404(req.params.id);
     const u = usage(c);
     if (u.projects || u.types) throw httpError(409, `O ciclo “${c.name}” está em uso (${plural(u.projects, 'projeto', 'projetos')}, ${plural(u.types, 'tipo de projeto', 'tipos de projeto')}). Troque o ciclo deles antes de excluir.`);
     if (data().defaultCycleId === c.id) throw httpError(409, 'Este é o ciclo padrão. Defina outro ciclo como padrão antes de excluir.');
     data().cycles = data().cycles.filter((x) => x.id !== c.id);
-    store.save();
+    await store.save();
     audit.log({ action: 'ciclo-alterado', detalhe: `Ciclo “${c.name}” excluído` });
     res.json({ ok: true });
   });
-  app.put('/api/cycles-default', (req, res) => {
+  app.put('/api/cycles-default', async (req, res) => {
     data().defaultCycleId = cycleOr404(req.body.id).id;
-    store.save();
+    await store.save();
     res.json({ ok: true });
   });
   // Ciclo padrão de um tipo de projeto (os projetos novos daquele tipo recebem este ciclo).
-  app.put('/api/project-types/:id/cycle', (req, res) => {
+  app.put('/api/project-types/:id/cycle', async (req, res) => {
     const t = getIn(data().projectTypes, req.params.id, 'Tipo de projeto');
     t.cycleId = req.body.cycleId ? cycleOr404(req.body.cycleId).id : null;
-    store.save();
+    await store.save();
     res.json(t);
   });
 
   // Nova versão do ciclo no projeto: dryRun mostra o que muda; aplicar troca os passos (mantém andamento, histórico e checklists).
-  app.post('/api/projects/:id/cycle/apply', (req, res) => {
+  app.post('/api/projects/:id/cycle/apply', async (req, res) => {
     const p = getProject(req.params.id);
     const diff = cycles.cycleDiff(data(), p);
     if (req.body.dryRun || !diff.available) return res.json({ diff, project: publicProject(p) });
     if (diff.currentRemoved && !req.body.confirmCurrentRemoved) throw httpError(409, 'A etapa atual do projeto não existe na nova versão do ciclo. Confirme para aplicar (o projeto fica sem etapa definida; o histórico e os checklists continuam guardados).', { code: 'CYCLE_CURRENT_REMOVED' });
     cycles.assignCycle(p, data().cycles.find((c) => c.id === p.cycleId));
     if (diff.currentRemoved) { p.stageHistory.push({ stepId: null, stageId: null, name: 'Sem etapa (ciclo atualizado)', color: '#8FB0BF', at: new Date().toISOString() }); p.stepId = null; }
-    store.save();
+    await store.save();
     audit.log({ action: 'ciclo-aplicado', project: p.name, detalhe: `${diff.cycleName} v${diff.from} → v${diff.version}: ${diff.added.length} passo(s) novo(s), ${diff.removed.length} removido(s)` });
     res.json({ diff, project: publicProject(p) });
   });
@@ -238,7 +238,7 @@ function mount(app, { store, audit, getProject, getIn, publicProject, SYS }) {
   // Ir para uma etapa À FRENTE exige os itens obrigatórios do checklist concluídos (de cada etapa que está sendo deixada). Voltar não é bloqueado.
   // Obrigatórios pendentes marcados como transferíveis não bloqueiam: a primeira chamada devolve 409 CHECKLIST_CARRY com a lista, e só a
   // segunda (confirmCarry + as mesmas chaves) avança e transfere. Concluir o ciclo (último passo) exige TODOS os obrigatórios do projeto.
-  app.put('/api/projects/:id/step', (req, res) => {
+  app.put('/api/projects/:id/step', async (req, res) => {
     const p = getProject(req.params.id);
     const stepId = req.body.stepId ?? null;
     const who = (() => { try { return os.userInfo().username; } catch { return null; } })();
@@ -294,7 +294,7 @@ function mount(app, { store, audit, getProject, getIn, publicProject, SYS }) {
       p.stageHistory.push({ stepId: null, stageId: null, name: 'Sem etapa', color: '#8FB0BF', at: new Date().toISOString() });
     }
     p.stepId = stepId;
-    store.save();
+    await store.save();
     res.json(publicProject(p));
   });
 
@@ -305,22 +305,22 @@ function mount(app, { store, audit, getProject, getIn, publicProject, SYS }) {
     if (!parseSheetUrl(url)) throw httpError(400, 'O link precisa ser de uma planilha do Google Sheets (https://docs.google.com/spreadsheets/d/...).');
     return { label, url, note: str(b.note, 300) };
   }
-  app.post('/api/projects/:id/corrections', (req, res) => {
+  app.post('/api/projects/:id/corrections', async (req, res) => {
     const p = getProject(req.params.id);
     p.corrections.push({ id: uid(), ...cleanCorrection(req.body) });
-    store.save();
+    await store.save();
     res.json(publicProject(p));
   });
-  app.put('/api/projects/:id/corrections/:cid', (req, res) => {
+  app.put('/api/projects/:id/corrections/:cid', async (req, res) => {
     const p = getProject(req.params.id);
     Object.assign(getIn(p.corrections, req.params.cid, 'Planilha de correções'), cleanCorrection(req.body));
-    store.save();
+    await store.save();
     res.json(publicProject(p));
   });
-  app.delete('/api/projects/:id/corrections/:cid', (req, res) => {
+  app.delete('/api/projects/:id/corrections/:cid', async (req, res) => {
     const p = getProject(req.params.id);
     p.corrections = p.corrections.filter((c) => c.id !== req.params.cid);
-    store.save();
+    await store.save();
     res.json(publicProject(p));
   });
 
@@ -344,22 +344,22 @@ function mount(app, { store, audit, getProject, getIn, publicProject, SYS }) {
     }
     return { title, kind, stageId, description: str(b.description, 600), source };
   }
-  app.post('/api/documents', (req, res) => {
+  app.post('/api/documents', async (req, res) => {
     const d = { id: uid(), createdAt: new Date().toISOString(), ...cleanDocument(req.body) };
     data().documents.push(d);
-    store.save();
+    await store.save();
     res.json(publicDocument(d));
   });
-  app.put('/api/documents/:id', (req, res) => {
+  app.put('/api/documents/:id', async (req, res) => {
     const d = getIn(data().documents, req.params.id, 'Documento');
     Object.assign(d, cleanDocument(req.body));
-    store.save();
+    await store.save();
     res.json(publicDocument(d));
   });
-  app.delete('/api/documents/:id', (req, res) => {
+  app.delete('/api/documents/:id', async (req, res) => {
     getIn(data().documents, req.params.id, 'Documento');
     data().documents = data().documents.filter((d) => d.id !== req.params.id);
-    store.save();
+    await store.save();
     res.json({ ok: true });
   });
   const docFile = (id) => {

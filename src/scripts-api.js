@@ -88,7 +88,7 @@ function mount(app, { store, dataDir, SYS }) {
   // Análise ao vivo enquanto o script é digitado (não grava nada).
   app.post('/api/scripts/analyze', (req, res) => res.json(summarize(analyzeScript(String(req.body.content ?? '')))));
 
-  app.post('/api/scripts', (req, res) => {
+  app.post('/api/scripts', async (req, res) => {
     const meta = cleanMeta(req.body);
     const content = cleanContent(req.body.content);
     const file = files.newFileName(meta.name, list().map((s) => s.file));
@@ -96,12 +96,12 @@ function mount(app, { store, dataDir, SYS }) {
     const now = new Date().toISOString();
     const s = { id: uid(), ...meta, file, createdAt: now, updatedAt: now };
     list().push(s);
-    store.save();
+    await store.save();
     res.json(publicScript(s, { withAnalysis: true }));
   });
 
   // Traz para o app um .sql que já existe no computador (copia o conteúdo; o original não é alterado).
-  app.post('/api/scripts/import-file', (req, res) => {
+  app.post('/api/scripts/import-file', async (req, res) => {
     const src = path.resolve(str(req.body.filePath, 600));
     if (!/\.sql$/i.test(src) || !fs.existsSync(src) || !fs.statSync(src).isFile()) throw httpError(400, 'Selecione um arquivo .sql existente.');
     if (fs.statSync(src).size > MAX_SCRIPT_CHARS * 4) throw httpError(400, 'Arquivo grande demais.');
@@ -116,25 +116,25 @@ function mount(app, { store, dataDir, SYS }) {
     const now = new Date().toISOString();
     const s = { id: uid(), ...meta, file, createdAt: now, updatedAt: now };
     list().push(s);
-    store.save();
+    await store.save();
     res.json(publicScript(s, { withAnalysis: true }));
   });
 
-  app.put('/api/scripts/:id', (req, res) => {
+  app.put('/api/scripts/:id', async (req, res) => {
     const s = byId(req.params.id);
     Object.assign(s, cleanMeta(req.body, s.id));
     if (req.body.content !== undefined) files.write(s.file, cleanContent(req.body.content));
     s.updatedAt = new Date().toISOString();
-    store.save();
+    await store.save();
     res.json(publicScript(s, { withAnalysis: true }));
   });
 
   // Remove o cadastro e MOVE o arquivo para .removidos (recuperável).
-  app.delete('/api/scripts/:id', (req, res) => {
+  app.delete('/api/scripts/:id', async (req, res) => {
     const s = byId(req.params.id);
     files.trash(s.file);
     store.data.scripts = list().filter((x) => x.id !== s.id);
-    store.save();
+    await store.save();
     res.json({ ok: true });
   });
 

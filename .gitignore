@@ -59,3 +59,6 @@ supabase/.branches/
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# cópias locais preenchidas de roteiros SQL (UUIDs reais do seu projeto)
+*.local.sql

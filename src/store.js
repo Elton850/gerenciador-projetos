@@ -1,45 +1,96 @@
-const fs = require('fs');
-const path = require('path');
-const { applyDefaults } = require('./defaults');
-const { needsChecklistMigration } = require('./cycles');
+// Store: fachada estável do estado do app (`store.data`, mesmo formato do projects.json) com backend trocável.
+//   - LocalJsonBackend (padrão): data/projects.json, como sempre.
+//   - CloudBackend: Supabase (Unit of Work, cifra, vínculos e segredos locais) — ligado após o login (Fase 4) via attach().
+// As rotas continuam mutando `store.data` e chamando `await store.save()`; nenhuma rota conhece o backend.
+//
+// Garantias:
+//   - Gravações em FILA (uma por vez): duas requisições nunca gravam por cima uma da outra.
+//   - Falha ao gravar na nuvem → o estado em memória volta ao que está confirmado (recarrega; sem rede, volta ao snapshot)
+//     e o erro chega à tela com `code` (STALE_DATA, FORBIDDEN, OFFLINE, AUTH_REQUIRED). Nada é "dado como salvo" sem estar.
+//   - Contador de geração: gravação pedida antes de uma recarga é recusada (409) em vez de reportar sucesso falso.
+//   - O objeto `store.data` nunca é trocado (só o conteúdo): as rotas sempre enxergam o estado atual.
+'use strict';
+const { LocalJsonBackend } = require('./persistence/local-json-backend');
+const { DataError, toHttp } = require('./persistence/errors');
 
-const EMPTY = () => ({ version: 1, settings: { warnDays: 7 }, projects: [] });
-
-// Persistência em JSON com escrita atômica (arquivo temporário + rename) e cópia .bak.
 class Store {
-  constructor(dir) {
+  constructor(dir, { backend } = {}) {
     this.dir = dir;
-    this.file = path.join(dir, 'projects.json');
-    fs.mkdirSync(dir, { recursive: true });
-    this.data = this._load();
+    this.backend = backend || new LocalJsonBackend(dir);
+    this.data = this.backend.loadSync();
+    this._queue = Promise.resolve();
+    this._gen = 0;
   }
 
-  _load() {
-    if (!fs.existsSync(this.file)) return applyDefaults(EMPTY());
-    try {
-      const parsed = JSON.parse(fs.readFileSync(this.file, 'utf8'));
-      this._backupBeforeMigration(parsed);
-      return applyDefaults({ ...EMPTY(), ...parsed, settings: { ...EMPTY().settings, ...(parsed.settings || {}) } });
-    } catch (e) {
-      const broken = `${this.file}.corrompido-${Date.now()}`;
-      fs.copyFileSync(this.file, broken);
-      throw new Error(`data/projects.json ilegível (cópia salva em ${broken}): ${e.message}`);
-    }
-  }
+  get file() { return this.backend.file; }
+  get mode() { return this.backend.kind; }
 
-  // Migração "checklists por passo do ciclo": antes de o arquivo ser reescrito no modelo novo, guarda uma cópia do original (uma vez só;
-  // nunca sobrescreve uma cópia que já existe). Com ela dá para voltar ao arquivo anterior à mudança.
-  _backupBeforeMigration(parsed) {
-    if (!needsChecklistMigration(parsed)) return;
-    const bak = `${this.file}.antes-checklists-por-ciclo.bak`;
-    if (!fs.existsSync(bak)) fs.copyFileSync(this.file, bak);
+  // Põe uma operação na fila (gravações, recargas e trocas de backend nunca se sobrepõem).
+  _enqueue(fn) {
+    const p = this._queue.then(fn, fn);
+    this._queue = p.catch(() => {});
+    return p;
   }
 
   save() {
-    const tmp = `${this.file}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(this.data, null, 2), 'utf8');
-    if (fs.existsSync(this.file)) fs.copyFileSync(this.file, `${this.file}.bak`);
-    fs.renameSync(tmp, this.file);
+    const gen = this._gen;
+    return this._enqueue(async () => {
+      if (gen !== this._gen) throw toHttp(new DataError('RELOADED'));
+      try {
+        await this.backend.commit(this.data);
+      } catch (e) {
+        if (this.backend.kind !== 'cloud') throw e; // falha de disco local: mesmo comportamento de sempre
+        await this._recover();
+        throw e instanceof DataError ? toHttp(e) : e;
+      }
+    });
+  }
+
+  // Volta ao estado confirmado: recarrega da nuvem; sem rede, usa o snapshot em memória. Invalida gravações já enfileiradas.
+  async _recover() {
+    let next;
+    try { next = await this.backend.load(); } catch { next = this.backend.restoreSnapshot(); }
+    this._replace(next);
+    this._gen++;
+  }
+
+  _replace(next) {
+    for (const k of Object.keys(this.data)) if (!(k in next)) delete this.data[k];
+    Object.assign(this.data, next);
+  }
+
+  // Troca o backend (ex.: login → nuvem do usuário). Carrega antes de trocar: se falhar, nada muda.
+  attach(backend) {
+    return this._enqueue(async () => {
+      let next;
+      try { next = await backend.load(); } catch (e) { throw e instanceof DataError ? toHttp(e) : e; }
+      const old = this.backend;
+      this.backend = backend;
+      this._replace(next);
+      this._gen++;
+      if (old !== backend) old.dispose?.();
+    });
+  }
+
+  // Desliga o backend atual (ex.: logout) e deixa o estado vazio na memória.
+  detach(emptyState) {
+    return this._enqueue(async () => {
+      this.backend.dispose?.();
+      this._replace(emptyState);
+      this._gen++;
+    });
+  }
+
+  // Recarga (dados alterados por outras pessoas). Não atropela alteração local ainda não gravada.
+  refresh() {
+    return this._enqueue(async () => {
+      if (this.backend.kind !== 'cloud' || this.backend.hasPendingChanges(this.data)) return false;
+      let next;
+      try { next = await this.backend.load(); } catch (e) { throw e instanceof DataError ? toHttp(e) : e; }
+      this._replace(next);
+      this._gen++;
+      return true;
+    });
   }
 
   project(id) {

@@ -119,7 +119,7 @@ function mount(app, { store, audit, db, getProject, dataDir, resolveConn, connPa
       batches: out?.batches ?? 0, returned: out?.returned ?? 0, affected: out?.affected ?? 0, error: error ? error.slice(0, 400) : null, by: who(),
     };
     item.runs = [...(item.runs || []), run].slice(-20); // histórico curto no item (sem os dados retornados)
-    store.save();
+    await store.save();
     audit.log({ action: error ? 'script-falhou' : 'script-executado', project: p.name, by: run.by, etapa: inst.stageName, item: item.title, detalhe: `${s.name} em ${t.label}`,
       env: t.local ? 'local' : 'prod', server: run.server, database: run.database, ms, resultado: error ? error.slice(0, 200) : `${run.returned} linha(s) retornada(s), ${run.affected} afetada(s)`, sha256: textSha });
     if (ac.signal.aborted) return;

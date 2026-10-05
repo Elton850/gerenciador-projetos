@@ -17,10 +17,10 @@ function mount(app, { store, audit, getProject, publicProject }) {
     res.json({ environments: view(getProject(req.params.id)) });
   });
 
-  app.put('/api/projects/:id/environments', (req, res) => {
+  app.put('/api/projects/:id/environments', async (req, res) => {
     const p = getProject(req.params.id);
     p.environments = R.cleanEnvironments(req.body, p.environments);
-    store.save();
+    await store.save();
     audit.log({ action: 'ambientes-atualizados', project: p.name, detalhe: Object.keys(R.KINDS).filter((k) => req.body?.[k] !== undefined).map((k) => R.KINDS[k]).join(', ') });
     res.json({ environments: view(p), project: publicProject(p) });
   });

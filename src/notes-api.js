@@ -65,31 +65,31 @@ function mount(app, { store, audit, getProject, publicProject, SYS }) {
 
   app.get('/api/projects/:id/notes', (req, res) => res.json({ notes: view(getProject(req.params.id)) }));
 
-  app.post('/api/projects/:id/notes', (req, res) => {
+  app.post('/api/projects/:id/notes', async (req, res) => {
     const p = getProject(req.params.id);
     if (notesOf(p).length >= MAX_NOTES) throw httpError(400, `Limite de ${MAX_NOTES} observações por projeto.`);
     const now = new Date().toISOString();
     notesOf(p).push({ id: uid(), ...cleanNote(req.body), createdAt: now, updatedAt: now, by: who() });
-    store.save();
+    await store.save();
     audit.log({ action: 'observacao-criada', project: p.name, detalhe: str(req.body?.title, 120) || 'sem título' });
     reply(p, res);
   });
 
-  app.put('/api/projects/:id/notes/:nid', (req, res) => {
+  app.put('/api/projects/:id/notes/:nid', async (req, res) => {
     const p = getProject(req.params.id);
     const n = noteOf(p, req.params.nid);
     Object.assign(n, cleanNote(req.body, n), { updatedAt: new Date().toISOString() });
-    store.save();
+    await store.save();
     audit.log({ action: 'observacao-editada', project: p.name, detalhe: n.title || 'sem título' });
     reply(p, res);
   });
 
   // Remove só o registro da observação; arquivos e pastas referenciados não são tocados.
-  app.delete('/api/projects/:id/notes/:nid', (req, res) => {
+  app.delete('/api/projects/:id/notes/:nid', async (req, res) => {
     const p = getProject(req.params.id);
     const n = noteOf(p, req.params.nid);
     p.notes = notesOf(p).filter((x) => x.id !== n.id);
-    store.save();
+    await store.save();
     audit.log({ action: 'observacao-removida', project: p.name, detalhe: n.title || 'sem título' });
     reply(p, res);
   });

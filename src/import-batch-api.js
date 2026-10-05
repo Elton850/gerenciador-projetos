@@ -79,12 +79,12 @@ function mount(app, { store, audit, getProject, getIn, resolveConn, connPassword
     const d = project.deparas.find((x) => x.id === deparaId);
     if (!d || !cfg) return;
     d.batchConfig = B.cleanBatchConfig(cfg, scriptsApi.cleanUserVars);
-    store.save();
+    return store.save(); // quem chama aguarda
   }
-  app.put('/api/projects/:id/deparas/:did/batch-config', (req, res) => {
+  app.put('/api/projects/:id/deparas/:did/batch-config', async (req, res) => {
     const p = getProject(req.params.id);
     getIn(p.deparas, req.params.did, 'Planilha');
-    rememberBatch(p, req.params.did, req.body);
+    await rememberBatch(p, req.params.did, req.body);
     res.json({ ok: true });
   });
 
@@ -162,7 +162,7 @@ function mount(app, { store, audit, getProject, getIn, resolveConn, connPassword
     const entry = { id: planId, kind: 'batch', hash, dir: d.sourceDir, deparaId: d.id, conn, target, env, now, items, scriptPlan, scriptSummary, allowScriptsDestructive: scriptsDestructiveOk,
       allowOverwrite: base.allowProdOverwrite, projectId: project.id, projectName: project.name, baseName: base.name, issues, used: false, expiresAt: Date.now() + PLAN_TTL_MS };
     planStore.set(planId, entry);
-    rememberBatch(project, d.id, req.body.saveConfig);
+    await rememberBatch(project, d.id, req.body.saveConfig);
     audit.log({ action: 'lote-plano-gerado', project: project.name, base: base.name, env, server: target.connectedTo, database: target.database, hash, arquivo: d.sourceDir,
       tabelas: runnable.map((t) => ({ tabela: `${t.schema}.${t.table}`, modo: t.mode, linhas: t.rows, arquivo: t.file, aba: t.sheet })), bloqueadas: items.length - runnable.length, bloqueios: issues.length,
       scripts: scriptSummary.map((s) => ({ nome: s.name, arquivo: s.file, lotes: s.batches, sha256: s.sha256 })) });

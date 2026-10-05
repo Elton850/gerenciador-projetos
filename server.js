@@ -198,15 +198,15 @@ app.get('/api/state', (req, res) => {
   res.json({ settings: store.data.settings, today: todayStr(), ...cfg.extras(), connections: store.data.connections.map(connectionsMod.publicSaved), projects: store.data.projects.map(publicProject) });
 });
 
-app.put('/api/settings', (req, res) => {
+app.put('/api/settings', async (req, res) => {
   const d = Number(req.body.warnDays);
   if (!Number.isInteger(d) || d < 0 || d > 365) throw httpError(400, 'Dias de alerta inválido (0 a 365).');
   store.data.settings.warnDays = d;
-  store.save();
+  await store.save();
   res.json({ ok: true });
 });
 
-app.post('/api/projects', (req, res) => {
+app.post('/api/projects', async (req, res) => {
   const name = str(req.body.name, 120);
   if (!name) throw httpError(400, 'Informe o nome do projeto.');
   const p = { id: uid(), name, description: str(req.body.description, 1000), ...cleanRoot(req.body), createdAt: new Date().toISOString(), bases: [], deparas: [], milestones: [],
@@ -215,11 +215,11 @@ app.post('/api/projects', (req, res) => {
   // Ciclo: o escolhido, senão o padrão do tipo do projeto, senão o ciclo padrão. O projeto recebe uma CÓPIA dos passos.
   cycles.assignCycle(p, cycles.cycleFor(store.data, { cycleId: str(req.body.cycleId, 40), projectTypeId: p.projectTypeId }));
   store.data.projects.push(p);
-  store.save();
+  await store.save();
   res.json(publicProject(p));
 });
 
-app.put('/api/projects/:id', (req, res) => {
+app.put('/api/projects/:id', async (req, res) => {
   const p = getProject(req.params.id);
   const name = str(req.body.name, 120);
   if (!name) throw httpError(400, 'Informe o nome do projeto.');
@@ -240,15 +240,15 @@ app.put('/api/projects/:id', (req, res) => {
     if (!keeps) { p.stageHistory.push({ stepId: null, stageId: null, name: `Sem etapa (ciclo trocado para ${c.name})`, color: '#8FB0BF', at: new Date().toISOString() }); p.stepId = null; }
     audit.log({ action: 'ciclo-aplicado', project: p.name, detalhe: `Ciclo trocado para “${c.name}”` });
   }
-  store.save();
+  await store.save();
   res.json(publicProject(p));
 });
 
 // Remove apenas o cadastro; nenhum arquivo em disco e nenhuma base é tocada.
-app.delete('/api/projects/:id', (req, res) => {
+app.delete('/api/projects/:id', async (req, res) => {
   getProject(req.params.id);
   store.data.projects = store.data.projects.filter((p) => p.id !== req.params.id);
-  store.save();
+  await store.save();
   res.json({ ok: true });
 });
 
@@ -262,22 +262,22 @@ function cleanMilestone(b) {
   return { title, dueDate: b.dueDate, alertDays: alert, done: !!b.done, note: str(b.note, 500) };
 }
 
-app.post('/api/projects/:id/milestones', (req, res) => {
+app.post('/api/projects/:id/milestones', async (req, res) => {
   const p = getProject(req.params.id);
   p.milestones.push({ id: uid(), ...cleanMilestone(req.body) });
-  store.save();
+  await store.save();
   res.json(publicProject(p));
 });
-app.put('/api/projects/:id/milestones/:mid', (req, res) => {
+app.put('/api/projects/:id/milestones/:mid', async (req, res) => {
   const p = getProject(req.params.id);
   Object.assign(getIn(p.milestones, req.params.mid, 'Prazo'), cleanMilestone(req.body));
-  store.save();
+  await store.save();
   res.json(publicProject(p));
 });
-app.delete('/api/projects/:id/milestones/:mid', (req, res) => {
+app.delete('/api/projects/:id/milestones/:mid', async (req, res) => {
   const p = getProject(req.params.id);
   p.milestones = p.milestones.filter((m) => m.id !== req.params.mid);
-  store.save();
+  await store.save();
   res.json(publicProject(p));
 });
 
@@ -294,20 +294,20 @@ async function cleanBase(b, existing) {
 app.post('/api/projects/:id/bases', async (req, res) => {
   const p = getProject(req.params.id);
   p.bases.push({ id: uid(), ...(await cleanBase(req.body)) });
-  store.save();
+  await store.save();
   res.json(publicProject(p));
 });
 app.put('/api/projects/:id/bases/:bid', async (req, res) => {
   const p = getProject(req.params.id);
   const base = getIn(p.bases, req.params.bid, 'Base');
   Object.assign(base, await cleanBase(req.body, base));
-  store.save();
+  await store.save();
   res.json(publicProject(p));
 });
-app.delete('/api/projects/:id/bases/:bid', (req, res) => {
+app.delete('/api/projects/:id/bases/:bid', async (req, res) => {
   const p = getProject(req.params.id);
   p.bases = p.bases.filter((b) => b.id !== req.params.bid);
-  store.save();
+  await store.save();
   res.json(publicProject(p));
 });
 
@@ -339,28 +339,28 @@ function cleanDepara(b) {
   return { label, url, targetDir: cleanDir(b.targetDir, 'Pasta de destino'), fileName: str(b.fileName, 150), importable: b.importable !== false, importMode, sourceDir };
 }
 
-app.post('/api/projects/:id/deparas', (req, res) => {
+app.post('/api/projects/:id/deparas', async (req, res) => {
   const p = getProject(req.params.id);
   p.deparas.push({ id: uid(), lastDownload: null, ...cleanDepara(req.body) });
-  store.save();
+  await store.save();
   res.json(publicProject(p));
 });
-app.put('/api/projects/:id/deparas/:did', (req, res) => {
+app.put('/api/projects/:id/deparas/:did', async (req, res) => {
   const p = getProject(req.params.id);
   Object.assign(getIn(p.deparas, req.params.did, 'Planilha'), cleanDepara(req.body));
-  store.save();
+  await store.save();
   res.json(publicProject(p));
 });
-app.delete('/api/projects/:id/deparas/:did', (req, res) => {
+app.delete('/api/projects/:id/deparas/:did', async (req, res) => {
   const p = getProject(req.params.id);
   p.deparas = p.deparas.filter((d) => d.id !== req.params.did);
-  store.save();
+  await store.save();
   res.json(publicProject(p));
 });
 
 // Anexar a planilha: o usuário baixa o .xlsx pelo navegador (Sheets → Arquivo → Fazer download) e o app copia
 // o arquivo escolhido para a pasta do DE-PARA. (O campo "lastDownload" guarda o arquivo atualmente anexado.)
-app.post('/api/projects/:id/deparas/:did/attach', (req, res) => {
+app.post('/api/projects/:id/deparas/:did/attach', async (req, res) => {
   const p = getProject(req.params.id);
   const d = getIn(p.deparas, req.params.did, 'Planilha');
   if (!dirOk(d.targetDir)) throw httpError(400, 'A pasta de destino desta planilha não existe. Edite a planilha e escolha uma pasta válida.');
@@ -378,7 +378,7 @@ app.post('/api/projects/:id/deparas/:did/attach', (req, res) => {
   }
   const size = fs.statSync(dest).size;
   d.lastDownload = { at: new Date().toISOString(), path: dest, size, manual: true };
-  store.save();
+  await store.save();
   audit.log({ action: 'depara-anexado', project: p.name, planilha: d.label, arquivo: dest, bytes: size });
   res.json({ path: dest, size, project: publicProject(p) });
 });
@@ -472,14 +472,14 @@ function rememberImportConfig(project, cfg) {
       vars: scriptsApi.cleanUserVars(cfg.scripts?.vars), // valores das variáveis {{NOME}} definidas pelo usuário
     },
   };
-  store.save();
+  return store.save(); // quem chama aguarda
 }
 
 // Salva na hora (a cada marcação/alteração no passo 2) a seleção de abas e nomes deste DE-PARA, sem precisar gerar o plano.
-app.put('/api/projects/:id/deparas/:did/import-config', (req, res) => {
+app.put('/api/projects/:id/deparas/:did/import-config', async (req, res) => {
   const p = getProject(req.params.id);
   getIn(p.deparas, req.params.did, 'Planilha');
-  rememberImportConfig(p, { ...req.body, deparaId: req.params.did });
+  await rememberImportConfig(p, { ...req.body, deparaId: req.params.did });
   res.json({ ok: true });
 });
 
@@ -540,7 +540,7 @@ app.post('/api/import/plan', async (req, res) => {
   const scriptSummary = userScripts.map((s) => ({ id: s.id, name: s.name, file: s.file, sha256: s.sha256, batches: s.batches.length, variables: s.variables, analysis: s.analysis }));
   const entry = { id: planId, plan, conn, target, projectId: project.id, baseId: base.id, projectName: project.name, baseName: base.name, env, issues, allowScriptsDestructive: scriptsDestructiveOk, scriptSummary, used: false, expiresAt: Date.now() + PLAN_TTL_MS };
   planStore.set(planId, entry);
-  rememberImportConfig(project, req.body.saveConfig);
+  await rememberImportConfig(project, req.body.saveConfig);
 
   const totalRows = plan.tables.reduce((n, t) => n + t.rows, 0);
   // Auditoria: só metadados dos scripts (nome, arquivo, lotes, hash do conteúdo); nunca o texto.
@@ -626,4 +626,4 @@ if (require.main === module) {
   app.listen(PORT, '127.0.0.1', () => console.log(`Gerenciador de Projetos em http://localhost:${PORT}  (dados em ${DATA_DIR})`));
 }
 
-module.exports = { app };
+module.exports = { app, store };

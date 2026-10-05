@@ -41,6 +41,7 @@ Nunca use a mesma KEK nos dois.
 > 7. **URL Configuration → Site URL**: `http://localhost:4317` (o app desktop não usa links de redirecionamento; usa o **código** do e-mail).
 
 ### 2.1 Modelos de e-mail com CÓDIGO (o app desktop não abre links)
+Texto oficial versionado em `supabase/templates/invite.html` e `supabase/templates/recovery.html` (o Supabase local usa os mesmos).
 
 > **AÇÃO NECESSÁRIA DO USUÁRIO** — **Authentication → Emails → Templates**:
 > - **Invite user** — Assunto: `Convite — Gerenciador de Projetos` · Corpo:
@@ -165,6 +166,18 @@ npx supabase functions deploy gp-admin
 Proteções do MASTER (no banco): não pode ser excluído, suspenso nem rebaixado; ninguém vira MASTER pela tela; transferir exige
 outro MASTER ativo e senha digitada há menos de 10 minutos. Detalhes e *break-glass* em [SECURITY.md](SECURITY.md).
 
+## 7.1 Testar o login no gp-dev (Fase 4)
+> **AÇÃO NECESSÁRIA DO USUÁRIO**
+> 1. No `.env` (raiz do projeto, fora do Git): `GP_MODE=cloud`, `GP_SUPABASE_URL` e `GP_SUPABASE_PUBLISHABLE_KEY` do **gp-dev**, `GP_ENV=dev`.
+> 2. Rode `iniciar.bat` — o próprio servidor abre o navegador no endereço com o token desta execução (sem ele a API recusa: proteção contra
+>    outros usuários do Windows na mesma máquina).
+> 3. Entre com o seu e-mail e senha (MASTER). Esperado: tela do app **vazia** (o gp-dev ainda não tem os seus projetos — a migração é a Fase 6).
+>    Seus dados locais (`data\projects.json`) **não aparecem e não são alterados** no modo nuvem.
+> 4. Teste “Sair”, “Manter conectado” (feche e abra de novo: entra sozinho) e “Esqueci minha senha” (código chega por e-mail).
+> 5. Volte ao uso normal: `GP_MODE=local` no `.env` (ou apague a linha). O `.exe` atual continua sempre local.
+> Usuário de teste: convide pelo `gp-admin` (ou pelo painel), aceite com “Primeiro acesso” → ele fica **aguardando liberação** até você
+> provisionar (`admin_provision_user`; a tela de administração é a Fase 8).
+
 ## 8. Associar os dados existentes ao seu usuário
 É feito pela ferramenta de migração (Fase 6), **com o seu login de MASTER** (nunca com service role): todos os projetos atuais
 passam a ter você (`owner_id` = seu UID) como dono e gestor. Roteiro completo em `docs/MIGRATION-GUIDE.md` (criado na Fase 6),
@@ -179,6 +192,22 @@ sempre primeiro no **gp-dev** com uma **cópia** dos dados.
 > 4. Qualquer `FALHOU` → pare e me envie só a linha da mensagem.
 
 Testar login (Fase 4): entrar como MASTER e como os usuários de teste; conferir que o pendente vê só “Aguardando configuração”.
+
+## 9.1 Supabase LOCAL (Docker) — testes de integração reais
+Opcional, para quem desenvolve. Sobe Auth, PostgREST, Storage, Edge Functions e uma caixa de e-mail de teste (Mailpit) na sua máquina, com as
+mesmas migrations, e roda o app contra eles (sem tocar no gp-dev):
+```bash
+npx supabase start -x studio,imgproxy,logflare,vector,realtime,postgres-meta,supavisor
+```
+```bash
+npm run test:supabase
+```
+```bash
+npx supabase stop
+```
+A configuração local (`supabase/config.toml`) espelha as regras do gp-dev e não tem segredos (as chaves locais são as de demonstração da CLI).
+O teste gera uma KEK aleatória por execução, só em arquivo temporário. **Atenção:** em `[auth.email]`, `enable_signup = false` desliga o login
+por e-mail inteiro; quem bloqueia o cadastro aberto é `[auth] enable_signup = false` (no painel: “Allow new users to sign up”).
 
 ## 10. Logs e auditoria
 - **Logs & Analytics**: *Postgres*, *Auth* (logins, convites) e *Edge Functions* (as funções só registram códigos de erro, nunca chaves).

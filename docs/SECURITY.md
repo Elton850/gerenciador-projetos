@@ -16,8 +16,15 @@ Nenhuma camada substitui outra. A tela só **reflete** permissões; quem decide 
 ## 2. Autenticação
 - Supabase Auth; o app nunca guarda senha nem hash. Cadastro aberto **desligado**: só entra quem é convidado. **[implementado: schema]**
 - Convite e recuperação por **código** no e-mail (o app desktop não usa links). Senha mínima 12 com complexidade (config do Auth).
-- Tokens ficam no processo local (Node), nunca no navegador/`localStorage`; refresh token só com “manter conectado”, em arquivo DPAPI. **[fase 4]**
-- Logout revoga o refresh token, zera chaves e dados em memória e volta à tela de login. **[fase 4]**
+- Tokens ficam no processo local (Node), nunca no navegador/`localStorage`; refresh token só com “manter conectado”, em arquivo DPAPI
+  (`%LOCALAPPDATA%\GerenciadorProjetos\session.dpapi.json`). Renovação automática antes de expirar; refresh revogado/expirado → sessão encerrada. **[implementado]**
+- Logout revoga a sessão no Auth (`/logout?scope=local`), zera chaves, cópias temporárias e dados em memória, apaga o arquivo DPAPI e volta à tela de login. **[implementado]**
+- Antes do login (modo nuvem) o app sobe **vazio**: nenhum dado local é carregado; toda rota de dados responde 401 `AUTH_REQUIRED`; pendente → 403 `ACCOUNT_PENDING`. **[implementado]**
+- Falha ao carregar os dados após o login encerra a sessão (fail closed). Erros de login não revelam se o e-mail existe. **[implementado]**
+- **Cookie de inicialização**: no modo nuvem a API local só atende quem abriu o app pelo endereço com o token aleatório da execução
+  (cookie HttpOnly, SameSite=Strict). Motivo: `localhost` é compartilhado entre usuários do Windows na mesma máquina (Terminal Server/RDS). **[implementado]**
+- “Feito por” nos registros = nome de exibição do usuário logado (`src/auth/identity.js`); o UUID autoritativo de cada alteração está em `audit_events`.
+  Auditoria local passa a ser por usuário (`users\<uuid>\audit.log`), sem e-mail nem senha.
 
 ## 3. Autorização (RBAC + permissões + projeto)
 - Papéis: `MASTER` > `ADMIN` > `USER`. Permissões granulares em `permissions`/`user_permissions`; padrão por papel em `role_permissions`. **[implementado]**
@@ -153,4 +160,4 @@ RPC de anonimização de pessoa/contato: **[fase 8]**.
 - Regras de fluxo no cliente (§4). · Campos cifrados não são pesquisáveis no banco (busca em memória). · Texto livre pode conter PII.
 - Quem tem acesso legítimo vê o dado em claro e pode copiá-lo (nenhuma cifra impede isso). · DEK em memória do cliente autorizado durante a sessão.
 - Sem MFA no app ainda (recomendado ativar TOTP no Supabase para o MASTER quando o app suportar).
-- Edge Functions não são executadas nos testes locais (sem Deno); validar no projeto dev.
+- Edge Functions, Auth, Storage e PostgREST reais são exercitados pelo teste de integração com o Supabase local (`npm run test:supabase`, Docker); não fazem parte do `npm test`.

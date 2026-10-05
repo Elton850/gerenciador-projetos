@@ -8,6 +8,12 @@ class Audit {
     fs.mkdirSync(dir, { recursive: true });
   }
 
+  // Modo nuvem: a auditoria local acompanha o usuário logado (users\<uuid>\audit.log); sem sessão, a pasta de logs da máquina.
+  setDir(dir) {
+    fs.mkdirSync(dir, { recursive: true });
+    this.file = path.join(dir, 'audit.log');
+  }
+
   log(entry) {
     const line = JSON.stringify({ at: new Date().toISOString(), ...entry });
     fs.appendFileSync(this.file, line + '\n', 'utf8');

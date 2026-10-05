@@ -1,6 +1,5 @@
 // Rotas do controle de horas (regras em src/hours.js; planilha em src/hours-export.js).
 // O servidor é a fonte do tempo: cada ação grava timestamps reais e a tela apenas exibe (e refaz a conta a cada recarga).
-const os = require('os');
 const path = require('path');
 const { httpError, uid, str } = require('./util');
 const E = require('./evidence');
@@ -11,7 +10,7 @@ const { buildWorkbook } = require('./hours-export');
 const BOOT_AT = Date.now(); // cronômetro "rodando" cuja última ação é anterior a esta hora sobreviveu a um reinício do app
 const clock = { now: () => Date.now() }; // trocável nos testes
 
-const who = () => { try { return os.userInfo().username || null; } catch { return null; } };
+const { who } = require('./auth/identity');
 const NOW_TOLERANCE_MS = 2000;
 
 function mount(app, { store, audit, dataDir, SYS }) {

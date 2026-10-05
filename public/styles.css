@@ -994,3 +994,18 @@ main.settings-mode { padding-top: 0; } main.settings-mode .page-head { padding-t
 /* Tabelas no editor de e-mail e botão principal "Abrir no Gmail" */
 .em-rich table { border-collapse: collapse; margin: 0 0 .6em; } .em-rich td, .em-rich th { min-width: 48px; vertical-align: top; }
 .em-gmail { display: inline-flex; align-items: center; gap: 6px; }
+
+/* ---------- Tela de acesso (modo nuvem, public/auth.js) ---------- */
+body.signed-out .app { display: none; }
+.auth-screen { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; background: var(--bg); }
+.auth-card { width: min(420px, 100%); }
+.auth-card .card-head img { border-radius: 6px; }
+.auth-card input[type=text], .auth-card input[type=password] { width: 100%; }
+.auth-card .stack { display: grid; gap: 12px; }
+.auth-links { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.auth-msg:empty { display: none; }
+.auth-msg { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--pink); color: var(--text); background: var(--s2); }
+.auth-msg.info { border-color: var(--accent); }
+.user-box { display: flex; align-items: center; gap: 8px; padding: 8px 10px; margin-bottom: 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--s1); }
+.user-box b { display: block; font-size: 12.5px; line-height: 1.2; overflow-wrap: anywhere; }
+.user-box .grow { flex: 1 1 auto; min-width: 0; }

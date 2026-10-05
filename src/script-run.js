@@ -8,14 +8,13 @@
 //  - fora do localhost, qualquer comando que altera dados/objetos (UPDATE, INSERT, MERGE, ALTER, CREATE, SQL dinâmico) pede confirmação;
 //  - a confirmação é um token do servidor ligado ao texto exato, à conexão e ao banco: mudou algo, pede de novo.
 //  - executar NUNCA marca o item como concluído (é ferramenta de apoio); fica só registrado no histórico do item e na auditoria.
-const os = require('os');
 const crypto = require('crypto');
 const { httpError, str } = require('./util');
 const { prepareScript, applyVariables } = require('./sqlscan');
 const { BUILTIN_VARS, cleanUserVars, checkVarValue } = require('./scripts-api');
 
 const sha = (t) => crypto.createHash('sha256').update(t).digest('hex');
-const who = () => { try { return os.userInfo().username || null; } catch { return null; } };
+const { who } = require('./auth/identity');
 const MODIFY_KW = ['UPDATE', 'INSERT', 'MERGE', 'ALTER', 'CREATE'];
 const ENV_LABEL = { prod: 'Produção', hml: 'Homologação', dev: 'Desenvolvimento', local: 'Localhost' };
 

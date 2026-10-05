@@ -36,7 +36,7 @@ const PATTERNS = [
   [/AQAAANCMnd8BFdERjHoAwE\/Cl\+sBAAAA/, 'blob DPAPI (senha protegida)'],
   [/\b(GP_KEK_V\d+|SUPABASE_SERVICE_ROLE_KEY|SERVICE_ROLE_KEY)\s*[=:]\s*['"]?[A-Za-z0-9+/_=.-]{20,}/, 'chave de servidor atribuída'],
   [/https:\/\/[a-z0-9]{20}\.supabase\.co/, 'URL real de projeto Supabase'],
-  [/\b(password|pwd)\s*=\s*[^;'"\s<>{}]{4,}\s*;/i, 'senha em connection string'],
+  [/(?:^|[;"'`])\s*(password|pwd)\s*=\s*[^;'"\s<>{}]{4,}\s*;/i, 'senha em connection string'], // "…;Password=x;" (não casa com obj.password = x;)
 ];
 
 const isBinary = (buf) => buf.subarray(0, 8192).includes(0);

@@ -59,6 +59,7 @@ async function pickFolder({ title = 'Selecione uma pasta', start = '' } = {}) {
 const FILTERS = {
   xlsx: 'Planilhas Excel (*.xlsx)|*.xlsx|Todos os arquivos (*.*)|*.*',
   sql: 'Scripts SQL (*.sql)|*.sql|Todos os arquivos (*.*)|*.*',
+  gpbackup: 'Backup do Gerenciador de Projetos (*.gpbackup)|*.gpbackup|Todos os arquivos (*.*)|*.*',
   docs: 'Documentos|*.pdf;*.doc;*.docx;*.dot;*.dotx;*.rtf;*.odt;*.txt;*.md;*.csv;*.xls;*.xlsx;*.xlsm;*.xlt;*.xltx;*.ods;*.ppt;*.pptx;*.pot;*.potx;*.odp;*.sql;*.xml;*.json;*.png;*.jpg;*.jpeg;*.gif;*.zip|Todos os arquivos (*.*)|*.*',
 };
 

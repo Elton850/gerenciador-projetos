@@ -8,6 +8,8 @@ const SETTINGS_TABS = [
   { id: 'horas', label: 'Jornada e horas', hint: 'Jornada, metas por dia da semana, exceções e aviso de fim de expediente.' },
   { id: 'evidencias', label: 'Evidências', hint: 'Tamanho máximo e tipos de arquivo aceitos como evidência.' },
   { id: 'comunicacoes', label: 'Comunicações', hint: 'Modelos de e-mail reutilizáveis (variáveis e destinatários do projeto) e histórico dos e-mails gerados. A aplicação gera e você copia; ela não envia.' },
+  { id: 'atualizacoes', label: 'Atualizações', hint: 'Versão do aplicativo, atualizações e configurações compartilháveis entre as suas instalações (pela pasta de publicação).' },
+  { id: 'backup', label: 'Backup e Restauração', hint: 'Exportar tudo para um arquivo e importar em outra máquina (substitui os dados atuais).' },
   { id: 'geral', label: 'Geral', hint: 'Responsáveis (coordenadores e analistas), sistemas de origem e alertas de prazo.' },
 ];
 function renderSettings(main) {
@@ -19,6 +21,8 @@ function renderSettings(main) {
     horas: () => [h('div', { 'data-slot': 'hours-settings', 'data-built': '1' }, hoursSettingsCard())],
     evidencias: () => [evidenceSettingsCard()],
     comunicacoes: () => [emailTemplatesCard(), emailHistoryCard()],
+    backup: () => [backupExportCard(), backupImportCard()],
+    atualizacoes: () => updatesTab(),
     geral: () => [coordinatorsCard(),
       simpleTagCard({ cardTitle: 'Sistemas de origem', items: state.originSystems, apiPath: 'origin-systems', projectField: 'originSystemId', singular: 'sistema de origem', addLabel: '+ Sistema', placeholder: 'Ex.: RM Classic', emptyHint: 'Nenhum sistema cadastrado. É o sistema de onde os dados estão sendo migrados.' }),
       alertsCard()],

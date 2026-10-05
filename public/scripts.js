@@ -50,18 +50,12 @@ function scriptRow(s) {
   return h('div', { class: 'row' },
     h('div', { class: 'grow stack' },
       h('div', { class: 'inline' }, h('strong', null, s.name), scriptBadges(a), (a?.variables || []).map(varTag),
-        !s.exists ? h('span', { class: 'pill overdue' }, 'arquivo não encontrado') : null,
-        // Modo nuvem: cópia de trabalho editada no SSMS/VS Code ainda não enviada / versão mais nova na nuvem
-        s.workingCopy?.changed ? h('span', { class: 'pill soon', title: 'A cópia aberta nesta máquina foi editada e ainda não foi enviada.' }, 'alterações locais não enviadas') : null,
-        s.workingCopy?.stale ? h('span', { class: 'pill overdue', title: 'Outra pessoa salvou uma versão mais nova depois que você abriu a cópia.' }, 'há versão mais nova') : null),
+        !s.exists ? h('span', { class: 'pill overdue' }, 'arquivo não encontrado') : null),
       s.description ? h('span', { class: 'small muted' }, s.description) : null,
       h('span', { class: 'small muted mono' }, `${s.file}${s.exists ? ` · ${fmtSize(s.size)} · ${plural(a?.batches ?? 0, 'lote', 'lotes')} · alterado em ${fmtDateTime(s.mtimeMs ? new Date(s.mtimeMs).toISOString() : s.updatedAt)}` : ''}`)),
     h('div', { class: 'actions' },
       h('button', { class: 'btn sm primary', disabled: !s.exists, onclick: () => scriptForm(s) }, 'Editar'),
       h('button', { class: 'btn sm', disabled: !s.exists, title: 'Abrir no programa padrão para .sql (ex.: SSMS)', onclick: () => api('POST', `/api/scripts/${s.id}/open`).catch(fail) }, 'Abrir arquivo'),
-      s.workingCopy?.changed ? h('button', { class: 'btn sm primary', title: 'Grava a cópia editada nesta máquina como nova versão do script (para todos).', onclick: async () => {
-        try { await api('POST', `/api/scripts/${s.id}/push`); await loadScripts(); render(); toast('Alterações enviadas: nova versão do script salva.'); } catch (e) { fail(e); }
-      } }, 'Enviar alterações') : null,
       h('button', { class: 'btn sm ghost', onclick: async () => {
         if (await confirmDialog({ title: 'Remover script', message: `Remover “${s.name}”? O arquivo é movido para a pasta “.removidos” dentro da pasta de scripts (não é apagado). Importações já configuradas deixam de executá-lo.`, okText: 'Remover', danger: true })) {
           try { await api('DELETE', `/api/scripts/${s.id}`); await loadScripts(); render(); toast('Script removido.'); } catch (e) { fail(e); }

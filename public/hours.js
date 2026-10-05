@@ -537,66 +537,6 @@ function exportCard() {
     h('div', { class: 'hint' }, 'Gera Apontamentos_AAAA_MM.xlsx com as abas Apontamentos, Resumo Mensal, Resumo por Projeto e Observações (sem imagens: só a contagem e os nomes dos arquivos). A exportação só lê os dados (você pode repetir quantas vezes quiser) e a planilha nunca é a fonte dos apontamentos.'));
 }
 
-// Levar as horas para outra máquina (.gphours): sempre cifrado com uma senha escolhida aqui (pedida de novo para importar).
-// As horas nunca vão para a nuvem — este arquivo é o único caminho entre máquinas, e só quando você quiser.
-function backupCard() {
-  const pass1 = h('input', { type: 'password', autocomplete: 'new-password', placeholder: 'mínimo 12 caracteres' });
-  const pass2 = h('input', { type: 'password', autocomplete: 'new-password' });
-  const withFiles = h('input', { type: 'checkbox', checked: true });
-  const file = h('input', { type: 'file', accept: '.gphours' });
-  const ipass = h('input', { type: 'password', autocomplete: 'off' });
-  const doExport = (e) => busy(e.target, async () => {
-    if (pass1.value !== pass2.value) throw new Error('As duas senhas não conferem.');
-    const r = await fetch('/api/hours/backup/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ passphrase: pass1.value, includeFiles: withFiles.checked }) });
-    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `Erro ${r.status}`);
-    const name = /filename="([^"]+)"/.exec(r.headers.get('Content-Disposition') || '')?.[1] || 'Horas.gphours';
-    const url = URL.createObjectURL(await r.blob());
-    const a = h('a', { href: url, download: name });
-    document.body.append(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
-    pass1.value = ''; pass2.value = '';
-    toast(`Arquivo gerado: ${name}. Guarde a senha: sem ela o arquivo não abre.`);
-  }, 'Gerando…');
-  const doPreview = (e) => busy(e.target, async () => {
-    const f = file.files[0];
-    if (!f) throw new Error('Escolha o arquivo .gphours.');
-    const r = await fetch('/api/hours/backup/preview', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-Passphrase': encodeURIComponent(ipass.value) }, body: f });
-    const pv = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(pv.error || `Erro ${r.status}`);
-    ipass.value = '';
-    importPreviewDialog(pv);
-  }, 'Lendo…');
-  return card('Levar as horas para outra máquina', null,
-    h('div', { class: 'grid2' },
-      h('div', { class: 'stack' }, h('b', null, 'Exportar'), field('Senha do arquivo', pass1, 'Será pedida para importar. Não fica guardada em lugar nenhum.'), field('Confirmar a senha', pass2),
-        h('label', { class: 'inline small' }, withFiles, h('span', null, 'Incluir os anexos das observações')), h('div', null, h('button', { class: 'btn primary', onclick: doExport }, 'Exportar horas'))),
-      h('div', { class: 'stack' }, h('b', null, 'Importar'), field('Arquivo .gphours', file), field('Senha do arquivo', ipass), h('div', null, h('button', { class: 'btn', onclick: doPreview }, 'Ver o que será importado')))),
-    h('div', { class: 'hint' }, 'Nada é sobrescrito: apontamentos e observações já existentes ficam como estão; apontamento que se sobreporia a outro não entra. Importar de novo o mesmo arquivo não duplica.'));
-}
-
-function importPreviewDialog(pv) {
-  const s = pv.summary;
-  const settings = h('input', { type: 'checkbox' });
-  const line = (label, n, tone) => (n ? h('li', { class: tone || '' }, `${label}: ${n}`) : null);
-  const m = openModal({
-    title: 'Importar horas',
-    body: h('div', { class: 'stack' },
-      h('p', { class: 'small muted' }, `Arquivo exportado em ${fmtDateTime(pv.exportedAt)}${pv.app ? ` (versão ${pv.app})` : ''}.`),
-      h('ul', null, line('Apontamentos novos', s.entries.new), line('Apontamentos já existentes (iguais)', s.entries.same), line('Apontamentos com o mesmo id e conteúdo diferente (mantém o atual)', s.entries.conflict, 'soon'),
-        line('Apontamentos que se sobreporiam a outros (não entram)', s.entries.overlap, 'soon'), line('Registros inválidos (ignorados)', s.entries.invalid + s.notes.invalid + s.files.invalid, 'soon'),
-        line('Observações novas', s.notes.new), line('Observações já existentes', s.notes.same + s.notes.conflict), line('Anexos novos', s.files.new)),
-      !s.entries.new && !s.notes.new ? h('p', null, 'Nada novo para importar.') : null,
-      s.settingsDiffer ? h('label', { class: 'inline small' }, settings, h('span', null, 'Substituir a jornada e as metas atuais pelas do arquivo')) : null),
-    footer: [h('button', { class: 'btn', onclick: () => m.close() }, 'Cancelar'),
-      h('button', { class: 'btn primary', onclick: (e) => busy(e.target, async () => {
-        const r = await api('POST', '/api/hours/backup/apply', { token: pv.token, includeSettings: settings.checked });
-        m.close();
-        toast(`Importado: ${r.summary.entries.new} apontamento(s), ${r.summary.notes.new} observação(ões).`);
-        await hoursChanged();
-      }, 'Importando…') }, 'Importar')],
-  });
-}
-
 function hoursPageBody() {
   const st = HR.st;
   return h('div', { class: 'page', style: 'max-width:none;padding:0' },
@@ -606,7 +546,7 @@ function hoursPageBody() {
     st.timers.length ? card(`Atividades (${st.timers.length})`, null, st.timers.map((t) => timerBlock(t))) : null,
     dayPanel(HR.day),
     st.pending.length ? card('Dias pendentes', null, pendingList(st.pending, { limit: 10, onOpen: (d) => { HR.viewDate = d.date; hoursPageLoad().then(() => document.querySelector('[data-slot="hours-page"]')?.scrollIntoView({ behavior: 'smooth' })); } })) : null,
-    monthCard(HR.month), historyCard(), exportCard(), backupCard());
+    monthCard(HR.month), historyCard(), exportCard());
 }
 
 // ---------- Configurações: jornada, metas por dia da semana, exceções e aviso ----------

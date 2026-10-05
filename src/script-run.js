@@ -8,19 +8,21 @@
 //  - fora do localhost, qualquer comando que altera dados/objetos (UPDATE, INSERT, MERGE, ALTER, CREATE, SQL dinâmico) pede confirmação;
 //  - a confirmação é um token do servidor ligado ao texto exato, à conexão e ao banco: mudou algo, pede de novo.
 //  - executar NUNCA marca o item como concluído (é ferramenta de apoio); fica só registrado no histórico do item e na auditoria.
+const os = require('os');
 const crypto = require('crypto');
 const { httpError, str } = require('./util');
 const { prepareScript, applyVariables } = require('./sqlscan');
 const { BUILTIN_VARS, cleanUserVars, checkVarValue } = require('./scripts-api');
+const { ScriptFiles } = require('./scriptstore');
 
 const sha = (t) => crypto.createHash('sha256').update(t).digest('hex');
-const { who } = require('./auth/identity');
+const who = () => { try { return os.userInfo().username || null; } catch { return null; } };
 const MODIFY_KW = ['UPDATE', 'INSERT', 'MERGE', 'ALTER', 'CREATE'];
 const ENV_LABEL = { prod: 'Produção', hml: 'Homologação', dev: 'Desenvolvimento', local: 'Localhost' };
 
 function mount(app, { store, audit, db, getProject, dataDir, resolveConn, connPassword, publicProject }) {
   const data = () => store.data;
-  const content = () => store.scripts(); // .sql local ou versões na nuvem, conforme o backend atual
+  const files = new ScriptFiles(dataDir);
 
   // Conexões que o projeto pode usar: as cadastradas e as das bases do próprio projeto.
   function targets(p) {
@@ -64,11 +66,11 @@ function mount(app, { store, audit, db, getProject, dataDir, resolveConn, connPa
     const scriptId = str(req.body.scriptId, 40);
     if (!item.scriptIds.includes(scriptId)) throw httpError(400, 'Este script não está relacionado a este item do checklist.');
     const s = data().scripts.find((x) => x.id === scriptId) || (() => { throw httpError(404, 'O script foi removido da lista de Scripts SQL.'); })();
-    if (!(await content().exists(s))) throw httpError(404, `O conteúdo do script “${s.name}” não foi encontrado.`);
+    if (!files.exists(s.file)) throw httpError(404, `O arquivo do script (${s.file}) não foi encontrado.`);
     const t = resolveTarget(p, req.body.target, req.body.database);
 
     // Texto lido do ARQUIVO agora (nunca da tela) + variáveis: automáticas do destino, as demais informadas na janela.
-    const raw = await content().read(s);
+    const raw = files.read(s.file);
     const vars = {
       ...cleanUserVars(req.body.vars),
       BANCO: t.conn.database, SCHEMA: 'dbo', SERVIDOR: t.conn.server, AMBIENTE: t.local ? 'LOCAL' : 'PRODUCAO', PROJETO: p.name, BASE: t.baseName,
@@ -117,7 +119,7 @@ function mount(app, { store, audit, db, getProject, dataDir, resolveConn, connPa
       batches: out?.batches ?? 0, returned: out?.returned ?? 0, affected: out?.affected ?? 0, error: error ? error.slice(0, 400) : null, by: who(),
     };
     item.runs = [...(item.runs || []), run].slice(-20); // histórico curto no item (sem os dados retornados)
-    await store.save();
+    store.save();
     audit.log({ action: error ? 'script-falhou' : 'script-executado', project: p.name, by: run.by, etapa: inst.stageName, item: item.title, detalhe: `${s.name} em ${t.label}`,
       env: t.local ? 'local' : 'prod', server: run.server, database: run.database, ms, resultado: error ? error.slice(0, 200) : `${run.returned} linha(s) retornada(s), ${run.affected} afetada(s)`, sha256: textSha });
     if (ac.signal.aborted) return;
@@ -126,9 +128,9 @@ function mount(app, { store, audit, db, getProject, dataDir, resolveConn, connPa
   });
 
   // Variáveis que o script vai pedir (as automáticas são preenchidas pelo app).
-  app.get('/api/scripts/:id/variables', async (req, res) => {
+  app.get('/api/scripts/:id/variables', (req, res) => {
     const s = data().scripts.find((x) => x.id === req.params.id) || (() => { throw httpError(404, 'Script não encontrado.'); })();
-    const { analysis } = prepareScript((await content().exists(s)) ? await content().read(s) : '');
+    const { analysis } = prepareScript(files.exists(s.file) ? files.read(s.file) : '');
     res.json({ user: analysis.variables.filter((n) => !BUILTIN_VARS[n]), builtin: analysis.variables.filter((n) => BUILTIN_VARS[n]) });
   });
 

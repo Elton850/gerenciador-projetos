@@ -5,8 +5,6 @@ const fs = require('fs');
 const net = require('net');
 const path = require('path');
 
-const crypto = require('crypto');
-
 const APP_NAME = 'Gerenciador de Projetos';
 const BASE_PORT = 4317;
 
@@ -17,7 +15,6 @@ const dataDir = process.env.GP_DATA_DIR || (app.isPackaged ? path.join(exeDir, '
 
 let win = null;
 let server = null;
-let launchToken = null; // modo nuvem: a janela abre com o token desta execução (a API local só atende quem tem o cookie)
 
 if (!app.requestSingleInstanceLock()) {
   app.quit(); // já existe uma janela aberta: ela é trazida para frente (evento abaixo)
@@ -43,15 +40,12 @@ async function startServer() {
   process.env.PORT = String(port); // lido por server.js na hora do require (lista de hosts permitidos)
   process.env.GP_DATA_DIR = dataDir;
   fs.mkdirSync(dataDir, { recursive: true });
-  if (!app.isPackaged) require('./src/config').loadDotEnv(__dirname); // desenvolvimento: .env da raiz (só GP_* e PORT)
-  process.env.GP_LAUNCH_TOKEN = crypto.randomBytes(24).toString('hex');
-  const { app: web, session, launch } = require('./server');
-  launchToken = launch ? launch.token : null;
+  if (app.isPackaged) { process.env.GP_APP_DIR = exeDir; process.env.GP_APP_EXE = process.execPath; } // atualizações: onde fica o código (src/updates.js)
+  const { app: web } = require('./server');
   await new Promise((resolve, reject) => {
     server = web.listen(port, '127.0.0.1', resolve);
     server.once('error', reject);
   });
-  await session.restore().catch(() => false); // "manter conectado" (modo nuvem)
   return port;
 }
 
@@ -74,7 +68,7 @@ function createWindow(port) {
     openExternal(url);
   });
   win.on('closed', () => { win = null; });
-  win.loadURL(launchToken ? `${home}/?k=${launchToken}` : home);
+  win.loadURL(home);
 }
 
 // Autoteste (usado ao gerar o executável): sobe o servidor, confere a API e a biblioteca do SQL Server e sai.
@@ -107,6 +101,8 @@ app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   try {
     const port = await startServer();
+    // Atualização recém-aplicada: avisa o script de atualização que esta versão subiu (senão ele volta a anterior).
+    if (process.env.GP_UPDATE_OK_FILE) { try { fs.writeFileSync(process.env.GP_UPDATE_OK_FILE, 'ok'); } catch { /* sem o sinal, o script restaura a anterior */ } }
     if (process.env.GP_SELFTEST) return selfTest(port);
     createWindow(port);
   } catch (e) {
@@ -116,3 +112,5 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => { if (server) server.close(); app.quit(); });
+// Pedido da tela “Atualizar”: fecha o aplicativo; o script de atualização (já iniciado) troca o código e reabre.
+process.on('gp-quit-for-update', () => { if (server) server.close(); app.quit(); });

@@ -456,6 +456,20 @@ valida o projeto (sempre dentro da pasta raiz), nomes de branch (`git check-ref-
 `core.longpaths` ou use uma pasta mais curta); listas com mais de 5.000 itens por pasta e cópias com mais de 5.000 arquivos são
 recusadas/truncadas com aviso; ainda não há editor visual de conflitos, stash/rebase/blame nem Pull Requests.
 
+## Backup e Restauração (mudar de máquina)
+
+**Configurações → Backup e Restauração**: **Exportar tudo** gera um único arquivo `.gpbackup` (projetos, configurações, checklists,
+comunicações, documentos, scripts com versões, evidências, horas e auditoria), opcionalmente protegido com senha (AES-256-GCM) e com as
+senhas das conexões. **Importar backup** valida o arquivo, mostra o resumo, salva um backup automático do estado atual e substitui tudo —
+se algo falhar, volta ao estado anterior. Detalhes: [docs/BACKUP-RESTORE.md](docs/BACKUP-RESTORE.md).
+
+## Distribuição, atualizações e configurações compartilhadas
+
+Máquina nova = extrair o pacote de instalação e importar o backup. Versões novas e configurações (ciclos, checklists, modelos…) chegam
+por uma **pasta de publicação** (OneDrive/rede/pendrive): **Configurações → Atualizações**. Publicar: `npm version patch --no-git-tag-version`
+→ `npm run publicar -- --canal "<pasta>" --notas "<o que mudou>"`. Atualização assinada (Ed25519), troca só o código, preserva os dados e
+volta sozinha se a versão nova não abrir. Detalhes: [docs/DISTRIBUICAO-ATUALIZACAO.md](docs/DISTRIBUICAO-ATUALIZACAO.md).
+
 ## Testes
 
 ```

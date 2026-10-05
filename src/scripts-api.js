@@ -1,12 +1,11 @@
 // Scripts SQL do usuário (executados depois da importação da planilha, na mesma base e na mesma transação).
-// Metadados no estado do app (data.scripts); o SQL fica na área de conteúdo de scripts (src/files/script-content.js):
-// arquivos .sql locais ou, no modo nuvem, versões em public.script_versions + cópia de trabalho local para o SSMS/VS Code.
+// Metadados em projects.json (data.scripts); o SQL fica em arquivos .sql (ver scriptstore.js).
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { httpError, uid, str } = require('./util');
-const EH = require('./evidence-http');
+const { ScriptFiles } = require('./scriptstore');
 const { prepareScript, analyzeScript, decodeSqlBuffer, applyVariables, MAX_SCRIPT_CHARS, MAX_BATCHES } = require('./sqlscan');
 
 const MAX_SCRIPTS_PER_PLAN = 30;
@@ -47,7 +46,7 @@ function cleanUserVars(raw) {
 const sha = (t) => crypto.createHash('sha256').update(t).digest('hex');
 
 function mount(app, { store, dataDir, SYS }) {
-  const content = () => store.scripts();
+  const files = new ScriptFiles(dataDir);
   const list = () => store.data.scripts;
   const byId = (id) => list().find((s) => s.id === id) || (() => { throw httpError(404, 'Script não encontrado.'); })();
 
@@ -56,12 +55,10 @@ function mount(app, { store, dataDir, SYS }) {
     batches: a.batches, blocked: a.blocked, destructive: a.destructive, counts: a.counts, dynamic: a.dynamic, tooManyBatches: a.tooManyBatches, variables: a.variables || [],
   });
 
-  async function publicScript(s, { withAnalysis = false } = {}) {
-    const c = content();
-    const st = await c.stat(s);
-    const out = { ...s, exists: !!st, size: st?.size ?? null, mtimeMs: st?.mtimeMs ?? null, storage: c.kind };
-    if (withAnalysis && st) { try { out.analysis = summarize(analyzeScript(await c.read(s))); } catch (e) { out.readError = e.message; } }
-    if (c.kind === 'cloud') { const wc = await c.workingCopy(s); out.workingCopy = wc ? { changed: wc.changed, stale: wc.stale } : null; }
+  function publicScript(s, { withAnalysis = false } = {}) {
+    const st = files.stat(s.file);
+    const out = { ...s, exists: !!st, size: st?.size ?? null, mtimeMs: st?.mtimeMs ?? null };
+    if (withAnalysis && st) { try { out.analysis = summarize(analyzeScript(files.read(s.file))); } catch (e) { out.readError = e.message; } }
     return out;
   }
 
@@ -79,98 +76,74 @@ function mount(app, { store, dataDir, SYS }) {
   }
 
   // ---------- CRUD ----------
-  app.get('/api/scripts', async (req, res) => {
-    const out = [];
-    for (const s of list()) out.push(await publicScript(s, { withAnalysis: true }));
-    res.json(out);
-  });
+  app.get('/api/scripts', (req, res) => res.json(list().map((s) => publicScript(s, { withAnalysis: true }))));
 
-  app.get('/api/scripts/:id', async (req, res) => {
+  app.get('/api/scripts/:id', (req, res) => {
     const s = byId(req.params.id);
-    const pub = await publicScript(s, { withAnalysis: true });
-    if (!pub.exists) throw httpError(404, content().kind === 'cloud' ? `O conteúdo do script “${s.name}” não foi encontrado na nuvem.` : `O arquivo ${s.file} não foi encontrado na pasta de scripts.`);
-    res.json({ ...pub, content: await content().read(s) });
+    const pub = publicScript(s, { withAnalysis: true });
+    if (!pub.exists) throw httpError(404, `O arquivo ${s.file} não foi encontrado na pasta de scripts.`);
+    res.json({ ...pub, content: files.read(s.file) });
   });
 
   // Análise ao vivo enquanto o script é digitado (não grava nada).
   app.post('/api/scripts/analyze', (req, res) => res.json(summarize(analyzeScript(String(req.body.content ?? '')))));
 
-  app.post('/api/scripts', async (req, res) => {
+  app.post('/api/scripts', (req, res) => {
     const meta = cleanMeta(req.body);
-    const text = cleanContent(req.body.content);
-    const s = await createScript(meta, text);
-    res.json(await publicScript(s, { withAnalysis: true }));
-  });
-
-  // Cadastro primeiro (na nuvem a versão do conteúdo referencia o script), conteúdo depois. Se o conteúdo não puder ser gravado,
-  // o cadastro é desfeito — nunca fica um script "sem conteúdo".
-  async function createScript(meta, text) {
-    const file = content().newFileName(meta.name, list().map((x) => x.file));
+    const content = cleanContent(req.body.content);
+    const file = files.newFileName(meta.name, list().map((s) => s.file));
+    files.write(file, content);
     const now = new Date().toISOString();
     const s = { id: uid(), ...meta, file, createdAt: now, updatedAt: now };
-    if (content().kind === 'local') await content().write(s, text); // local: o arquivo antes (comportamento de sempre)
     list().push(s);
-    await store.save();
-    if (content().kind !== 'local') {
-      try { await content().write(s, text); } catch (e) {
-        store.data.scripts = list().filter((x) => x.id !== s.id);
-        await store.save().catch(() => {});
-        await EH.asHttp(Promise.reject(e)); // erro da nuvem vira erro HTTP com code
-      }
-    }
-    return s;
-  }
+    store.save();
+    res.json(publicScript(s, { withAnalysis: true }));
+  });
 
   // Traz para o app um .sql que já existe no computador (copia o conteúdo; o original não é alterado).
-  app.post('/api/scripts/import-file', async (req, res) => {
+  app.post('/api/scripts/import-file', (req, res) => {
     const src = path.resolve(str(req.body.filePath, 600));
     if (!/\.sql$/i.test(src) || !fs.existsSync(src) || !fs.statSync(src).isFile()) throw httpError(400, 'Selecione um arquivo .sql existente.');
     if (fs.statSync(src).size > MAX_SCRIPT_CHARS * 4) throw httpError(400, 'Arquivo grande demais.');
-    const text = cleanContent(decodeSqlBuffer(fs.readFileSync(src)));
+    const content = cleanContent(decodeSqlBuffer(fs.readFileSync(src)));
     let name = str(req.body.name, 120) || path.basename(src, path.extname(src));
     // se já existir um script com esse nome, acrescenta um sufixo em vez de recusar
     const taken = new Set(list().map((s) => s.name.toLowerCase()));
     if (taken.has(name.toLowerCase())) { let i = 2; while (taken.has(`${name} (${i})`.toLowerCase())) i++; name = `${name} (${i})`; }
     const meta = cleanMeta({ name, description: req.body.description });
-    const s = await createScript(meta, text);
-    res.json(await publicScript(s, { withAnalysis: true }));
+    const file = files.newFileName(meta.name, list().map((s) => s.file));
+    files.write(file, content);
+    const now = new Date().toISOString();
+    const s = { id: uid(), ...meta, file, createdAt: now, updatedAt: now };
+    list().push(s);
+    store.save();
+    res.json(publicScript(s, { withAnalysis: true }));
   });
 
-  app.put('/api/scripts/:id', async (req, res) => {
+  app.put('/api/scripts/:id', (req, res) => {
     const s = byId(req.params.id);
-    // Valida tudo e grava o conteúdo ANTES de mexer no cadastro em memória: conteúdo recusado (ex.: 403 na nuvem) não deixa
-    // alteração de nome/descrição pendurada na memória para ir junto no próximo salvamento.
-    const meta = cleanMeta(req.body, s.id);
-    if (req.body.content !== undefined) await EH.asHttp(content().write(s, cleanContent(req.body.content)));
-    Object.assign(s, meta);
+    Object.assign(s, cleanMeta(req.body, s.id));
+    if (req.body.content !== undefined) files.write(s.file, cleanContent(req.body.content));
     s.updatedAt = new Date().toISOString();
-    await store.save();
-    res.json(await publicScript(s, { withAnalysis: true }));
+    store.save();
+    res.json(publicScript(s, { withAnalysis: true }));
   });
 
-  // Modo nuvem: a cópia de trabalho editada no SSMS/VS Code vira a versão nova (se ninguém alterou o script desde que ela foi aberta).
-  app.post('/api/scripts/:id/push', async (req, res) => {
+  // Remove o cadastro e MOVE o arquivo para .removidos (recuperável).
+  app.delete('/api/scripts/:id', (req, res) => {
     const s = byId(req.params.id);
-    const r = await EH.asHttp(content().pushWorkingCopy(s, cleanContent));
-    if (r.pushed) { s.updatedAt = new Date().toISOString(); await store.save(); }
-    res.json({ ...r, script: await publicScript(s, { withAnalysis: true }) });
-  });
-
-  // Remove o cadastro e guarda o conteúdo em .removidos (recuperável): local = pasta de scripts; nuvem = cópia nesta máquina.
-  app.delete('/api/scripts/:id', async (req, res) => {
-    const s = byId(req.params.id);
-    await EH.asHttp(content().trash(s));
+    files.trash(s.file);
     store.data.scripts = list().filter((x) => x.id !== s.id);
-    await store.save();
+    store.save();
     res.json({ ok: true });
   });
 
   const explorer = path.join(SYS, 'explorer.exe');
   // Abre para editar por fora: programa padrão (ex.: SSMS), VS Code ou "mostrar no Explorer". Só o arquivo cadastrado; nada é executado.
-  app.post('/api/scripts/:id/open', async (req, res) => {
+  app.post('/api/scripts/:id/open', (req, res) => {
     const s = byId(req.params.id);
-    if (!(await content().exists(s))) throw httpError(404, 'O arquivo do script não foi encontrado.');
-    const abs = await EH.asHttp(content().openPath(s)); // nuvem: cópia de trabalho local (edição pendente nunca é sobrescrita)
+    if (!files.exists(s.file)) throw httpError(404, 'O arquivo do script não foi encontrado.');
+    const abs = files.resolve(s.file);
     const how = req.body?.app;
     if (how === 'vscode') {
       const code = require('./workspace-api').findVsCode();
@@ -186,15 +159,14 @@ function mount(app, { store, dataDir, SYS }) {
     res.json({ ok: true });
   });
   app.post('/api/scripts-folder/open', (req, res) => {
-    fs.mkdirSync(content().dir, { recursive: true });
-    spawn(explorer, [content().dir], { detached: true, stdio: 'ignore' }).unref();
+    spawn(explorer, [files.dir], { detached: true, stdio: 'ignore' }).unref();
     res.json({ ok: true });
   });
 
   // ---------- Uso no plano de importação ----------
   // Lê os arquivos AGORA (nunca confia em conteúdo vindo da tela), troca as variáveis {{NOME}}, analisa o texto JÁ
   // substituído e devolve os lotes que serão executados. vars = valores automáticos + os definidos na importação.
-  async function loadForPlan(ids, vars = {}) {
+  function loadForPlan(ids, vars = {}) {
     const wanted = Array.isArray(ids) ? ids.map((i) => str(i, 40)).filter(Boolean) : [];
     if (wanted.length > MAX_SCRIPTS_PER_PLAN) throw httpError(400, `No máximo ${MAX_SCRIPTS_PER_PLAN} scripts por importação.`);
     if (new Set(wanted).size !== wanted.length) throw httpError(400, 'Script selecionado mais de uma vez.');
@@ -202,8 +174,8 @@ function mount(app, { store, dataDir, SYS }) {
     let totalBatches = 0;
     for (const id of wanted) {
       const s = byId(id);
-      if (!(await content().exists(s))) throw httpError(400, `O conteúdo do script “${s.name}” (${s.file}) não foi encontrado.`);
-      const raw = await content().read(s);
+      if (!files.exists(s.file)) throw httpError(400, `O arquivo do script “${s.name}” (${s.file}) não foi encontrado.`);
+      const raw = files.read(s.file);
       const sub = applyVariables(raw, vars);
       if (sub.missing.length) {
         throw httpError(400, `O script “${s.name}” usa ${sub.missing.map((n) => `{{${n}}}`).join(', ')} sem valor definido. Preencha em “Executar scripts SQL depois de importar” (passo 2).`);
@@ -227,7 +199,7 @@ function mount(app, { store, dataDir, SYS }) {
 
   app.get('/api/scripts-variables', (req, res) => res.json(Object.entries(BUILTIN_VARS).map(([name, description]) => ({ name, description }))));
 
-  return { loadForPlan, publicScript };
+  return { files, loadForPlan, publicScript };
 }
 
 module.exports = { mount, BUILTIN_VARS, cleanUserVars, checkVarValue };

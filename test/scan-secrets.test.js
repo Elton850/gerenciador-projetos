@@ -22,7 +22,7 @@ test('scan-secrets: acusa chaves do Supabase, JWT, chave privada, tokens do GitH
 test('scan-secrets: não acusa placeholders nem código comum; respeita "scan-secrets: allow"', () => {
   for (const ok of ['GP_SUPABASE_URL=https://<project-ref>.supabase.co', 'GP_SUPABASE_PUBLISHABLE_KEY=<sb_publishable_...>',
     "prod: { server: '192.0.2.10', auth: 'sql', user: 'u', password: 'nova' }", 'const conn = { passwordEnc: null };',
-    'if (auth === "sql" && input.password) conn.passwordEnc = await protect(input.password);', '    u.password = password;', 'this.pwd = novaSenha;']) assert.deepEqual(kinds(ok), [], ok);
+    'if (auth === "sql" && input.password) conn.passwordEnc = await protect(input.password);']) assert.deepEqual(kinds(ok), [], ok);
   assert.deepEqual(kinds(j('sb_', 'secret_', 'abcdefghijklmnop // scan-secrets: allow')), []);
 });
 

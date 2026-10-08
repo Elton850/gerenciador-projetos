@@ -8,6 +8,7 @@ const { spawn } = require('child_process');
 const { httpError, str } = require('./util');
 const { WorkspaceFiles, checkRoot, checkName, isInside, hasGit } = require('./workspace-files');
 const git = require('./git');
+const gitActions = require('./git-actions');
 const crypto = require('crypto');
 
 const GIT_CONCURRENCY = 4;
@@ -218,10 +219,10 @@ function mount(app, { store, audit, SYS }) {
     const dir = projectDir(rel);
     if (!hasGit(dir)) return res.json({ available: true, version: gv.version, repo: false, project: rel });
     const r = new git.GitRepo(dir);
-    const [status, branches, remotes] = await Promise.all([r.status(), r.branches(), r.remotes()]);
+    const [status, branches, remotes, remoteBranches] = await Promise.all([r.status(), r.branches(), r.remotes(), r.remoteBranches()]);
     const prefix = files().rel(dir);
     for (const f of status.files) f.wsPath = prefix ? `${prefix}/${f.path}` : f.path; // caminho no Workspace (para marcar na árvore)
-    res.json({ available: true, version: gv.version, repo: true, project: rel, root: dir, status, branches, remotes, fetchedAt: r.lastFetch(), gitignore: fs.existsSync(path.join(dir, '.gitignore')) });
+    res.json({ available: true, version: gv.version, repo: true, project: rel, root: dir, status, branches, remotes, remoteBranches, fetchedAt: r.lastFetch(), gitignore: fs.existsSync(path.join(dir, '.gitignore')) });
   });
 
   // ---------- .gitignore do repositório ----------
@@ -364,6 +365,23 @@ function mount(app, { store, audit, SYS }) {
     logGit(req, 'git-conflito-resolvido', { repo: r.root, arquivo: file });
     res.json({ path: file });
   }));
+  // ---------- Ações rápidas (src/git-actions.js): prévia → execução do MESMO plano; nada de comando livre ----------
+  // A prévia não grava nada no repositório (pull e “voltar versão publicada” consultam o remoto com fetch, que só atualiza
+  // as referências remotas). A execução confere o token da prévia: se o repositório mudou, recusa (409 GIT_PLAN_CHANGED).
+  app.get('/api/wsm/git/stashes', gitRoute(async (req, res) => { res.json(await G(req).stashes()); }));
+  app.get('/api/wsm/git/reflog', gitRoute(async (req, res) => { res.json(await G(req).reflog(req.query.limit)); }));
+  app.get('/api/wsm/git/compare', gitRoute(async (req, res) => { res.json(await G(req).compare(str(req.query.a, 64), str(req.query.b, 64))); }));
+  app.get('/api/wsm/git/compare-diff', gitRoute(async (req, res) => {
+    res.json(await G(req).compareFileDiff(str(req.query.a, 64), str(req.query.b, 64), str(req.query.path, 1000), { origPath: req.query.orig ? str(req.query.orig, 1000) : undefined }));
+  }));
+  app.post('/api/wsm/git/action/preview', async (req, res) => { res.json(await gitActions.preview(G(req), str(req.body.action, 40), req.body.params)); });
+  app.post('/api/wsm/git/action/run', gitRoute(async (req, res) => {
+    const r = G(req);
+    const out = await gitActions.execute(r, str(req.body.action, 40), req.body.params, { token: str(req.body.token, 80), confirm: req.body.confirm === true, confirmText: str(req.body.confirmText, 200) });
+    logGit(req, out.conflict ? 'git-acao-conflito' : 'git-acao', { repo: r.root, acao: out.label, comandos: out.commands.join(' ; ').slice(0, 1500), conflitos: out.conflicts?.length });
+    res.json(out);
+  }));
+
   // Adicionar remote (git remote add) ou trocar a URL de um existente (git remote set-url). Trocar exige confirmação
   // explícita (confirmReplace), e um remote com o mesmo nome nunca é sobrescrito por um "adicionar".
   app.post('/api/wsm/git/remote', gitRoute(async (req, res) => {

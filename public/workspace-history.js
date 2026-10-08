@@ -189,6 +189,7 @@ function renderDetails(tab) {
       tab.incoming?.has(d.hash) ? h('span', { class: 'hist-flag pull' }, '↓ pull') : null, h('span', { class: 'spacer' }), close),
     h('pre', { class: 'hist-msg' }, d.message || '(sem mensagem)'),
     h('div', { class: 'hist-refs' }, refBadges(d.refs)),
+    gitCommitActions(d, tab.project),
     h('dl', { class: 'hist-dl' },
       h('dt', null, 'Hash'), h('dd', { class: 'mono' }, d.hash, ' ', h('button', { class: 'btn sm ghost', title: 'Copiar hash', onclick: () => navigator.clipboard.writeText(d.hash).then(() => toast('Hash copiado.'), fail) }, 'Copiar')),
       h('dt', null, 'Autor'), h('dd', { title: d.email }, `${d.author} · ${fmtWhen(d.date)}`),
@@ -200,7 +201,8 @@ function renderDetails(tab) {
       d.merge ? h('span', { class: 'muted small' }, ' (em relação ao 1º pai: o que o merge trouxe)') : null),
     h('div', { class: 'hist-files' }, d.files.map((f) => h('div', { class: `hist-file g-${f.status === 'A' ? 'A' : f.status === 'D' ? 'D' : f.status === 'R' ? 'R' : 'M'}`, title: `${f.origPath ? `${f.origPath} → ` : ''}${f.path}\nClique para ver as diferenças`, onclick: () => openCommitDiff(d, f, tab.project) },
       h('span', { class: 'ws-gcode' }, f.status), h('span', { class: 'grow ws-cname' }, f.path.split('/').pop(), h('span', { class: 'muted small' }, ` ${f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/')) : ''}`)),
-      f.binary ? h('span', { class: 'muted small' }, 'binário') : [h('span', { class: 'add small' }, `+${f.additions ?? 0}`), h('span', { class: 'del small' }, `−${f.deletions ?? 0}`)]))));
+      f.binary ? h('span', { class: 'muted small' }, 'binário') : [h('span', { class: 'add small' }, `+${f.additions ?? 0}`), h('span', { class: 'del small' }, `−${f.deletions ?? 0}`)],
+      f.status !== 'D' ? h('button', { class: 'btn xs ghost', title: 'Recuperar este arquivo como estava nesta versão (só ele; com prévia)', onclick: (e) => { e.stopPropagation(); gitPlan('restore-from', { commit: d.hash, path: f.path }, { project: tab.project }); } }, 'Recuperar') : null))));
 }
 
 // Diferenças de um arquivo NO commit (1º pai × commit).

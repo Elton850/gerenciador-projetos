@@ -75,7 +75,7 @@ function renderGitPanel() {
     p ? h('span', { class: 'wm-gitproj', title: g?.root || project }, displayName(p), sideOf ? h('span', { class: `wm-side ${sideOf === 'L' ? 'l' : 'r'}` }, SIDE_LABEL[sideOf]) : null,
       g?.repo ? h('span', { class: 'mono wm-gitbranch' }, g.status.branch || '(destacado)') : null) : h('span', { class: 'muted small' }, 'nenhum projeto'),
     h('span', { class: 'wm-tdiv' }),
-    tab('changes', ['Alterações', n ? h('span', { class: 'wm-n' }, String(n)) : null]), tab('history', 'Histórico'),
+    tab('changes', ['Alterações', n ? h('span', { class: 'wm-n' }, String(n)) : null]), tab('history', 'Histórico'), tab('actions', 'Ações rápidas'), tab('guide', 'Guia Git'),
     h('span', { class: 'spacer' }),
     isDual() ? ['L', 'R'].filter((s) => WM.panes[s].project && WM.panes[s].project !== project).map((s) => h('button', { class: 'btn sm ghost', title: `Mostrar o Git do projeto da ${SIDE_LABEL[s]}`, onclick: () => showGitOf(WM.panes[s].project, s) }, `Ver ${SIDE_LABEL[s]}: ${displayName(projectByPath(WM.panes[s].project))}`)) : null,
     project ? wmIconBtn('refresh', 'Atualizar o Git deste projeto', () => { loadGit(project); refreshSummary(project); if (WM.gitTab === 'history') refreshHistoryPanel(project, true); }) : null);
@@ -103,6 +103,8 @@ function renderGitPanel() {
       h('div', { class: 'muted small' }, `Git ${g.version}`)));
   }
   if (WM.gitTab === 'history') return renderHistoryPanel(body, project);
+  if (WM.gitTab === 'actions') return renderGitActions(body, project, g);
+  if (WM.gitTab === 'guide') return renderGitGuide(body);
   renderGitChanges(body, project, g);
 }
 
@@ -111,8 +113,9 @@ function renderGitChanges(body, project, g) {
   const ui = gitUi(project);
   const files = st.files;
   const selected = files.filter((f) => !f.conflict && !ui.unchecked.has(f.path));
-  const msg = h('textarea', { class: 'ws-commitmsg', rows: 3, placeholder: st.merging ? 'Mensagem do commit do merge (vazio = mensagem padrão do Git)' : 'Mensagem do commit (ex.: Ajusta migração PFUNC)', value: ui.msg, oninput: (e) => { ui.msg = e.target.value; } });
-  const commitBtn = h('button', { class: 'btn sm primary', disabled: st.conflicts.length > 0 || (!selected.length && !st.merging), onclick: (e) => doCommit(e.target, project) }, st.merging ? '✔ Concluir merge (commit)' : `✔ Commit (${selected.length})`);
+  const inProgress = st.merging || st.cherryPicking || st.reverting; // o Git exige o commit completo (sem escolher arquivos)
+  const msg = h('textarea', { class: 'ws-commitmsg', rows: 3, placeholder: inProgress ? 'Mensagem do commit (vazio = mensagem padrão do Git)' : 'Mensagem do commit (ex.: Ajusta migração PFUNC)', value: ui.msg, oninput: (e) => { ui.msg = e.target.value; } });
+  const commitBtn = h('button', { class: 'btn sm primary', disabled: st.conflicts.length > 0 || (!selected.length && !inProgress), onclick: (e) => doCommit(e.target, project) }, st.merging ? '✔ Concluir merge (commit)' : inProgress ? '✔ Concluir (commit)' : `✔ Commit (${selected.length})`);
   msg.addEventListener('keydown', (e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); commitBtn.click(); } });
   const allBox = h('input', { type: 'checkbox', title: 'Marcar/desmarcar todos', checked: files.length > 0 && selected.length === files.filter((f) => !f.conflict).length, onchange: (e) => {
     for (const f of files) if (e.target.checked) ui.unchecked.delete(f.path); else ui.unchecked.add(f.path);
@@ -143,6 +146,7 @@ function renderGitChanges(body, project, g) {
       st.merging || st.rebasing ? h('div', { class: 'box warn ws-mergebox' }, h('strong', null, st.rebasing ? 'Rebase em andamento.' : `Merge em andamento${st.conflicts.length ? ` — ${plural(st.conflicts.length, 'arquivo em conflito', 'arquivos em conflito')}` : ' — conflitos resolvidos, falta o commit'}.`),
         h('div', { class: 'small' }, st.conflicts.length ? 'Abra cada arquivo (VS Code), escolha o que fica entre <<<<<<< e >>>>>>>, salve e clique em “Resolvido”.' : 'Escreva (ou não) a mensagem e clique em “Concluir merge”.'),
         st.merging ? h('button', { class: 'btn sm danger', onclick: (e) => doMergeAbort(e.target, project) }, 'Abortar merge') : null) : null,
+      gitInProgressBox(project, st),
       h('div', { class: 'ws-commit' }, msg, h('div', { class: 'inline' }, commitBtn, h('span', { class: 'muted small' }, 'Ctrl+Enter · só os arquivos marcados')))),
     h('div', { class: 'wm-gitright' },
       h('div', { class: 'ws-changes-head' }, allBox, h('strong', null, `Alterações (${files.length})`), h('span', { class: 'muted small' }, 'clique para ver as diferenças')),
@@ -244,6 +248,7 @@ function changeRow(f, project) {
     f.conflict ? [h('button', { class: 'btn sm', disabled: !WM.info.vscode, title: 'Abrir no VS Code para resolver', onclick: (e) => { e.stopPropagation(); openExternal(f.wsPath, 'vscode'); } }, 'Abrir'),
       h('button', { class: 'btn sm primary', title: 'Marcar como resolvido (git add)', onclick: (e) => { e.stopPropagation(); doResolve(e.target, f, project); } }, 'Resolvido')]
       : f.code !== 'D' ? wmIconBtn('external', WM.info.vscode ? 'Abrir no VS Code' : 'Abrir com aplicativo padrão', (e) => { e.stopPropagation(); openExternal(f.wsPath, WM.info.vscode ? 'vscode' : 'default'); }) : null,
+    !f.conflict && !f.untracked && f.code !== 'A' && f.code !== 'R' ? h('button', { class: 'btn xs ghost', title: 'Voltar este arquivo: descarta as alterações locais dele (git restore) — com prévia', onclick: (e) => { e.stopPropagation(); gitPlan('restore-file', { path: f.path }, { project }); } }, 'Voltar') : null,
     h('span', { class: 'ws-gcode' }, f.code));
 }
 
@@ -261,7 +266,7 @@ async function doCommit(btn, project) {
   const ui = gitUi(project);
   const paths = st.files.filter((f) => !f.conflict && !ui.unchecked.has(f.path)).map((f) => f.path);
   const message = (ui.msg || '').trim() || (st.merging ? 'Merge' : '');
-  if (!message) return toast('Escreva a mensagem do commit.', 'error');
+  if (!message && !st.cherryPicking && !st.reverting) return toast('Escreva a mensagem do commit.', 'error');
   await gitAction(btn, async () => {
     const r = await gitApi('POST', '/commit', { message, paths }, project);
     ui.msg = '';
@@ -313,13 +318,17 @@ async function wsGitBranchesDialog(focus) {
     h('div', { class: 'grow' }, h('strong', { class: 'mono' }, b.name), b.current ? h('span', { class: 'pill ok', style: 'margin-left:8px' }, 'atual') : null,
       h('div', { class: 'small muted' }, b.upstream ? `${b.upstream} ${b.track}` : 'sem branch remota')),
     h('div', { class: 'actions' },
-      !b.current ? h('button', { class: 'btn sm primary', onclick: (e) => gitAction(e.target, async () => {
-        await gitApi('POST', '/checkout', { name: b.name }, project); md.close(); await afterGitChange(project); toast(`Agora na branch ${b.name}.`);
-      }) }, 'Trocar') : null,
+      !b.current ? h('button', { class: 'btn sm primary', onclick: (e) => gitAction(e.target, () => switchBranch(b.name, project, md)) }, 'Trocar') : null,
+      h('button', { class: 'btn sm ghost', title: 'git branch -m', onclick: () => renameBranchForm(project, b.name, md) }, 'Renomear'),
       !b.current ? h('button', { class: 'btn sm ghost', onclick: (e) => gitAction(e.target, async () => {
         if (!(await confirmDialog({ title: 'Excluir branch', message: `Excluir a branch local “${b.name}”? (O Git recusa se ela tiver commits que não estão em outra branch.)`, okText: 'Excluir', danger: true }))) return;
         await gitApi('POST', '/branch-delete', { name: b.name }, project); md.close(); await afterGitChange(project); toast(`Branch ${b.name} excluída.`);
       }) }, 'Excluir') : null))));
+  const localNames = new Set(g.branches.map((b) => b.name));
+  const remotes = (g.remoteBranches || []).map((rb) => ({ ...rb, local: rb.name.slice(rb.name.indexOf('/') + 1) })).filter((rb) => !localNames.has(rb.local));
+  const remoteList = remotes.length ? h('div', { class: 'stack' }, h('div', { class: 'lbl' }, 'Branches remotas (ainda sem cópia local)'), remotes.map((rb) => h('div', { class: 'row' },
+    h('div', { class: 'grow' }, h('strong', { class: 'mono' }, rb.name), h('div', { class: 'small muted' }, rb.date ? `último commit ${new Date(rb.date).toLocaleString('pt-BR')}` : '')),
+    h('div', { class: 'actions' }, h('button', { class: 'btn sm', title: `git switch ${rb.local} (cria a branch local acompanhando ${rb.name})`, onclick: (e) => gitAction(e.target, () => switchBranch(rb.local, project, md)) }, 'Abrir'))))) : null;
   const newName = h('input', { type: 'text', placeholder: 'ex.: feature/importacao' });
   const sw = h('input', { type: 'checkbox', checked: true });
   const create = h('button', { class: 'btn primary', onclick: (e) => gitAction(e.target, async () => {
@@ -337,12 +346,34 @@ async function wsGitBranchesDialog(focus) {
     h('div', { class: 'hint' }, 'Em conflito, o merge para e os arquivos aparecem em Alterações para resolver.'));
   const md = openModal({
     title: `Branches — ${displayName(projectByPath(project))}`, wide: true,
-    body: [h('div', { class: 'muted' }, `Branch atual: ${cur || '(HEAD destacado)'}`), dirtyNote, list,
+    body: [h('div', { class: 'muted' }, `Branch atual: ${cur || '(HEAD destacado)'}`), dirtyNote, list, remoteList,
       h('div', { class: 'box', style: 'display:grid;gap:8px' }, h('strong', null, 'Nova branch (a partir da atual)'), h('div', { class: 'inline' }, newName, create), h('label', { class: 'check' }, sw, ' trocar para ela')),
       mergeBox],
     footer: [h('button', { class: 'btn', onclick: () => md.close() }, 'Fechar')],
   });
   if (focus === 'merge') mergeBox.scrollIntoView(); else newName.focus();
+}
+
+// Trocar de branch. Com alterações locais que o Git não deixa levar junto, nada é trocado em silêncio: o usuário escolhe
+// guardar para depois (stash, com prévia) e trocar, salvar uma versão antes ou cancelar.
+async function switchBranch(name, project, md) {
+  try {
+    await gitApi('POST', '/checkout', { name }, project);
+  } catch (e) {
+    if (e.code !== 'GIT_DIRTY') throw e;
+    const k = await choiceDialog({ title: 'Alterações não salvas', message: `${e.message}\n\nO que fazer?`, choices: [
+      { key: 'cancel', label: 'Cancelar' }, { key: 'commit', label: 'Salvar versão (commit) antes' }, { key: 'stash', label: 'Guardar para depois e trocar', kind: 'primary' }] });
+    if (k === 'commit') { md?.close(); WM.gitTab = 'changes'; renderGitPanel(); return; }
+    if (k !== 'stash') return;
+    md?.close();
+    return gitPlan('stash-push', { message: `Antes de trocar para ${name}` }, { project, after: () => gitAction(null, () => switchBranch(name, project)) });
+  }
+  md?.close(); await afterGitChange(project); toast(`Agora na branch ${name}.`);
+}
+function renameBranchForm(project, from, md) {
+  const to = h('input', { type: 'text', spellcheck: 'false', value: from });
+  gaForm({ title: `Renomear branch “${from}”`, size: 'md', fields: [field('Novo nome', to)], onSubmit: () => { md?.close(); return gitPlan('branch-rename', { from, to: to.value.trim() }, { project }); } });
+  to.select();
 }
 
 async function gitLogDialog() {

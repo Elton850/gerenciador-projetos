@@ -169,7 +169,9 @@ const scriptsMod = scriptsApi.mount(app, { store, dataDir: DATA_DIR, SYS });
 // Checklist por estágio: modelo, execução por projeto e evidências (src/checklist-api.js; arquivos em <data>\evidencias).
 require('./src/checklist-api').mount(app, { store, audit, getProject, getIn, dataDir: DATA_DIR, SYS, publicProject });
 // Executar scripts de apoio pelo checklist, com as mesmas travas dos scripts pós-importação (src/script-run.js).
-require('./src/script-run').mount(app, { store, audit, db, getProject, dataDir: DATA_DIR, resolveConn, connPassword, publicProject });
+const scriptRun = require('./src/script-run').mount(app, { store, audit, db, getProject, dataDir: DATA_DIR, resolveConn, connPassword, publicProject });
+// Gerar arquivos de importação a partir do resultado de um script (mesma preparação/travas do checklist; transação sempre desfeita).
+require('./src/script-export-api').mount(app, { store, audit, db, connPassword, scriptRun, dataDir: DATA_DIR, SYS });
 // Controle de horas: jornada, cronômetros, apontamentos e exportação mensal (src/hours-api.js).
 require('./src/hours-api').mount(app, { store, audit, dataDir: DATA_DIR, SYS });
 // Backup e Restauração: exportar tudo para um arquivo .gpbackup e importar em outra máquina (src/backup.js)

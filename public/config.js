@@ -12,6 +12,9 @@ const SETTINGS_TABS = [
   { id: 'backup', label: 'Backup e Restauração', hint: 'Exportar tudo para um arquivo e importar em outra máquina (substitui os dados atuais).' },
   { id: 'geral', label: 'Geral', hint: 'Responsáveis (coordenadores e analistas), sistemas de origem e alertas de prazo.' },
 ];
+// Card das abas Atualizações e Backup e Restauração: espaçamento e ações padronizados (classes .cfg-* em styles.css).
+const cfgCard = (title, ...body) => { const c = card(title, null, ...body); c.classList.add('cfg-card'); return c; };
+
 function renderSettings(main) {
   const tabId = SETTINGS_TABS.some((t) => t.id === route().id) ? route().id : 'ciclos';
   const tab = SETTINGS_TABS.find((t) => t.id === tabId);

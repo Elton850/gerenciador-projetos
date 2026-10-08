@@ -21,8 +21,8 @@ const pkg = require(path.join(root, 'package.json'));
       if (fs.existsSync(dir)) for (const f of fs.readdirSync(dir)) if (!/^(pt-BR|en-US)\.pak$/.test(f)) fs.rmSync(path.join(dir, f), { force: true });
     }],
     ignore: [
-      /^\/(data|dist|app|test|scripts|\.git|\.claude)($|\/)/, /^\/assets\/gerar_icone\.py$/, /^\/(build_exe|iniciar)\.bat$/,
-      /^\/(README\.md|\.gitignore)$/, /\/prebuilds\/(darwin|linux)[^/]*($|\/)/,
+      /^\/(data|dist|app|test|scripts|\.git|\.claude|graphify-out)($|\/)/, /^\/assets\/gerar_icone\.py$/, /^\/(build_exe|iniciar)\.bat$/,
+      /^\/(README\.md|CLAUDE\.md|\.gitignore)$/, /\/prebuilds\/(darwin|linux)[^/]*($|\/)/,
     ],
     win32metadata: { CompanyName: '', FileDescription: NAME, ProductName: NAME, InternalName: NAME, OriginalFilename: `${NAME}.exe` },
   });

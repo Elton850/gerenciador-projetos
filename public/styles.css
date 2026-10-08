@@ -994,3 +994,19 @@ main.settings-mode { padding-top: 0; } main.settings-mode .page-head { padding-t
 /* Tabelas no editor de e-mail e botão principal "Abrir no Gmail" */
 .em-rich table { border-collapse: collapse; margin: 0 0 .6em; } .em-rich td, .em-rich th { min-width: 48px; vertical-align: top; }
 .em-gmail { display: inline-flex; align-items: center; gap: 6px; }
+
+/* Configurações → Atualizações e Backup e Restauração: mesmo ritmo vertical e blocos de tamanho uniforme em todos os cards */
+.cfg-slot { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.cfg-card .card-body { gap: 14px; }
+.cfg-card .card-body > p { margin: 0; line-height: 1.5; }
+.cfg-intro { color: var(--muted); font-size: 13px; max-width: 90ch; }
+.cfg-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+.cfg-stat { display: grid; gap: 3px; align-content: start; padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--s0); min-width: 0; overflow-wrap: anywhere; }
+.cfg-stat b { font-size: 16px; }
+.cfg-section { display: grid; gap: 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--s0); min-width: 0; }
+.cfg-fields { display: grid; gap: 12px; min-width: 0; }
+.cfg-card .cols2 { align-items: start; } /* campo com dica embaixo não estica o vizinho */
+.cfg-table { overflow: auto; max-height: 340px; border: 1px solid var(--border); border-radius: 10px; background: var(--s0); min-width: 0; }
+.cfg-path { padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--s0); min-width: 0; }
+.cfg-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 14px; border-top: 1px solid var(--border); }
+.cfg-actions .small { flex: 1 1 260px; }

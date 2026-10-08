@@ -22,7 +22,7 @@ function backupSummaryTable(sections, after) {
 }
 
 function backupExportCard() {
-  const info = h('div', { class: 'muted small' }, 'Carregando…');
+  const info = h('div', { class: 'cfg-path small muted' }, 'Carregando…');
   api('GET', '/api/backup/info').then((r) => {
     info.textContent = r.lastBackupAt ? `Último backup: ${fmtDateTime(r.lastBackupAt)}${r.lastBackupFile ? ` — ${r.lastBackupFile}` : ''}${r.lastBackupAppVersion ? ` (aplicativo ${r.lastBackupAppVersion})` : ''}` : 'Nenhum backup exportado ainda.';
   }).catch(() => { info.textContent = ''; });
@@ -30,7 +30,7 @@ function backupExportCard() {
   const p1 = h('input', { type: 'password', autocomplete: 'new-password', maxlength: 200 });
   const p2 = h('input', { type: 'password', autocomplete: 'new-password', maxlength: 200 });
   const credBox = h('input', { type: 'checkbox' });
-  const pwArea = h('div', { class: 'stack' },
+  const pwArea = h('div', { class: 'cfg-fields' },
     h('div', { class: 'cols2' }, field('Senha do backup', p1, 'Mínimo de 10 caracteres. Ela não é guardada: sem ela o backup não abre.'), field('Repita a senha', p2)),
     h('label', { class: 'inline small' }, credBox, h('span', null, 'Incluir as senhas das conexões de banco (vão cifradas dentro do backup e são protegidas de novo na outra máquina)')));
   protectBox.onchange = () => { pwArea.style.display = protectBox.checked ? '' : 'none'; if (!protectBox.checked) credBox.checked = false; };
@@ -53,11 +53,11 @@ function backupExportCard() {
       r.credentialProblems ? h('p', { class: 'small' }, `⚠ ${plural(r.credentialProblems, 'senha não pôde ser lida', 'senhas não puderam ser lidas')} neste computador e ficou de fora.`) : null,
       backupSummaryTable(r.sections)] });
   }, 'Preparando backup…');
-  return card('Backup', null,
-    h('p', { class: 'muted' }, 'Gera UM arquivo .gpbackup com tudo: projetos, ciclos, checklists, configurações, contatos, comunicações, documentos, scripts (com versões), evidências, horas e auditoria. Copie o arquivo para a outra máquina (pendrive, OneDrive, rede…) e importe lá.'),
+  return cfgCard('Backup',
+    h('p', { class: 'cfg-intro' }, 'Gera UM arquivo .gpbackup com tudo: projetos, ciclos, checklists, configurações, contatos, comunicações, documentos, scripts (com versões), evidências, horas e auditoria. Copie o arquivo para a outra máquina (pendrive, OneDrive, rede…) e importe lá.'),
     info,
-    h('label', { class: 'inline' }, protectBox, h('span', null, 'Proteger backup com senha (recomendado)')),
-    pwArea, h('div', { class: 'inline' }, btn));
+    h('div', { class: 'cfg-section' }, h('label', { class: 'inline' }, protectBox, h('span', null, 'Proteger backup com senha (recomendado)')), pwArea),
+    h('div', { class: 'cfg-actions' }, btn));
 }
 
 function backupImportCard() {
@@ -73,9 +73,9 @@ function backupImportCard() {
     }
     backupConfirmImport(r);
   }, 'Validando backup…');
-  return card('Restauração', null,
-    h('p', { class: 'muted' }, 'Substitui TODOS os dados desta aplicação pelos dados do backup. Antes, um backup automático do estado atual é salvo; se algo falhar, nada muda.'),
-    h('div', { class: 'inline' }, btn));
+  return cfgCard('Restauração',
+    h('div', { class: 'box warn' }, 'Substitui TODOS os dados desta aplicação pelos dados do backup. Antes, um backup automático do estado atual é salvo; se algo falhar, nada muda.'),
+    h('div', { class: 'cfg-actions' }, btn));
 }
 
 function backupAskPassword(file) {

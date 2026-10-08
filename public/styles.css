@@ -1010,3 +1010,23 @@ main.settings-mode { padding-top: 0; } main.settings-mode .page-head { padding-t
 .cfg-path { padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--s0); min-width: 0; }
 .cfg-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 14px; border-top: 1px solid var(--border); }
 .cfg-actions .small { flex: 1 1 260px; }
+
+/* Workspace → Git → Ações rápidas e Guia Git (public/workspace-git-actions.js) */
+.ga-wrap { display: grid; gap: 16px; padding: 12px 14px 18px; }
+.ga-sec { display: grid; gap: 8px; }
+.ga-sechead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.ga-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; }
+.ga-card { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--s0); min-width: 0; }
+.ga-card .grow { flex: 1; }
+.ga-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.ga-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ga-cmdtag { font: 11px/1.3 var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.ga-planhead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ga-kv { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 6px 12px; margin: 0; } .ga-kv dt { color: var(--muted); font-size: 12px; font-weight: 700; text-transform: uppercase; } .ga-kv dd { margin: 0; overflow-wrap: anywhere; }
+.ga-list { max-height: 220px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--s0); padding: 6px 10px; display: grid; gap: 2px; }
+.ga-cmd summary { cursor: pointer; color: var(--accent); font-weight: 700; font-size: 12.5px; }
+.ga-cmd pre { margin-top: 6px; }
+.ga-picker select { flex: 1 1 320px; min-width: 0; }
+.ga-commitacts { display: flex; flex-wrap: wrap; gap: 6px; }
+.ga-guide td { white-space: normal; vertical-align: top; }
+.ga-flow { margin: 0; padding-left: 22px; display: grid; gap: 4px; }

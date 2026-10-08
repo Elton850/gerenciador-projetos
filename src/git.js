@@ -31,13 +31,13 @@ function findGit() {
 }
 
 // Executa o git com argumentos fixos. Nunca lança por código de saída ≠ 0: devolve { code, stdout, stderr }.
-function run(cwd, args, { timeoutMs = LOCAL_TIMEOUT, input, raw = false } = {}) {
+function run(cwd, args, { timeoutMs = LOCAL_TIMEOUT, input, raw = false, env } = {}) {
   const exe = findGit();
   if (!exe) return Promise.reject(httpError(503, 'Git não encontrado neste computador. Instale o Git para Windows (git-scm.com) e reabra o app.', { code: 'GIT_MISSING' }));
   return new Promise((resolve, reject) => {
     const child = spawn(exe, ['-c', 'core.quotepath=off', '-c', 'color.ui=never', '-c', 'core.pager=cat', ...args], {
       cwd, windowsHide: true, shell: false,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0', LANG: process.env.LANG || 'pt_BR.UTF-8' },
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0', LANG: process.env.LANG || 'pt_BR.UTF-8', ...(env || {}) },
     });
     const out = [];
     const err = [];
@@ -133,6 +133,8 @@ class GitRepo {
     }
     st.merging = fs.existsSync(path.join(this.root, '.git', 'MERGE_HEAD'));
     st.rebasing = fs.existsSync(path.join(this.root, '.git', 'rebase-merge')) || fs.existsSync(path.join(this.root, '.git', 'rebase-apply'));
+    st.cherryPicking = fs.existsSync(path.join(this.root, '.git', 'CHERRY_PICK_HEAD'));
+    st.reverting = fs.existsSync(path.join(this.root, '.git', 'REVERT_HEAD'));
     return st;
   }
 
@@ -264,6 +266,46 @@ class GitRepo {
     return { path: p, origPath: origPath || null, original, modified, inHead: head.code === 0, exists };
   }
 
+  // Alterações guardadas (git stash list), da mais nova para a mais antiga.
+  async stashes() {
+    const r = await run(this.root, ['stash', 'list', '--format=%gd%x1f%H%x1f%cI%x1f%gs']);
+    if (r.code !== 0) return [];
+    return r.stdout.split('\n').filter(Boolean).map((l) => { const [ref, hash, date, message] = l.split('\x1f'); return { ref, hash, date, message }; });
+  }
+
+  // Por onde o HEAD passou (git reflog): commits que "sumiram" depois de reset, troca de branch etc. continuam aqui.
+  async reflog(limit = 100) {
+    const n = Math.max(1, Math.min(500, Number(limit) || 100));
+    const r = await run(this.root, ['log', '-g', `-n${n}`, '--date=iso-strict', '--format=%H%x1f%gD%x1f%gd%x1f%gs%x1f%s', 'HEAD']);
+    if (r.code !== 0) return [];
+    return r.stdout.split('\n').filter(Boolean).map((l) => {
+      const [hash, ref, refDate, action, subject] = l.split('\x1f');
+      const m = String(refDate).match(/\{(.+)\}$/);
+      return { hash, short: hash.slice(0, 7), ref, date: m ? m[1] : null, action, subject };
+    });
+  }
+
+  // Arquivos diferentes entre duas versões (git diff --name-status A B), com +/− por arquivo.
+  async compare(a, b) {
+    const [x, y] = [checkHash(a), checkHash(b)];
+    const [num, names] = await Promise.all([
+      ok(this.root, ['diff', '-M', '--numstat', '-z', x, y, '--']),
+      ok(this.root, ['diff', '-M', '--name-status', '-z', x, y, '--']),
+    ]);
+    const files = parseNameStatus(names.stdout);
+    const stats = parseNumstat(num.stdout);
+    for (const f of files) { const s = stats.get(f.path); if (s) Object.assign(f, s); }
+    return { a: x, b: y, files: files.slice(0, 2000), total: files.length };
+  }
+  async compareFileDiff(a, b, rel, { origPath } = {}) {
+    const [x, y] = [checkHash(a), checkHash(b)];
+    const p = this.checkPath(rel);
+    const before = origPath ? this.checkPath(origPath) : p;
+    const show = async (rev, file) => { const r = await run(this.root, ['show', `${rev}:${file}`], { raw: true }); return r.code === 0 ? decodeSqlBuffer(r.stdout.subarray(0, MAX_DIFF_BYTES)).replace(/\r\n?/g, '\n') : ''; };
+    const [original, modified] = await Promise.all([show(x, before), show(y, p)]);
+    return { path: p, a: x, b: y, original, modified };
+  }
+
   // Quando foi o último contato com o remoto (git fetch/pull): o "atrás" (↓) do status só é atual depois dele.
   lastFetch() {
     try { return fs.statSync(path.join(this.root, '.git', 'FETCH_HEAD')).mtimeMs; } catch { return null; }
@@ -281,19 +323,21 @@ class GitRepo {
   // ---- Escrita (cada uma é uma ação específica) ----
   async init() { const r = await ok(this.root, ['init']); return r.stdout.trim(); }
 
-  // Commit SÓ dos arquivos escolhidos (git add -A -- <arquivos> e git commit -- <arquivos>). Durante um merge o Git
-  // exige commitar tudo o que foi resolvido, então nesse caso os arquivos marcados são adicionados e o commit é completo.
+  // Commit SÓ dos arquivos escolhidos (git add -A -- <arquivos> e git commit -- <arquivos>). Durante um merge, cherry-pick ou
+  // revert o Git exige commitar tudo o que foi resolvido (recusa commit parcial), então nesses casos os arquivos marcados são
+  // adicionados e o commit é completo; sem mensagem, fica a que o Git preparou (--no-edit).
   async commit(message, paths) {
     const msg = String(message ?? '').trim();
-    if (!msg) throw httpError(400, 'Escreva a mensagem do commit.');
-    if (msg.length > 5000) throw httpError(400, 'Mensagem do commit longa demais.');
     const st = await this.status();
+    const inProgress = st.merging || st.cherryPicking || st.reverting;
+    if (!msg && !inProgress) throw httpError(400, 'Escreva a mensagem do commit.');
+    if (msg.length > 5000) throw httpError(400, 'Mensagem do commit longa demais.');
     const list = [...new Set((paths || []).map((p) => this.checkPath(p)))];
-    if (!list.length && !st.merging) throw httpError(400, 'Selecione ao menos um arquivo para o commit.');
+    if (!list.length && !inProgress) throw httpError(400, 'Selecione ao menos um arquivo para o commit.');
     if (st.conflicts.length) throw httpError(409, `Ainda há arquivos em conflito: ${st.conflicts.join(', ')}. Resolva e marque como resolvidos antes do commit.`, { code: 'GIT_CONFLICT' });
     if (list.length) await ok(this.root, ['add', '-A', '--', ...list]);
-    const args = st.merging ? ['commit', '-F', '-'] : ['commit', '-F', '-', '--', ...list];
-    const r = await run(this.root, args, { input: msg });
+    const args = inProgress ? (msg ? ['commit', '-F', '-'] : ['commit', '--no-edit']) : ['commit', '-F', '-', '--', ...list];
+    const r = await run(this.root, args, { input: msg || undefined });
     if (r.code !== 0) {
       if (/Please tell me who you are|user\.email|user\.name/i.test(r.stderr)) {
         throw httpError(400, 'O Git não sabe quem é o autor dos commits. Configure uma vez (no Prompt): git config --global user.name "Seu Nome"  e  git config --global user.email "voce@exemplo.com".', { code: 'GIT_IDENTITY', gitOutput: r.stderr });
@@ -301,7 +345,7 @@ class GitRepo {
       throw gitError(r);
     }
     const head = await ok(this.root, ['rev-parse', '--short', 'HEAD']);
-    return { hash: head.stdout.trim(), output: `${r.stdout}\n${r.stderr}`.trim(), files: list.length, merge: st.merging };
+    return { hash: head.stdout.trim(), output: `${r.stdout}\n${r.stderr}`.trim(), files: list.length, merge: inProgress };
   }
 
   async pull() {
@@ -499,4 +543,4 @@ async function toplevel(dir) {
   return r.code === 0 ? path.resolve(r.stdout.trim()) : null;
 }
 
-module.exports = { GitRepo, version, toplevel, clone, run, checkBranchName, checkRemoteName, checkRemoteUrl, safeUrl, webUrlOf, findGit, NETWORK_TIMEOUT };
+module.exports = { GitRepo, version, toplevel, clone, run, ok, gitError, friendlyNetwork, checkHash, checkBranchName, checkRemoteName, checkRemoteUrl, safeUrl, webUrlOf, findGit, NETWORK_TIMEOUT };

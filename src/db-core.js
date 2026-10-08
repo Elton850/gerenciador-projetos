@@ -181,14 +181,19 @@ async function executePlan(conn, password, plan, { dryRun = false, allowDestruct
 // ---------- Execução de um script de apoio (checklist) ----------
 // Mesma trava dos scripts pós-importação (assertStatementSafe, revalidada aqui dentro do processo-filho) e uma única transação:
 // qualquer erro desfaz tudo o que o script fez. Devolve os resultados com limites (a tela mostra; nada vai para a auditoria).
+// Opcional (Gerar arquivos de importação): `limits` maiores (até EXPORT_MAX) e `rollback: true` = desfaz no final mesmo sem erro.
 const RUN_LIMITS = { sets: 20, rows: 1000, cols: 100, cell: 2000, messages: 500 };
-async function runScript(conn, password, { name, batches, allowDestructiveScripts = false }) {
+const EXPORT_MAX = { rows: 200000, cell: 1000000 };
+async function runScript(conn, password, { name, batches, allowDestructiveScripts = false, limits = null, rollback = false }) {
+  const L = { ...RUN_LIMITS };
+  if (limits) for (const k of ['rows', 'cell']) if (Number(limits[k]) > 0) L[k] = Math.min(Number(limits[k]), EXPORT_MAX[k]);
   batches.forEach((b, i) => assertStatementSafe({ kind: 'userscript', sql: b.sql, script: name, batch: i + 1, of: batches.length }, { allowDestructiveScripts }));
   return withPool(conn, password, async (h) => {
     const who = await identity(h);
     if (conn.database && who.database.toLowerCase() !== conn.database.toLowerCase()) throw httpError(400, `A conexão abriu o banco "${who.database}", diferente do escolhido ("${conn.database}"). Nada foi executado.`);
-    const out = { identity: who, results: [], messages: [], affected: 0, returned: 0, batches: 0, truncated: false };
-    const cell = (v) => (v === null || v === undefined ? null : v instanceof Date ? v.toISOString() : Buffer.isBuffer(v) ? `0x${v.toString('hex').slice(0, 64)}${v.length > 32 ? '…' : ''}` : String(v).slice(0, RUN_LIMITS.cell));
+    const out = { identity: who, results: [], messages: [], affected: 0, returned: 0, batches: 0, truncated: false, cellTruncated: false, rolledBack: false };
+    const cut = (t, n) => { if (t.length > n) out.cellTruncated = true; return t.slice(0, n); };
+    const cell = (v) => (v === null || v === undefined ? null : v instanceof Date ? v.toISOString() : Buffer.isBuffer(v) ? `0x${cut(v.toString('hex'), 64)}${v.length > 32 ? '…' : ''}` : cut(String(v), L.cell));
     const tx = new h.sql.Transaction(h.pool);
     await tx.begin();
     let cur = 0;
@@ -196,22 +201,22 @@ async function runScript(conn, password, { name, batches, allowDestructiveScript
       for (let i = 0; i < batches.length; i++) {
         cur = i;
         const req = new h.sql.Request(tx);
-        req.on('info', (m) => { if (out.messages.length < RUN_LIMITS.messages) out.messages.push(String(m?.message || '').replace(ODBC_PREFIX, '').slice(0, 2000)); else out.truncated = true; });
+        req.on('info', (m) => { if (out.messages.length < L.messages) out.messages.push(String(m?.message || '').replace(ODBC_PREFIX, '').slice(0, 2000)); else out.truncated = true; });
         const r = await req.batch(batches[i].sql);
         out.batches++;
         let returned = 0;
         for (const rs of r.recordsets || []) {
           returned += rs.length;
-          if (out.results.length >= RUN_LIMITS.sets) { out.truncated = true; continue; }
+          if (out.results.length >= L.sets) { out.truncated = true; continue; }
           const allCols = Object.keys(rs.columns || (rs[0] || {}));
-          const columns = allCols.slice(0, RUN_LIMITS.cols);
-          out.results.push({ columns, rows: rs.slice(0, RUN_LIMITS.rows).map((row) => columns.map((c) => cell(row[c]))), total: rs.length, hiddenColumns: allCols.length - columns.length });
+          const columns = allCols.slice(0, L.cols);
+          out.results.push({ columns, rows: rs.slice(0, L.rows).map((row) => columns.map((c) => cell(row[c]))), total: rs.length, hiddenColumns: allCols.length - columns.length });
         }
         out.returned += returned;
         // rowsAffected também conta as linhas devolvidas por SELECT: o que sobra são as afetadas por INSERT/UPDATE/DELETE/MERGE.
         out.affected += Math.max(0, (r.rowsAffected || []).reduce((n, x) => n + (Number(x) || 0), 0) - returned);
       }
-      await tx.commit();
+      if (rollback) { await tx.rollback(); out.rolledBack = true; } else await tx.commit();
       return out;
     } catch (e) {
       try { await tx.rollback(); } catch { /* já encerrada */ }
@@ -224,4 +229,4 @@ async function runScript(conn, password, { name, batches, allowDestructiveScript
   });
 }
 
-module.exports = { isLoopback, validateConnection, testConnection, precheck, executePlan, runScript, friendly, label, setOnConnected };
+module.exports = { isLoopback, validateConnection, testConnection, precheck, executePlan, runScript, friendly, label, setOnConnected, EXPORT_MAX };

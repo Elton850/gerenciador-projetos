@@ -55,6 +55,7 @@ function scriptRow(s) {
       h('span', { class: 'small muted mono' }, `${s.file}${s.exists ? ` · ${fmtSize(s.size)} · ${plural(a?.batches ?? 0, 'lote', 'lotes')} · alterado em ${fmtDateTime(s.mtimeMs ? new Date(s.mtimeMs).toISOString() : s.updatedAt)}` : ''}`)),
     h('div', { class: 'actions' },
       h('button', { class: 'btn sm primary', disabled: !s.exists, onclick: () => scriptForm(s) }, 'Editar'),
+      h('button', { class: 'btn sm', disabled: !s.exists, title: 'Executar e gravar o resultado em arquivos de importação', onclick: () => { exportScriptId = s.id; location.hash = '#/scripts/export'; } }, 'Gerar arquivos'),
       h('button', { class: 'btn sm', disabled: !s.exists, title: 'Abrir no programa padrão para .sql (ex.: SSMS)', onclick: () => api('POST', `/api/scripts/${s.id}/open`).catch(fail) }, 'Abrir arquivo'),
       h('button', { class: 'btn sm ghost', onclick: async () => {
         if (await confirmDialog({ title: 'Remover script', message: `Remover “${s.name}”? O arquivo é movido para a pasta “.removidos” dentro da pasta de scripts (não é apagado). Importações já configuradas deixam de executá-lo.`, okText: 'Remover', danger: true })) {
@@ -120,6 +121,7 @@ async function importScriptFile() {
 }
 
 async function renderScripts(main) {
+  if (route().id === 'export') return renderScriptExport(main);
   main.append(h('div', { class: 'page' }, h('div', { class: 'empty' }, 'Carregando…')));
   try { await Promise.all([loadScripts(), loadBuiltinVars()]); } catch (e) { return fail(e); }
   if (route().name !== 'scripts') return; // o usuário trocou de tela enquanto carregava
@@ -129,6 +131,7 @@ async function renderScripts(main) {
     h('div', { class: 'inline' },
       h('button', { class: 'btn', onclick: () => api('POST', '/api/scripts-folder/open').catch(fail) }, 'Abrir pasta'),
       h('button', { class: 'btn', onclick: importScriptFile }, 'Importar .sql…'),
+      h('button', { class: 'btn', title: 'Executar um script e gravar o resultado em arquivos de importação', onclick: () => { exportScriptId = null; location.hash = '#/scripts/export'; } }, 'Gerar arquivos de importação'),
       h('button', { class: 'btn primary', onclick: () => scriptForm() }, '+ Novo script'))),
     h('div', { class: 'box' }, h('strong', null, 'Como funciona a segurança'),
       h('ul', null,

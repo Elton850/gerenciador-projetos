@@ -358,4 +358,4 @@ class WorkspaceFiles {
   }
 }
 
-module.exports = { WorkspaceFiles, checkRoot, checkName, isInside, hasGit, sendToRecycleBin };
+module.exports = { WorkspaceFiles, checkRoot, checkName, isInside, hasGit, sendToRecycleBin, freeName };

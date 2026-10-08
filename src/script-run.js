@@ -59,23 +59,25 @@ function mount(app, { store, audit, db, getProject, dataDir, resolveConn, connPa
     throw httpError(400, 'Escolha a conexão.');
   }
 
-  app.post('/api/projects/:id/checklists/:stepId/items/:iid/run', async (req, res) => {
-    const p = getProject(req.params.id);
-    const inst = p.checklists.find((c) => c.stepId === req.params.stepId) || (() => { throw httpError(404, 'Checklist deste passo ainda não foi iniciado.'); })();
-    const item = inst.items.find((i) => i.id === req.params.iid) || (() => { throw httpError(404, 'Item não encontrado.'); })();
-    const scriptId = str(req.body.scriptId, 40);
-    if (!item.scriptIds.includes(scriptId)) throw httpError(400, 'Este script não está relacionado a este item do checklist.');
+  // Conexões cadastradas (sem projeto): usadas por “Gerar arquivos de importação”.
+  function connTargets() {
+    const out = data().connections.map((c) => ({ key: `conn:${c.id}`, label: c.name, group: 'Conexões cadastradas', env: c.env, envLabel: ENV_LABEL[c.env], server: db.label(c), database: c.database || '', needsDatabase: !c.database }));
+    const preferred = data().settings.defaultConnectionId && `conn:${data().settings.defaultConnectionId}`;
+    return { targets: out, defaultKey: (preferred && out.some((t) => t.key === preferred) ? preferred : null) || out.find((t) => t.env === 'local')?.key || out[0]?.key || null };
+  }
+
+  // Lê o script do ARQUIVO (nunca da tela), troca as variáveis e aplica as mesmas travas e a mesma confirmação por token.
+  // Devolve os lotes prontos para db.runScript. `kind` entra no token (a confirmação de uma tela não vale para a outra).
+  function prepareRun({ scriptId, t, body, project = null, kind = 'run-v1' }) {
     const s = data().scripts.find((x) => x.id === scriptId) || (() => { throw httpError(404, 'O script foi removido da lista de Scripts SQL.'); })();
     if (!files.exists(s.file)) throw httpError(404, `O arquivo do script (${s.file}) não foi encontrado.`);
-    const t = resolveTarget(p, req.body.target, req.body.database);
-
-    // Texto lido do ARQUIVO agora (nunca da tela) + variáveis: automáticas do destino, as demais informadas na janela.
     const raw = files.read(s.file);
     const vars = {
-      ...cleanUserVars(req.body.vars),
-      BANCO: t.conn.database, SCHEMA: 'dbo', SERVIDOR: t.conn.server, AMBIENTE: t.local ? 'LOCAL' : 'PRODUCAO', PROJETO: p.name, BASE: t.baseName,
+      ...cleanUserVars(body.vars),
+      BANCO: t.conn.database, SCHEMA: 'dbo', SERVIDOR: t.conn.server, AMBIENTE: t.local ? 'LOCAL' : 'PRODUCAO', PROJETO: project?.name, BASE: t.baseName,
     };
     const sub = applyVariables(raw, vars);
+    if (!project && sub.missing.includes('PROJETO')) throw httpError(400, 'O script usa {{PROJETO}}, que só existe na execução pelo checklist de um projeto.');
     if (sub.missing.length) throw httpError(400, `Informe o valor de ${sub.missing.map((n) => `{{${n}}}`).join(', ')}.`, { code: 'SCRIPT_VARS', missing: sub.missing.filter((n) => !BUILTIN_VARS[n]) });
     for (const [n, v] of Object.entries(sub.used)) checkVarValue(n, v);
     const { batches, analysis } = prepareScript(sub.text);
@@ -95,10 +97,21 @@ function mount(app, { store, audit, db, getProject, dataDir, resolveConn, connPa
       ...(!t.local && analysis.dynamic ? ['Usa SQL dinâmico (EXEC / sp_executesql): o app não consegue conferir tudo o que será executado'] : []),
     ];
     const textSha = sha(sub.text);
-    const token = sha(JSON.stringify(['run-v1', scriptId, textSha, req.body.target, t.conn.server, t.conn.database]));
-    if (reasons.length && req.body.confirmToken !== token) {
+    const token = sha(JSON.stringify([kind, scriptId, textSha, body.target, t.conn.server, t.conn.database]));
+    if (reasons.length && body.confirmToken !== token) {
       throw httpError(409, 'Confirme a execução.', { code: 'SCRIPT_CONFIRM', confirm: { token, reasons, target: t.label, env: ENV_LABEL[t.env] || t.env, server: db.label(t.conn), database: t.conn.database } });
     }
+    return { s, batches, destructive, textSha };
+  }
+
+  app.post('/api/projects/:id/checklists/:stepId/items/:iid/run', async (req, res) => {
+    const p = getProject(req.params.id);
+    const inst = p.checklists.find((c) => c.stepId === req.params.stepId) || (() => { throw httpError(404, 'Checklist deste passo ainda não foi iniciado.'); })();
+    const item = inst.items.find((i) => i.id === req.params.iid) || (() => { throw httpError(404, 'Item não encontrado.'); })();
+    const scriptId = str(req.body.scriptId, 40);
+    if (!item.scriptIds.includes(scriptId)) throw httpError(400, 'Este script não está relacionado a este item do checklist.');
+    const t = resolveTarget(p, req.body.target, req.body.database);
+    const { s, batches, destructive, textSha } = prepareRun({ scriptId, t, body: req.body, project: p });
 
     // Cancelamento: se a janela fechar/cancelar, a requisição cai e o processo-filho é encerrado (o SQL Server desfaz a transação).
     const ac = new AbortController();
@@ -134,7 +147,7 @@ function mount(app, { store, audit, db, getProject, dataDir, resolveConn, connPa
     res.json({ user: analysis.variables.filter((n) => !BUILTIN_VARS[n]), builtin: analysis.variables.filter((n) => BUILTIN_VARS[n]) });
   });
 
-  return { targets };
+  return { targets, connTargets, resolveTarget, prepareRun, ENV_LABEL };
 }
 
 module.exports = { mount };

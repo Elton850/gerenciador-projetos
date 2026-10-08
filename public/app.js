@@ -810,7 +810,7 @@ const ACTION_LABEL = { 'email-modelo-criado': 'E-mail: modelo criado', 'email-mo
   'horas-criada': 'Horas: apontamento manual', 'horas-editada': 'Horas: apontamento editado', 'horas-excluida': 'Horas: apontamento excluído', 'horas-descartada': 'Horas: atividade descartada',
   'horas-exportada': 'Horas: planilha exportada', 'horas-config': 'Horas: jornada alterada',
   'ciclo-alterado': 'Ciclo alterado', 'ciclo-aplicado': 'Ciclo aplicado ao projeto', 'conexao-cadastrada': 'Conexão cadastrada', 'conexao-alterada': 'Conexão alterada', 'conexao-excluida': 'Conexão excluída',
-  'script-executado': 'Script executado (checklist)', 'script-falhou': 'Script com erro (checklist)', 'gitignore-salvo': '.gitignore salvo' };
+  'script-executado': 'Script executado (checklist)', 'script-falhou': 'Script com erro (checklist)', 'exportacao-script-executado': 'Gerar arquivos: script executado (desfeito)', 'exportacao-script-falhou': 'Gerar arquivos: script com erro', 'exportacao-arquivos-gerados': 'Gerar arquivos: arquivos gravados', 'gitignore-salvo': '.gitignore salvo' };
 // Tipo e situação de cada ação (só para agrupar, filtrar e colorir; o registro em si não muda).
 const AUDIT_TYPES = [
   ['import', 'Importação', /^(plano-gerado|execucao-iniciada|importacao-|simulacao-|lote-|depara-|download-depara)/],

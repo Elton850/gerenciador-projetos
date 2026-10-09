@@ -174,6 +174,8 @@ const scriptRun = require('./src/script-run').mount(app, { store, audit, db, get
 require('./src/script-export-api').mount(app, { store, audit, db, connPassword, scriptRun, dataDir: DATA_DIR, SYS });
 // Controle de horas: jornada, cronômetros, apontamentos e exportação mensal (src/hours-api.js).
 require('./src/hours-api').mount(app, { store, audit, dataDir: DATA_DIR, SYS });
+// Lembretes: avulsos (data.reminders) + prazos do cronograma com lembrete (marco.reminder) numa lista só (src/reminders-api.js).
+require('./src/reminders-api').mount(app, { store });
 // Backup e Restauração: exportar tudo para um arquivo .gpbackup e importar em outra máquina (src/backup.js)
 require('./src/backup-api').mount(app, { store, audit, dataDir: DATA_DIR, protect, unprotect, backupsDir: process.env.GP_BACKUP_DIR, appVersion: require('./package.json').version });
 // Atualizações do aplicativo e sincronização de configurações pelo canal de publicação (src/updates.js, src/config-sync.js)
@@ -267,16 +269,28 @@ function cleanMilestone(b) {
   if (alert !== null && (!Number.isInteger(alert) || alert < 0 || alert > 365)) throw httpError(400, 'Dias de alerta inválido.');
   return { title, dueDate: b.dueDate, alertDays: alert, done: !!b.done, note: str(b.note, 500) };
 }
+// Lembrete do prazo (src/reminders.js): só a hora do aviso + estado (adiado/dispensado/avisado). Data = dueDate e antecedência =
+// alertDays do próprio prazo (nada duplicado). No corpo: ausente = mantém; null/{on:false} = desliga; {on, time} = liga/ajusta.
+function cleanMilestoneReminder(b, prev) {
+  if (!Object.prototype.hasOwnProperty.call(b, 'reminder')) return prev || null;
+  if (!b.reminder || b.reminder.on === false) return null;
+  const time = require('./src/reminders').cleanTime(b.reminder.time);
+  return prev ? { ...prev, time } : { time };
+}
 
 app.post('/api/projects/:id/milestones', (req, res) => {
   const p = getProject(req.params.id);
-  p.milestones.push({ id: uid(), ...cleanMilestone(req.body) });
+  p.milestones.push({ id: uid(), ...cleanMilestone(req.body), reminder: cleanMilestoneReminder(req.body, null) });
   store.save();
   res.json(publicProject(p));
 });
 app.put('/api/projects/:id/milestones/:mid', (req, res) => {
   const p = getProject(req.params.id);
-  Object.assign(getIn(p.milestones, req.params.mid, 'Prazo'), cleanMilestone(req.body));
+  const m = getIn(p.milestones, req.params.mid, 'Prazo');
+  const prevDue = m.dueDate;
+  Object.assign(m, cleanMilestone(req.body));
+  m.reminder = cleanMilestoneReminder(req.body, m.reminder);
+  if (m.reminder && prevDue !== m.dueDate) m.reminder.snoozeUntil = null; // data nova: o lembrete acompanha (e um aviso dispensado volta a valer)
   store.save();
   res.json(publicProject(p));
 });

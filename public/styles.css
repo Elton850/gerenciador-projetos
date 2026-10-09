@@ -1030,3 +1030,14 @@ main.settings-mode { padding-top: 0; } main.settings-mode .page-head { padding-t
 .ga-commitacts { display: flex; flex-wrap: wrap; gap: 6px; }
 .ga-guide td { white-space: normal; vertical-align: top; }
 .ga-flow { margin: 0; padding-left: 22px; display: grid; gap: 4px; }
+
+/* Lembretes (public/reminders.js): cards na Visão Geral e na página #/reminders */
+.rem-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; }
+.rem-card { display: flex; flex-direction: column; gap: 5px; padding: 10px 12px; border: 1px solid var(--border); border-left: 3px solid var(--border); border-radius: 10px; background: var(--s0); min-width: 0; }
+.rem-card.st-overdue { border-left-color: var(--pink); } .rem-card.st-today { border-left-color: var(--orange); } .rem-card.st-soon { border-left-color: var(--cyan); } .rem-card.st-done { opacity: .7; }
+.rem-top { display: flex; flex-wrap: wrap; gap: 6px; }
+.rem-title { overflow-wrap: anywhere; }
+.rem-count { font-weight: 700; font-size: 15px; }
+.rem-card.st-overdue .rem-count { color: var(--bad-text); } .rem-card.st-today .rem-count { color: var(--warn-text); }
+.rem-desc { white-space: pre-wrap; overflow-wrap: anywhere; }
+.rem-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; padding-top: 4px; }

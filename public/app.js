@@ -21,6 +21,7 @@ function h(tag, props, ...children) {
 const ICONS = {
   home: ['M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z'],
   clock: ['M12 7v5l3 2', [12, 12, 9]],
+  bell: ['M6 9a6 6 0 0 1 12 0c0 6.5 2.5 8 2.5 8h-17S6 15.5 6 9', 'M10.3 20.5a2 2 0 0 0 3.4 0'],
   workspace: ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z', 'M8 13h8'],
   docs: ['M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z', 'M14 3v5h5', 'M9 13h6', 'M9 17h4'],
   scripts: ['M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3z', 'M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6', 'M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6'],
@@ -245,7 +246,7 @@ function replaceProject(p) {
   render();
 }
 const route = () => {
-  const m = location.hash.match(/^#\/(project|audit|settings|docs|scripts|workspace|hours)(?:\/(\w+))?/);
+  const m = location.hash.match(/^#\/(project|audit|settings|docs|scripts|workspace|hours|reminders)(?:\/(\w+))?/);
   return m ? { name: m[1], id: m[2] } : { name: 'home' };
 };
 window.addEventListener('hashchange', render);
@@ -267,6 +268,7 @@ function render() {
   if (r.name === 'scripts') return renderScripts(main);
   if (r.name === 'workspace') return renderWorkspace(main);
   if (r.name === 'hours') return renderHours(main);
+  if (r.name === 'reminders') return renderReminders(main);
   if (r.name === 'project') {
     const p = state.projects.find((x) => x.id === r.id);
     if (p) return renderProject(main, p);
@@ -308,6 +310,7 @@ function renderNav(r) {
 }
 const NAV_MENU = [
   { hash: '#/hours', name: 'hours', icon: 'clock', label: 'Controle de Horas' },
+  { hash: '#/reminders', name: 'reminders', icon: 'bell', label: 'Lembretes' },
   { hash: '#/workspace', name: 'workspace', icon: 'workspace', label: 'Workspace (arquivos e Git)' },
   { hash: '#/docs', name: 'docs', icon: 'docs', label: 'Documentos e Modelos' },
   { hash: '#/scripts', name: 'scripts', icon: 'scripts', label: 'Scripts SQL' },
@@ -388,7 +391,7 @@ function renderHome(main) {
   const open = (p) => () => (location.hash = `#/project/${p.id}`);
   for (const p of state.projects) {
     for (const m of p.milestones) {
-      if (m.done) continue;
+      if (m.done || m.reminder) continue; // com lembrete: aparece no card Lembretes (sem duplicar aqui)
       const days = Math.round((Date.parse(m.dueDate) - Date.parse(state.today)) / 86400000);
       const limit = Number.isInteger(m.alertDays) ? m.alertDays : state.settings.warnDays;
       if (days <= limit) attention.push({ order: days, kind: 'Prazo', tone: days < 0 ? 'bad' : 'warn', p, title: m.title, sub: `${p.name} · ${fmtDate(m.dueDate)}`, badge: pill(days < 0 ? 'overdue' : 'soon', daysText(days)), action: ['Abrir', open(p)] });
@@ -454,7 +457,7 @@ function renderHome(main) {
       h('div', null, h('button', { class: 'btn primary', onclick: () => projectForm() }, '+ Novo projeto')))) : null,
     state.projects.length ? h('div', { class: 'home-kpis', 'data-slot': 'home-kpis' }, homeKpis()) : null,
     h('div', { class: 'home-grid' },
-      h('div', { class: 'home-col' }, state.projects.length ? h('div', { 'data-sec': 'home-attention' }, attentionCard) : null, state.projects.length ? projectsCard : null),
+      h('div', { class: 'home-col' }, homeRemindersCard(), state.projects.length ? h('div', { 'data-sec': 'home-attention' }, attentionCard) : null, state.projects.length ? projectsCard : null),
       h('div', { class: 'home-col' }, h('div', { 'data-slot': 'hours-home' }, hoursHomeCard()), state.projects.length ? h('div', { 'data-slot': 'home-git' }, homeGitCard()) : null)),
   ));
 }
@@ -592,14 +595,23 @@ function milestoneForm(p, m) {
   const due = h('input', { type: 'date', value: m?.dueDate || '' });
   const alert = h('input', { type: 'number', min: 0, max: 365, value: m?.alertDays ?? '', placeholder: `padrão (${state.settings.warnDays})` });
   const note = h('input', { type: 'text', value: m?.note || '', maxlength: 500 });
+  const remOn = h('input', { type: 'checkbox', checked: !!m?.reminder });
+  const remTime = h('input', { type: 'time', value: m?.reminder?.time || '09:00', style: 'width:120px' });
+  const remBox = h('div', { class: 'box small stack' }, h('label', { class: 'check' }, remOn, ' Criar lembrete'),
+    h('div', { class: 'inline' }, h('span', null, 'Avisar às'), remTime, h('span', { class: 'muted' }, 'no dia do aviso (data do prazo menos os dias acima; vazio = padrão).')),
+    h('div', { class: 'muted' }, 'O prazo continua aqui no cronograma e também aparece em Lembretes. Mudou a data do prazo, o lembrete acompanha.'));
+  const syncRem = () => { remTime.disabled = !remOn.checked; };
+  remOn.addEventListener('change', syncRem); syncRem();
   const md = openModal({
     title: m ? 'Editar prazo' : 'Novo prazo / entrega',
-    body: [field('O que precisa ser entregue', title), h('div', { class: 'cols2' }, field('Data', due), field('Avisar com quantos dias?', alert, 'Vazio = usa o padrão.')), field('Observação', note)],
+    body: [field('O que precisa ser entregue', title), h('div', { class: 'cols2' }, field('Data', due), field('Avisar com quantos dias?', alert, 'Vazio = usa o padrão. Vale também como antecedência do lembrete.')), field('Observação', note), remBox],
     footer: [h('button', { class: 'btn', onclick: () => md.close() }, 'Cancelar'),
       h('button', { class: 'btn primary', onclick: (e) => busy(e.target, async () => {
-        const body = { title: title.value, dueDate: due.value, alertDays: alert.value, note: note.value, done: m?.done || false };
+        const body = { title: title.value, dueDate: due.value, alertDays: alert.value, note: note.value, done: m?.done || false, reminder: remOn.checked ? { on: true, time: remTime.value } : null };
         replaceProject(m ? await api('PUT', `/api/projects/${p.id}/milestones/${m.id}`, body) : await api('POST', `/api/projects/${p.id}/milestones`, body));
         md.close();
+        if (remOn.checked) remAskPermission();
+        remRefresh();
       }) }, 'Salvar')],
   });
   title.focus();
@@ -615,10 +627,10 @@ function scheduleCard(p) {
   };
   return card('Cronograma', h('button', { class: 'btn sm', onclick: () => milestoneForm(p) }, '+ Prazo'),
     list.length ? list.map((m) => { const t = toState(m); return h('div', { class: 'row' },
-      h('input', { type: 'checkbox', checked: m.done, title: 'Marcar como concluído', onchange: async (e) => { try { replaceProject(await api('PUT', `/api/projects/${p.id}/milestones/${m.id}`, { ...m, done: e.target.checked })); } catch (er) { fail(er); } } }),
-      h('div', { class: 'grow' }, h('strong', { style: m.done ? 'text-decoration:line-through;opacity:.6' : '' }, m.title), h('div', { class: 'muted small' }, `${fmtDate(m.dueDate)}${m.note ? ' · ' + m.note : ''}`)),
+      h('input', { type: 'checkbox', checked: m.done, title: 'Marcar como concluído', onchange: async (e) => { try { replaceProject(await api('PUT', `/api/projects/${p.id}/milestones/${m.id}`, { ...m, done: e.target.checked })); remRefresh(); } catch (er) { fail(er); } } }),
+      h('div', { class: 'grow' }, h('strong', { style: m.done ? 'text-decoration:line-through;opacity:.6' : '' }, m.title), h('div', { class: 'muted small' }, `${fmtDate(m.dueDate)}${m.note ? ' · ' + m.note : ''}${m.reminder ? ` · 🔔 lembrete às ${m.reminder.time}` : ''}`)),
       pill(t.st, t.text), h('div', { class: 'actions' }, h('button', { class: 'btn sm ghost', onclick: () => milestoneForm(p, m) }, 'Editar'),
-        h('button', { class: 'btn sm ghost', onclick: async () => { if (await confirmDialog({ title: 'Remover prazo', message: `Remover “${m.title}”?`, okText: 'Remover', danger: true })) { try { replaceProject(await api('DELETE', `/api/projects/${p.id}/milestones/${m.id}`)); } catch (e) { fail(e); } } } }, 'Remover'))); })
+        h('button', { class: 'btn sm ghost', onclick: async () => { if (await confirmDialog({ title: 'Remover prazo', message: `Remover “${m.title}”?`, okText: 'Remover', danger: true })) { try { replaceProject(await api('DELETE', `/api/projects/${p.id}/milestones/${m.id}`)); remRefresh(); } catch (e) { fail(e); } } } }, 'Remover'))); })
       : h('div', { class: 'empty' }, 'Este projeto não tem cronograma — e tudo bem. Adicione prazos apenas se precisar; sem eles, nenhum alerta é gerado.'));
 }
 

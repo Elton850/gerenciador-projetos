@@ -33,6 +33,8 @@ function applyDefaults(data) {
   if (!Array.isArray(data.originSystems)) data.originSystems = [];
   // Scripts SQL executados depois da importação (os .sql ficam em <data>\scripts; aqui só os metadados).
   if (!Array.isArray(data.scripts)) data.scripts = [];
+  // Lembretes avulsos (pontuais/recorrentes). Os do cronograma ficam no próprio prazo (milestone.reminder). Ver src/reminders.js.
+  if (!Array.isArray(data.reminders)) data.reminders = [];
   // Controle de horas: jornada (data.hours), apontamentos confirmados (timeEntries) e cronômetros em andamento/pausados (timers).
   ensureHours(data);
   // Checklists reutilizáveis (modelo): itens agrupados por checklistId; quem os associa a estágio e ciclo é o passo do ciclo

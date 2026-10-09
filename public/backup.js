@@ -9,6 +9,7 @@ const BACKUP_LABELS = [
   ['emailGenerations', 'Comunicações geradas'], ['documents', 'Documentos e modelos'], ['scripts', 'Scripts SQL'],
   ['evidenceFiles', 'Arquivos de evidências e imagens'], ['scriptFiles', 'Arquivos de scripts (com versões)'], ['documentFiles', 'Arquivos de documentos'],
   ['timeEntries', 'Apontamentos de horas'], ['timeNotes', 'Observações das horas'],
+  ['reminders', 'Lembretes'], ['milestoneReminders', 'Lembretes de prazos do cronograma'],
 ];
 
 // Preferências da tela que vão no backup (mesma lista do servidor: src/backup.js PREF_KEYS).

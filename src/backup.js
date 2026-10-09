@@ -66,6 +66,7 @@ function sections(state, allFiles = []) {
     coordinators: n(state.coordinators), documents: n(state.documents), connections: n(state.connections),
     emailTemplates: n(state.emailTemplates), emailGenerations: n(state.emailGenerations), emailImages: n(state.emailImages),
     scripts: n(state.scripts), timeEntries: n(state.timeEntries), timeNotes: n(state.timeNotes),
+    reminders: n(state.reminders), milestoneReminders: sum((p) => (p.milestones || []).filter((m) => m.reminder).length),
     files: files.length, evidenceFiles: under('data/evidencias/'), scriptFiles: under('data/scripts/'), documentFiles: under('documentos/'),
   };
 }

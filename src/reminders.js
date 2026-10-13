@@ -3,6 +3,8 @@
 //  - do cronograma: marco do projeto com `reminder` (NÃO é cópia: data = marco.dueDate, antecedência = marco.alertDays ou o
 //    padrão warnDays, hora do aviso = reminder.time). Mudou a data do marco → o lembrete acompanha; removeu o marco → some junto.
 // Datas e horas locais em texto: 'AAAA-MM-DD' e 'AAAA-MM-DDTHH:MM' (comparáveis como texto, sem fuso).
+// Vários horários por dia (`times`): cada data × horário é uma OCORRÊNCIA independente; a pendente é `current` (data) + `slot` (hora).
+// Ação opcional (`action`): só botões no card (abrir projeto/link/Controle de Horas, gerar comunicação) — nada é executado sozinho.
 const { httpError } = require('./util');
 const { daysBetween } = require('./schedule');
 
@@ -37,6 +39,42 @@ function cleanKey(v) {
   if (!KEY_RE.test(s) || !validDate(s.slice(0, 10))) throw httpError(400, 'Data e hora inválidas.');
   return s;
 }
+const MAX_TIMES = 12;
+// Horários do lembrete: lista (ou um só, como antes), sem repetidos, em ordem.
+function cleanTimes(b) {
+  const raw = Array.isArray(b.times) && b.times.length ? b.times : [b.time];
+  const out = [...new Set(raw.map((t) => cleanTime(t)))].sort();
+  if (out.length > MAX_TIMES) throw httpError(400, `No máximo ${MAX_TIMES} horários por lembrete.`);
+  return out;
+}
+const timesOf = (r) => (Array.isArray(r.times) && r.times.length ? r.times : [r.time || '09:00']);
+const slotOf = (r) => (r.slot && timesOf(r).includes(r.slot) ? r.slot : timesOf(r)[0]);
+
+// Ação opcional: { kind: 'project' } (projeto do lembrete) · { kind: 'link', url } · { kind: 'hours', templateId? } (Controle de Horas
+// do mês atual: abrir tela, PSA, planilha e gerar e-mail) · { kind: 'email', templateId } (comunicação do projeto do lembrete).
+const ACTION_KINDS = ['project', 'link', 'hours', 'email'];
+function cleanAction(a, { projectId, templates = [] }) {
+  if (!a || !a.kind || a.kind === 'none') return null;
+  if (!ACTION_KINDS.includes(a.kind)) throw httpError(400, 'Ação do lembrete inválida.');
+  const tplOk = (id, { global }) => {
+    const t = templates.find((x) => x.id === id);
+    if (!t || !t.active) throw httpError(400, 'Escolha um modelo de comunicação ativo.');
+    if (global && t.scope !== 'global') throw httpError(400, 'Para o Controle de Horas, escolha um modelo global.');
+    if (!global && t.scope === 'project' && t.projectId !== projectId) throw httpError(400, 'O modelo escolhido é de outro projeto.');
+    return t.id;
+  };
+  if (a.kind === 'project') { if (!projectId) throw httpError(400, 'A ação “Abrir projeto” precisa de um projeto no lembrete.'); return { kind: 'project' }; }
+  if (a.kind === 'link') {
+    const url = String(a.url ?? '').trim().slice(0, 600);
+    let u = null; try { u = new URL(url); } catch { /* inválida */ }
+    if (!u || !/^https?:$/.test(u.protocol)) throw httpError(400, 'O link da ação precisa começar com http:// ou https://.');
+    return { kind: 'link', url, label: String(a.label ?? '').trim().slice(0, 60) };
+  }
+  if (a.kind === 'hours') return { kind: 'hours', templateId: a.templateId ? tplOk(String(a.templateId), { global: true }) : null };
+  if (!projectId) throw httpError(400, 'A ação “Gerar comunicação” precisa de um projeto no lembrete.');
+  return { kind: 'email', templateId: tplOk(String(a.templateId || ''), { global: false }) };
+}
+
 // Recorrência: null (pontual) ou { unit: day|week|month, every, weekdays? (só semana, 1..7), monthDays? (só mês, 1..31) }.
 function cleanRepeat(raw) {
   if (!raw || typeof raw !== 'object') return null;
@@ -97,7 +135,7 @@ function repeatText(r, until) {
 
 // ---------- Lembretes avulsos ----------
 // Cadastro/edição: devolve os campos editáveis validados. A ocorrência pendente (`current`) é recalculada a partir de hoje.
-function cleanReminder(b, projects, today) {
+function cleanReminder(b, projects, today, templates = []) {
   const title = String(b.title ?? '').trim().slice(0, 160);
   if (!title) throw httpError(400, 'Informe o título do lembrete.');
   const projectId = b.projectId ? String(b.projectId) : null;
@@ -106,30 +144,47 @@ function cleanReminder(b, projects, today) {
   const repeat = cleanRepeat(b.repeat);
   const until = repeat && b.until ? cleanDate(b.until, 'Data final') : null;
   if (until && until < date) throw httpError(400, 'A data final é anterior à data inicial.');
-  const out = { title, description: String(b.description ?? '').trim().slice(0, 1000), projectId, date, time: cleanTime(b.time), priority: b.priority === 'important' ? 'important' : 'normal', repeat, until };
+  const times = cleanTimes(b);
+  const out = { title, description: String(b.description ?? '').trim().slice(0, 1000), projectId, date, time: times[0], times, priority: b.priority === 'important' ? 'important' : 'normal', repeat, until,
+    action: cleanAction(b.action, { projectId, templates }) };
   if (repeat && !nextOnOrAfter({ start: date, repeat, until }, date)) throw httpError(400, 'Esta recorrência não tem nenhuma data até a data final.');
   return out;
 }
-// Ocorrência pendente depois de criar/editar: pontual = a própria data; recorrente = a primeira a partir de hoje (ou do início).
-function firstPending(r, today) {
-  if (!r.repeat) return r.date;
-  return nextOnOrAfter({ start: r.date, repeat: r.repeat, until: r.until }, today < r.date ? r.date : today);
+// Próxima ocorrência (data + horário) em `from` ou depois ('AAAA-MM-DDTHH:MM'). null = a série acabou. Pontual = só a data inicial.
+function nextOccurrence(r, from) {
+  const series = { start: r.date, repeat: r.repeat || null, until: r.until || null };
+  const times = timesOf(r);
+  const fromDay = from.slice(0, 10); const fromTime = from.slice(11);
+  let d = nextOnOrAfter(series, fromDay);
+  if (d === fromDay) { const t = times.find((x) => x >= fromTime); if (t) return { date: d, slot: t }; d = nextOnOrAfter(series, addDays(d, 1)); }
+  return d ? { date: d, slot: times[0] } : null;
+}
+// Ocorrência pendente depois de criar/editar: pontual = a 1ª do dia (atrasada se a data já passou); recorrente = a primeira a partir de agora.
+// `now` aceita 'AAAA-MM-DD' (meia-noite) ou 'AAAA-MM-DDTHH:MM'.
+function firstPending(r, now) {
+  const n = now.length === 10 ? `${now}T00:00` : now;
+  if (!r.repeat) return { date: r.date, slot: timesOf(r)[0] };
+  return nextOccurrence(r, n < `${r.date}T00:00` ? `${r.date}T00:00` : n);
 }
 
-// Concluir: pontual encerra; recorrente conclui SÓ esta ocorrência e passa para a próxima. Ocorrências que ficaram para trás
-// (app fechado vários dias) não se acumulam: a próxima é a partir de hoje.
-function completeReminder(r, today, at = new Date().toISOString()) {
+// Concluir: conclui SÓ a ocorrência pendente (data + horário) e passa para a próxima (mesmo dia, próximo horário; senão o 1º horário
+// do próximo dia da série). Pontual com um horário encerra; com vários, encerra depois do último. Ocorrências que ficaram para
+// trás (app fechado) não se acumulam: a próxima é a partir de agora. `now` aceita 'AAAA-MM-DD' ou 'AAAA-MM-DDTHH:MM'.
+function completeReminder(r, now, at = new Date().toISOString()) {
   if (r.doneAt || !r.current) throw httpError(400, 'Este lembrete já foi concluído.');
-  r.completions = [...(r.completions || []), { date: r.current, at }].slice(-50);
+  const n = now.length === 10 ? `${now}T00:00` : now;
+  const slot = slotOf(r);
+  r.completions = [...(r.completions || []), { date: r.current, time: slot, at }].slice(-50);
   r.snoozeUntil = null;
-  if (!r.repeat) { r.doneAt = at; return { finished: true, next: null }; }
-  const series = { start: r.date, repeat: r.repeat, until: r.until };
-  let next = nextOnOrAfter(series, addDays(r.current, 1));
-  if (next && next < today) next = nextOnOrAfter(series, today);
   r.notified = null;
-  if (!next) { r.current = null; r.doneAt = at; return { finished: true, next: null }; }
-  r.current = next;
-  return { finished: false, next };
+  const after = `${r.current}T${slot}`;
+  const times = timesOf(r);
+  const later = times.find((t) => t > slot);
+  let next = later ? { date: r.current, slot: later } : (r.repeat ? nextOccurrence(r, `${addDays(r.current, 1)}T00:00`) : null);
+  if (next && `${next.date}T${next.slot}` < n && r.repeat) next = nextOccurrence(r, n);
+  if (!next || `${next.date}T${next.slot}` <= after) { r.current = null; r.slot = null; r.doneAt = at; return { finished: true, next: null }; }
+  r.current = next.date; r.slot = next.slot;
+  return { finished: false, next: next.date, nextAt: `${next.date}T${next.slot}` };
 }
 
 // ---------- Lista única (avulsos + cronograma) ----------
@@ -152,10 +207,16 @@ function listReminders(state, { now = nowKey(), warnDays = 7 } = {}) {
   for (const r of state.reminders || []) {
     const done = !!r.doneAt || !r.current;
     if (!done && r.projectId && cancelled.has(r.projectId)) continue; // projeto cancelado: sem lembrete (volta ao descancelar)
-    const at = r.current ? `${r.current}T${r.time}` : `${r.date}T${r.time}`;
+    const times = timesOf(r);
+    const at = r.current ? `${r.current}T${slotOf(r)}` : `${r.date}T${times[0]}`;
     const notifyAt = r.snoozeUntil || at;
+    // Ocorrências de HOJE (quando o lembrete tem vários horários): concluída / pendente / próxima.
+    const today = now.slice(0, 10);
+    const occursToday = times.length > 1 && (r.current === today || (r.completions || []).some((c) => c.date === today));
+    const todaySlots = occursToday ? times.map((t) => ({ time: t, state: (r.completions || []).some((c) => c.date === today && c.time === t) ? 'done' : r.current === today && t === slotOf(r) ? 'pending' : r.current === today && t > slotOf(r) ? 'next' : 'skipped' })) : null;
     items.push({ key: `r:${r.id}`, kind: 'reminder', id: r.id, title: r.title, description: r.description, projectId: r.projectId, projectName: pname(r.projectId),
-      date: r.date, time: r.time, priority: r.priority, repeat: r.repeat, until: r.until, repeatText: repeatText(r.repeat, r.until), at, notifyAt, snoozeUntil: r.snoozeUntil || null,
+      date: r.date, time: times[0], times, slot: r.current ? slotOf(r) : null, todaySlots, action: r.action || null, priority: r.priority, repeat: r.repeat, until: r.until,
+      repeatText: `${repeatText(r.repeat, r.until)}${times.length > 1 ? ` · ${times.join(', ')}` : ''}`, at, notifyAt, snoozeUntil: r.snoozeUntil || null,
       done, doneAt: r.doneAt || null, completions: (r.completions || []).length, notified: r.notified || null,
       status: statusOf({ done, at, notifyAt, snoozeUntil: r.snoozeUntil }, now, warnDays) });
   }
@@ -184,4 +245,4 @@ function dueForNotification(items, now = nowKey()) {
   return items.filter((x) => !x.done && x.notifyAt <= now && x.notified !== x.notifyAt);
 }
 
-module.exports = { nowKey, addDays, isoDow, cleanDate, cleanTime, cleanKey, cleanRepeat, cleanReminder, firstPending, nextOnOrAfter, completeReminder, listReminders, dueForNotification, repeatText };
+module.exports = { nowKey, addDays, isoDow, cleanDate, cleanTime, cleanKey, cleanRepeat, cleanTimes, cleanAction, timesOf, cleanReminder, firstPending, nextOnOrAfter, nextOccurrence, completeReminder, listReminders, dueForNotification, repeatText };

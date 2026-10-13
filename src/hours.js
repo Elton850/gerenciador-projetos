@@ -65,6 +65,9 @@ function ensureHours(data) {
   if (!Array.isArray(h.overrides)) h.overrides = [];
   h.alert = { ...def.alert, ...(h.alert || {}) };
   if (h.trackingFrom === undefined) h.trackingFrom = null;
+  // Links externos do processo (PSA, planilha de controle): globais, abertos no navegador padrão. Modelo de e-mail usado por último.
+  h.links = { psaUrl: '', sheetUrl: '', ...(h.links || {}) };
+  if (h.emailTemplateId === undefined) h.emailTemplateId = null;
   if (!Array.isArray(h.noteCategories) || !h.noteCategories.length) h.noteCategories = def.noteCategories;
   if (!Array.isArray(data.timeNotes)) data.timeNotes = []; // observações do dia/mês (evidências dentro de cada uma)
   for (const n of data.timeNotes) if (!Array.isArray(n.dates) || !n.dates.length) n.dates = [n.date]; // observações antigas (um dia só) passam a ter a lista de dias
@@ -76,6 +79,44 @@ function ensureHours(data) {
 const calcTarget = (start, end, breakMin) => Math.max(0, (parseHM(end) ?? 0) - (parseHM(start) ?? 0) - (breakMin || 0));
 
 // Valida a configuração enviada pela tela (metas em minutos).
+// Links do PSA e da planilha de controle: só http(s); vazio = sem link.
+function cleanLinks(b) {
+  const one = (v, what) => {
+    const s = String(v ?? '').trim().slice(0, 600);
+    if (!s) return '';
+    let u = null; try { u = new URL(s); } catch { /* inválida */ }
+    if (!u || !/^https?:$/.test(u.protocol)) throw httpError(400, `${what}: informe um link que comece com http:// ou https://.`);
+    return s;
+  };
+  return { psaUrl: one(b?.psaUrl, 'Link do PSA'), sheetUrl: one(b?.sheetUrl, 'Link da planilha de controle de horas') };
+}
+
+// Contexto do mês para comunicações (src/email.js): projetos com apontamentos (sem o Interno), total apontado e coordenadores.
+// Coordenador = cadastro ATUAL do projeto; se o projeto foi removido, o gravado no apontamento mais recente (fotografia).
+const MONTH_NAMES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+function monthContext(data, y, m) {
+  const { from, to } = monthRange(y, m);
+  const entries = (data.timeEntries || []).filter((e) => e.date >= from && e.date <= to);
+  const byProject = new Map();
+  for (const e of [...entries].sort((a, b) => a.date.localeCompare(b.date) || a.startMin - b.startMin)) {
+    if (e.projectId === INTERNAL.id) continue;
+    const cur = byProject.get(e.projectId) || { id: e.projectId, name: e.projectName, minutes: 0, snapshotCoordinatorId: null };
+    cur.minutes += netMin(e);
+    if (e.coordinatorId) cur.snapshotCoordinatorId = e.coordinatorId; // o mais recente vence (lista em ordem de data)
+    byProject.set(e.projectId, cur);
+  }
+  const people = data.coordinators || [];
+  const projects = [...byProject.values()].map((x) => {
+    const p = (data.projects || []).find((q) => q.id === x.id);
+    const coordinatorId = p ? p.coordinatorId || null : x.snapshotCoordinatorId;
+    return { id: x.id, name: p ? p.name : x.name, minutes: x.minutes, exists: !!p, coordinatorId, coordinatorName: people.find((c) => c.id === coordinatorId)?.name || null };
+  }).sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+  const coordinators = [];
+  for (const x of projects) { const c = people.find((q) => q.id === x.coordinatorId); if (c && !coordinators.some((k) => k.id === c.id)) coordinators.push({ id: c.id, name: c.name, email: c.email || '' }); }
+  const totalMin = entries.reduce((n, e) => n + netMin(e), 0);
+  return { year: String(y), month: m, monthName: MONTH_NAMES[m - 1], label: `${MONTH_NAMES[m - 1]}/${y}`, projects, coordinators, totalMin, totalText: fmtHM(totalMin) };
+}
+
 function cleanConfig(body, prev) {
   const s = body.schedule || {};
   const start = str(s.start, 5);
@@ -101,7 +142,8 @@ function cleanConfig(body, prev) {
     if (body.trackingFrom !== null && body.trackingFrom !== '' && !isDate(body.trackingFrom)) throw httpError(400, 'Data inválida em “Considerar pendências a partir de”.');
     trackingFrom = body.trackingFrom || null;
   }
-  return { schedule: { start, end, breakMin, week }, overrides: prev.overrides, alert: { enabled: !!a.enabled, minutesBefore, desktop: !!a.desktop }, trackingFrom };
+  return { schedule: { start, end, breakMin, week }, overrides: prev.overrides, alert: { enabled: !!a.enabled, minutesBefore, desktop: !!a.desktop }, trackingFrom,
+    links: body.links !== undefined ? cleanLinks(body.links) : { psaUrl: '', sheetUrl: '', ...(prev.links || {}) }, emailTemplateId: prev.emailTemplateId ?? null };
 }
 
 function cleanOverride(b) {
@@ -355,5 +397,5 @@ module.exports = {
   NOTE_MAX_EVIDENCES, MAX_NOTE_DATES, datesOfNote, SEVERITIES, noteCategory, cleanNote, notesByDate, defaultNoteCategories,
   INTERNAL, DAY_MIN, MAX_TIMERS, STATUS_LABEL, isDate, parseDate, addDays, dowOf, parseHM, fmtHM, localParts, monthRange, eachDate, defaultHours, ensureHours, calcTarget,
   cleanConfig, cleanOverride, targetFor, endMinFor, netMin, segments, overlaps, findOverlaps, dayStatus, daySummary, groupByDate, trackingFrom, pendingDays, monthSummary,
-  alertFor, timerNetSec, draftFromTimer, cleanEntry, assertNoOverlap, dateOfMs, uid,
+  alertFor, timerNetSec, draftFromTimer, cleanEntry, assertNoOverlap, dateOfMs, uid, cleanLinks, monthContext, MONTH_NAMES,
 };

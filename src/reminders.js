@@ -148,8 +148,10 @@ function listReminders(state, { now = nowKey(), warnDays = 7 } = {}) {
   const projects = state.projects || [];
   const pname = (id) => projects.find((p) => p.id === id)?.name || null;
   const items = [];
+  const cancelled = new Set(projects.filter((p) => p.cancelled).map((p) => p.id));
   for (const r of state.reminders || []) {
     const done = !!r.doneAt || !r.current;
+    if (!done && r.projectId && cancelled.has(r.projectId)) continue; // projeto cancelado: sem lembrete (volta ao descancelar)
     const at = r.current ? `${r.current}T${r.time}` : `${r.date}T${r.time}`;
     const notifyAt = r.snoozeUntil || at;
     items.push({ key: `r:${r.id}`, kind: 'reminder', id: r.id, title: r.title, description: r.description, projectId: r.projectId, projectName: pname(r.projectId),
@@ -158,6 +160,7 @@ function listReminders(state, { now = nowKey(), warnDays = 7 } = {}) {
       status: statusOf({ done, at, notifyAt, snoozeUntil: r.snoozeUntil }, now, warnDays) });
   }
   for (const p of projects) {
+    if (p.cancelled) continue; // projeto cancelado: sem aviso de prazo (volta ao descancelar)
     for (const m of p.milestones || []) {
       if (!m.reminder) continue;
       const lead = Number.isInteger(m.alertDays) && m.alertDays >= 0 ? m.alertDays : warnDays;

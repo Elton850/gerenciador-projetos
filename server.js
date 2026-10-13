@@ -20,6 +20,7 @@ const { projectSchedule, todayStr, DEFAULT_WARN_DAYS } = require('./src/schedule
 const { uid, httpError, str, sanitizeFileName } = require('./src/util');
 const checklist = require('./src/checklist');
 const cycles = require('./src/cycles');
+const projectCancel = require('./src/project-cancel');
 
 const PORT = Number(process.env.PORT) || 4317;
 const DATA_DIR = process.env.GP_DATA_DIR || path.join(__dirname, 'data');
@@ -43,6 +44,11 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
+// Projeto cancelado: o andamento (etapa, checklists, ciclo, prazos, evidências) fica congelado — ver src/project-cancel.js.
+app.use('/api/projects/:id', (req, res, next) => {
+  if (projectCancel.frozen(store.project(req.params.id), req.method, req.path)) return next(projectCancel.cancelledError());
+  next();
+});
 
 // ---------- Helpers ----------
 const getProject = (id) => store.project(id) || (() => { throw httpError(404, 'Projeto não encontrado.'); })();
@@ -112,7 +118,7 @@ function publicProject(p) {
     cycleUpdate: cycles.cycleDiff(store.data, p), // "nova versão do ciclo disponível" (nada muda até aplicar)
     // Pasta local: existe/não existe. Link do Drive: não dá para checar sem login no Google, então fica null (n/a).
     rootDirExists: p.rootDirKind === 'drive' ? null : dirOk(p.rootDir),
-    schedule: projectSchedule(p, todayStr(), warn),
+    schedule: p.cancelled ? { state: 'cancelled', next: null, counts: { overdue: 0, soon: 0, pending: 0, done: 0 } } : projectSchedule(p, todayStr(), warn), // cancelado não gera alerta de prazo
     bases: p.bases.map((b) => ({ ...b, directoryExists: dirOk(b.directory), prod: publicConn(b.prod), local: publicConn(b.local) })),
     deparas: p.deparas.map((d) => ({ ...d, targetDirExists: dirOk(d.targetDir), fileExists: !!d.lastDownload && fs.existsSync(d.lastDownload.path), sourceDirExists: d.importMode === 'dir' ? dirOk(d.sourceDir) : null })),
   };
@@ -238,6 +244,7 @@ app.put('/api/projects/:id', (req, res) => {
     ...(req.body.analystId !== undefined ? { analystId: cleanAnalystId(req.body.analystId) } : {}) }); // quem não envia o campo não apaga o analista
   // Trocar o ciclo de um projeto em andamento pede confirmação: a etapa atual só continua se existir no ciclo novo.
   const wantedCycle = str(req.body.cycleId, 40);
+  if (wantedCycle && wantedCycle !== p.cycleId && p.cancelled) throw projectCancel.cancelledError();
   if (wantedCycle && wantedCycle !== p.cycleId) {
     const c = cycles.cycleFor(store.data, { cycleId: wantedCycle });
     const keeps = !p.stepId || c.steps.some((x) => x.id === p.stepId);
@@ -249,6 +256,24 @@ app.put('/api/projects/:id', (req, res) => {
     audit.log({ action: 'ciclo-aplicado', project: p.name, detalhe: `Ciclo trocado para “${c.name}”` });
   }
   store.save();
+  res.json(publicProject(p));
+});
+
+// Cancelar / descancelar: só liga/desliga o marcador (nada é alterado no projeto). Descancelar = o projeto volta ao último estado salvo.
+app.post('/api/projects/:id/cancel', (req, res) => {
+  const p = getProject(req.params.id);
+  const st = (p.steps || []).find((x) => x.id === p.stepId);
+  const stage = st ? store.data.stages.find((x) => x.id === st.stageId) : null;
+  const c = projectCancel.cancelProject(p, { reason: str(req.body?.reason, 500), by: require('./src/evidence-http').whoAmI(), stageName: stage ? stage.name : null, percent: checklist.projectProgress(store.data, p)?.percent ?? null });
+  store.save();
+  audit.log({ action: 'projeto-cancelado', project: p.name, by: c.by, detalhe: [c.reason, c.stageName ? `etapa ${c.stageName}` : null, c.percent != null ? `${c.percent}%` : null].filter(Boolean).join(' · ') });
+  res.json(publicProject(p));
+});
+app.post('/api/projects/:id/uncancel', (req, res) => {
+  const p = getProject(req.params.id);
+  const was = projectCancel.uncancelProject(p);
+  store.save();
+  audit.log({ action: 'projeto-descancelado', project: p.name, by: require('./src/evidence-http').whoAmI(), detalhe: `cancelado em ${String(was.at).slice(0, 10)}${was.stageName ? ` na etapa ${was.stageName}` : ''}: voltou ao último estado salvo` });
   res.json(publicProject(p));
 });
 

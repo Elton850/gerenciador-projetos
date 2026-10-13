@@ -1041,3 +1041,8 @@ main.settings-mode { padding-top: 0; } main.settings-mode .page-head { padding-t
 .rem-card.st-overdue .rem-count { color: var(--bad-text); } .rem-card.st-today .rem-count { color: var(--warn-text); }
 .rem-desc { white-space: pre-wrap; overflow-wrap: anywhere; }
 .rem-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; padding-top: 4px; }
+
+/* Projeto cancelado */
+.dot.cancelled { background: var(--muted); opacity: .6; } .pill.cancelled { background: var(--s2); color: var(--muted); text-decoration: line-through; }
+.cancel-banner { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.nav-item:has(.dot.cancelled) .name, .home-proj:has(.dot.cancelled) .home-proj-name { opacity: .6; text-decoration: line-through; }

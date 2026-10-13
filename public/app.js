@@ -161,7 +161,7 @@ const fmtDateTime = (iso) => (iso ? new Date(iso).toLocaleString('pt-BR') : '');
 const fmtSize = (n) => (n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
 const plural = (n, s, p) => `${n} ${n === 1 ? s : p}`;
 
-const STATE_LABEL = { none: 'Sem cronograma', ok: 'Em dia', soon: 'Próximo do prazo', overdue: 'Atrasado', done: 'Concluído' };
+const STATE_LABEL = { none: 'Sem cronograma', ok: 'Em dia', soon: 'Próximo do prazo', overdue: 'Atrasado', done: 'Concluído', cancelled: 'Cancelado' };
 const pill = (st, text) => h('span', { class: `pill ${st}` }, text || STATE_LABEL[st]);
 
 // ---------- Estágios, ciclo e contatos ----------
@@ -251,7 +251,7 @@ const route = () => {
 };
 window.addEventListener('hashchange', render);
 
-const ORDER = { overdue: 0, soon: 1, ok: 2, none: 3, done: 4 };
+const ORDER = { overdue: 0, soon: 1, ok: 2, none: 3, done: 4, cancelled: 5 };
 const sortedProjects = () => [...state.projects].sort((a, b) => ORDER[a.schedule.state] - ORDER[b.schedule.state] || a.name.localeCompare(b.name, 'pt-BR'));
 
 function render() {
@@ -365,9 +365,11 @@ const projectConcluded = (p) => !!(p.steps?.length && p.stepId === p.steps[p.ste
 
 // Indicadores do topo da Visão Geral. Os de horas usam o estado do Controle de Horas (carregado à parte; hoursRedraw atualiza).
 function homeKpis() {
-  const active = state.projects.filter((p) => !projectConcluded(p));
-  const pend = state.projects.reduce((n, p) => n + (p.pendencies?.requiredPending || 0), 0);
-  const pendProj = state.projects.filter((p) => p.pendencies?.requiredPending).length;
+  const cancelled = state.projects.filter((p) => p.cancelled);
+  const live = state.projects.filter((p) => !p.cancelled);
+  const active = live.filter((p) => !projectConcluded(p));
+  const pend = live.reduce((n, p) => n + (p.pendencies?.requiredPending || 0), 0);
+  const pendProj = live.filter((p) => p.pendencies?.requiredPending).length;
   const overdue = state.projects.filter((p) => p.schedule.state === 'overdue').length;
   const soon = state.projects.filter((p) => p.schedule.state === 'soon').length;
   const st = typeof HR !== 'undefined' ? HR.st : null;
@@ -376,7 +378,7 @@ function homeKpis() {
   const kpi = (label, value, sub, tone, onclick, title) => h(onclick ? 'button' : 'div', { class: `kpi${tone ? ` ${tone}` : ''}`, type: onclick ? 'button' : null, title: title || null, onclick: onclick || null },
     h('span', { class: 'kpi-l' }, label), h('span', { class: 'kpi-v' }, value), sub ? h('span', { class: 'kpi-s' }, sub) : null);
   return [
-    kpi('Projetos ativos', String(active.length), `${plural(state.projects.length - active.length, 'concluído', 'concluídos')}`),
+    kpi('Projetos ativos', String(active.length), `${plural(live.length - active.length, 'concluído', 'concluídos')}${cancelled.length ? ` · ${plural(cancelled.length, 'cancelado', 'cancelados')}` : ''}`),
     kpi('Pendências obrigatórias', String(pend), pend ? `em ${plural(pendProj, 'projeto', 'projetos')}` : 'nenhuma até a etapa atual', pend ? 'warn' : 'ok', pend ? goAttention : null, 'Itens obrigatórios ainda não concluídos (inclui pendências herdadas)'),
     kpi('Prazos', overdue ? `${overdue} atrasado${overdue > 1 ? 's' : ''}` : soon ? `${soon} perto` : 'em dia', overdue && soon ? `${soon} perto do prazo` : 'marcos do cronograma', overdue ? 'bad' : soon ? 'warn' : '', overdue || soon ? goAttention : null),
     st ? kpi('Horas hoje', `${hm(st.day.confirmed)} / ${hm(st.day.target)}`, t ? `em andamento: ${t.projectName || t.activity || 'atividade'}` : st.pending.length ? `${plural(st.pending.length, 'dia pendente', 'dias pendentes')}` : 'nenhum dia pendente',
@@ -390,6 +392,7 @@ function renderHome(main) {
   const attention = [];
   const open = (p) => () => (location.hash = `#/project/${p.id}`);
   for (const p of state.projects) {
+    if (p.cancelled) continue; // cancelado não gera alerta
     for (const m of p.milestones) {
       if (m.done || m.reminder) continue; // com lembrete: aparece no card Lembretes (sem duplicar aqui)
       const days = Math.round((Date.parse(m.dueDate) - Date.parse(state.today)) / 86400000);
@@ -420,7 +423,7 @@ function renderHome(main) {
 
   // Projetos por etapa (na ordem dos ciclos; estágios repetidos contam uma vez só).
   const byStage = new Map();
-  for (const p of state.projects) { const st = stageOf(p); const k = st ? st.id : null; byStage.set(k, (byStage.get(k) || 0) + 1); }
+  for (const p of state.projects) { if (p.cancelled) continue; const st = stageOf(p); const k = st ? st.id : null; byStage.set(k, (byStage.get(k) || 0) + 1); }
   const stageOrder = [...new Set(state.cycles.flatMap((c) => c.steps.map((s) => s.stageId)))].filter((id) => byStage.has(id));
 
   const projectRow = (p) => {
@@ -429,7 +432,7 @@ function renderHome(main) {
     return h('button', { class: 'home-proj', type: 'button', onclick: open(p), title: `Abrir ${p.name}` },
       h('span', { class: `dot ${p.schedule.state}`, title: STATE_LABEL[p.schedule.state] }),
       h('span', { class: 'home-proj-main' }, h('strong', { class: 'home-proj-name' }, p.name),
-        h('span', { class: 'home-proj-sub' }, st ? stageTag(st) : noStageTag(), projectConcluded(p) ? h('span', { class: 'pill done' }, 'concluído') : null,
+        h('span', { class: 'home-proj-sub' }, st ? stageTag(st) : noStageTag(), p.cancelled ? h('span', { class: 'pill cancelled', title: p.cancelled.reason || 'Projeto cancelado' }, 'cancelado') : null, projectConcluded(p) ? h('span', { class: 'pill done' }, 'concluído') : null,
           p.schedule.next ? h('span', { class: 'small muted' }, `${fmtDate(p.schedule.next.dueDate)} · ${daysText(p.schedule.next.days)}`) : null)),
       h('span', { class: 'home-proj-prog' }, projectProgressBar(p, { wide: true }) || h('span', { class: 'small muted' }, 'sem checklist no ciclo')),
       h('span', { class: 'home-proj-flags' }, pend ? h('span', { class: 'pill soon', title: 'Obrigatórios pendentes até a etapa atual (inclui herdados)' }, `${pend} pend.`) : null,
@@ -536,10 +539,33 @@ function card(title, actions, ...body) {
 const openFolder = (path) => api('POST', '/api/open-folder', { path }).catch(fail);
 const dirLine = (path, exists) => h('div', { class: 'stack' }, h('span', { class: 'mono' }, path || '—'), path && !exists ? h('span', { class: 'pill overdue', style: 'width:fit-content' }, 'pasta não encontrada') : null);
 
+// Projeto cancelado: marcador + andamento congelado (servidor). Descancelar = volta ao último estado salvo.
+function cancelProjectDialog(p) {
+  const reason = h('textarea', { rows: 2, maxlength: 500, placeholder: 'Opcional: motivo do cancelamento' });
+  const md = openModal({ title: `Cancelar “${p.name}”`, size: 'md',
+    body: [h('p', { style: 'margin:0' }, 'O projeto passa a aparecer como cancelado, deixa de gerar alertas e de contar como ativo. Nada é apagado nem alterado: etapa, checklists, prazos e arquivos ficam exatamente como estão (o andamento fica congelado) e você pode descancelar quando quiser, voltando ao último estado salvo.'), field('Motivo', reason)],
+    footer: [h('button', { class: 'btn', onclick: () => md.close() }, 'Voltar'), h('button', { class: 'btn danger', onclick: (e) => busy(e.target, async () => {
+      replaceProject(await api('POST', `/api/projects/${p.id}/cancel`, { reason: reason.value }));
+      md.close(); toast('Projeto cancelado.', 'ok'); remRefresh();
+    }) }, 'Cancelar projeto')] });
+  reason.focus();
+}
+function cancelledBanner(p) {
+  const c = p.cancelled;
+  return h('div', { class: 'box warn cancel-banner' }, h('div', { class: 'grow stack' },
+    h('strong', null, `Projeto cancelado em ${new Date(c.at).toLocaleDateString('pt-BR')}${c.by ? ` por ${c.by}` : ''}.`),
+    h('span', { class: 'small' }, `${c.stageName ? `Estava na etapa “${c.stageName}”${c.percent != null ? ` (${c.percent}%)` : ''}. ` : ''}${c.reason ? `Motivo: ${c.reason}. ` : ''}O andamento está congelado (etapa, checklists, ciclo e prazos); não gera alertas nem conta como ativo.`)),
+    h('button', { class: 'btn primary', title: 'Reativa o projeto exatamente como estava quando foi cancelado', onclick: (e) => busy(e.target, async () => {
+      if (!(await confirmDialog({ title: 'Descancelar projeto', message: `Reativar “${p.name}”? Ele volta ao último estado salvo${c.stageName ? ` (etapa “${c.stageName}”${c.percent != null ? `, ${c.percent}%` : ''})` : ''}, com alertas e lembretes de volta.`, okText: 'Descancelar' }))) return;
+      replaceProject(await api('POST', `/api/projects/${p.id}/uncancel`)); toast('Projeto reativado no último estado salvo.', 'ok'); remRefresh();
+    }) }, 'Descancelar'));
+}
+
 const PROJECT_SECTIONS = [['observacoes', 'Observações'], ['ciclo', 'Ciclo'], ['checklist', 'Checklist'], ['horas', 'Horas'], ['ambientes', 'Ambientes RM'], ['comunicacoes', 'Comunicações'], ['bases', 'Bases'], ['planilhas', 'Planilhas'], ['arquivos', 'Pastas e Git'], ['cronograma', 'Cronograma'], ['correcoes', 'Correções'], ['documentos', 'Documentos']];
 function renderProject(main, p) {
   const s = p.schedule;
   main.append(h('div', { class: 'page' },
+    p.cancelled ? cancelledBanner(p) : null,
     h('div', { class: 'page-head' },
       h('div', { class: 'grow' }, h('h1', null, p.name), p.description ? h('div', { class: 'muted', style: 'margin-top:4px' }, p.description) : null,
         h('div', { class: 'inline', style: 'margin-top:10px' }, pill(s.state, s.next ? `${STATE_LABEL[s.state]} · ${daysText(s.next.days)}` : undefined),
@@ -552,6 +578,7 @@ function renderProject(main, p) {
         h('div', { class: 'proj-quick' }, rmQuickLaunch(p),
           p.whatsappGroupUrl ? h('a', { class: 'btn sm wa', href: p.whatsappGroupUrl, target: '_blank', rel: 'noopener noreferrer', title: 'Entrar no grupo do WhatsApp deste projeto' }, 'Grupo do WhatsApp') : null)),
       h('div', { class: 'actions inline' }, h('button', { class: 'btn', onclick: () => projectForm(p) }, 'Editar'),
+        p.cancelled ? null : h('button', { class: 'btn', title: 'Marca o projeto como cancelado sem alterar nada nele; dá para descancelar depois', onclick: () => cancelProjectDialog(p) }, 'Cancelar projeto'),
         h('button', { class: 'btn', onclick: async () => {
           if (await confirmDialog({ title: 'Remover projeto', message: `Remover “${p.name}” do app? Isso apaga apenas o cadastro (pastas, arquivos e bases de dados não são tocados).`, okText: 'Remover cadastro', danger: true })) {
             try { await api('DELETE', `/api/projects/${p.id}`); location.hash = '#/'; await refresh(); } catch (e) { fail(e); }
@@ -822,7 +849,7 @@ const ACTION_LABEL = { 'email-modelo-criado': 'E-mail: modelo criado', 'email-mo
   'horas-criada': 'Horas: apontamento manual', 'horas-editada': 'Horas: apontamento editado', 'horas-excluida': 'Horas: apontamento excluído', 'horas-descartada': 'Horas: atividade descartada',
   'horas-exportada': 'Horas: planilha exportada', 'horas-config': 'Horas: jornada alterada',
   'ciclo-alterado': 'Ciclo alterado', 'ciclo-aplicado': 'Ciclo aplicado ao projeto', 'conexao-cadastrada': 'Conexão cadastrada', 'conexao-alterada': 'Conexão alterada', 'conexao-excluida': 'Conexão excluída',
-  'script-executado': 'Script executado (checklist)', 'script-falhou': 'Script com erro (checklist)', 'exportacao-script-executado': 'Gerar arquivos: script executado (desfeito)', 'exportacao-script-falhou': 'Gerar arquivos: script com erro', 'exportacao-arquivos-gerados': 'Gerar arquivos: arquivos gravados', 'gitignore-salvo': '.gitignore salvo' };
+  'script-executado': 'Script executado (checklist)', 'script-falhou': 'Script com erro (checklist)', 'projeto-cancelado': 'Projeto cancelado', 'projeto-descancelado': 'Projeto descancelado (voltou ao último estado)', 'exportacao-script-executado': 'Gerar arquivos: script executado (desfeito)', 'exportacao-script-falhou': 'Gerar arquivos: script com erro', 'exportacao-arquivos-gerados': 'Gerar arquivos: arquivos gravados', 'gitignore-salvo': '.gitignore salvo' };
 // Tipo e situação de cada ação (só para agrupar, filtrar e colorir; o registro em si não muda).
 const AUDIT_TYPES = [
   ['import', 'Importação', /^(plano-gerado|execucao-iniciada|importacao-|simulacao-|lote-|depara-|download-depara)/],

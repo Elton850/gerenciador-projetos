@@ -308,10 +308,11 @@ function emailHistoryCard() {
 // ---------- Janela "Gerar e-mail": prévia → (editar só desta geração) → copiar ----------
 // src = { templateId } (a partir do projeto) ou { stepId, itemId } (item do checklist).
 // Fluxo único: modelo (HTML sanitizado) → variáveis resolvidas no servidor → d.html (prévia) = o que vai para a área de transferência.
-async function emGenerate(p, src) {
+// p = projeto (geração do projeto) ou null com opts.url = outra rota de geração do MESMO gerador (ex.: Controle de Horas do mês).
+async function emGenerate(p, src, opts = {}) {
   let d;
-  try { d = await api('POST', `/api/projects/${p.id}/emails/generate`, src); } catch (e) { return fail(e); }
-  commsRefresh(p.id);
+  try { d = await api('POST', opts.url || `/api/projects/${p.id}/emails/generate`, src); } catch (e) { return fail(e); }
+  if (p) commsRefresh(p.id);
   const st = { to: [...d.to], cc: [...d.cc], bcc: [...d.bcc], subject: d.subject, bodyHtml: d.bodyHtml, html: d.html };
   const first = JSON.stringify([st.to, st.cc, st.bcc, st.subject]);
   let editing = false; let bodyDirty = false;
@@ -378,7 +379,7 @@ async function emGenerate(p, src) {
     const warnBox = warn.length ? h('div', { class: 'box warn small stack' }, h('strong', null, 'Confira antes de copiar'), h('ul', null, warn.map((w) => h('li', null, w.startsWith('⚠') ? w : `⚠ ${w}`)))) : null;
     const sep = h('select', { class: 'em-sep', 'aria-label': 'Separador de destinatários', title: 'Separador usado ao copiar os destinatários', onchange: (e) => { setUiPref('emailSep', e.target.value); draw(); } },
       h('option', { value: '; ', selected: emSep() === '; ' }, 'Separar com ;'), h('option', { value: ', ', selected: emSep() === ', ' }, 'Separar com ,'));
-    const origin = [d.checklist ? `Item: ${d.checklist.itemTitle} (${d.checklist.stageName})` : null, `Projeto: ${p.name}`].filter(Boolean).join(' · ');
+    const origin = [d.checklist ? `Item: ${d.checklist.itemTitle} (${d.checklist.stageName})` : null, d.context ? `Origem: ${d.context}` : p ? `Projeto: ${p.name}` : null].filter(Boolean).join(' · ');
     let rows;
     if (editing) {
       const lst = (k) => h('input', { type: 'text', value: st[k].join(', '), 'aria-label': k, oninput: (e) => { st[k] = emList(e.target.value); } });

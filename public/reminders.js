@@ -62,13 +62,36 @@ function remCard(x, { onChange } = {}) {
     x.projectName ? h('span', { class: 'small muted' }, `Projeto ${x.projectName}`) : null,
     h('div', { class: 'rem-count', 'data-count': x.key }, remCountdown(x)),
     h('div', { class: 'small muted' }, remWhen(x), ' · ', x.repeatText),
+    x.todaySlots ? h('div', { class: 'rem-slots', title: 'Ocorrências de hoje (cada horário é independente)' }, h('span', { class: 'small muted' }, 'Hoje:'),
+      x.todaySlots.map((s) => h('span', { class: `rem-slot ${s.state}` }, s.state === 'done' ? `${s.time} ✓` : s.state === 'pending' ? `${s.time} pendente` : s.state === 'skipped' ? `${s.time} (passou)` : s.time))) : null,
     x.description ? h('div', { class: 'small rem-desc' }, x.description) : null,
+    remActionButtons(x, p),
     h('div', { class: 'rem-actions' },
       !x.done ? h('button', { class: 'btn sm primary', title: x.kind === 'milestone' ? 'Dispensa o aviso deste prazo (marcar o prazo como entregue continua no cronograma)' : x.repeat ? 'Conclui só esta ocorrência; a próxima continua' : 'Encerra o lembrete',
-        onclick: act(async () => { const r = await api('POST', `/api/reminders/${encodeURIComponent(x.key)}/complete`, {}); await changed(r.finished ? 'Lembrete concluído.' : `Ocorrência concluída. Próxima: ${fmtDate(r.next)}.`); }) }, x.repeat ? 'Concluir esta' : 'Concluir') : null,
+        onclick: act(async () => { const r = await api('POST', `/api/reminders/${encodeURIComponent(x.key)}/complete`, {}); await changed(r.finished ? 'Lembrete concluído.' : `Ocorrência concluída. Próxima: ${fmtDate(r.next)}${r.nextAt ? ` às ${r.nextAt.slice(11)}` : ''}.`); }) }, x.repeat || (x.times || []).length > 1 ? 'Concluir esta' : 'Concluir') : null,
       !x.done ? h('button', { class: 'btn sm', onclick: snoozeMenu }, 'Adiar ▾') : null,
-      p ? h('button', { class: 'btn sm ghost', onclick: () => (location.hash = `#/project/${p.id}`) }, 'Abrir projeto') : null,
+      p && x.action?.kind !== 'project' ? h('button', { class: 'btn sm ghost', onclick: () => (location.hash = `#/project/${p.id}`) }, 'Abrir projeto') : null,
       h('button', { class: 'btn sm ghost', onclick: () => remEdit(x, changed) }, 'Editar')));
+}
+
+// Ação opcional do lembrete: só botões (nada roda sozinho). Links abrem no navegador padrão (link comum; o app não tem navegador interno).
+function remActionButtons(x, p) {
+  const a = x.action;
+  if (!a) return null;
+  const ext = (url, label, title) => (url ? h('a', { class: 'btn sm', href: url, target: '_blank', rel: 'noopener noreferrer', title: title || url }, label) : null);
+  const links = REM.data?.hoursLinks || {};
+  let btns = [];
+  if (a.kind === 'project' && p) btns = [h('button', { class: 'btn sm', onclick: () => (location.hash = `#/project/${p.id}`) }, 'Abrir projeto')];
+  if (a.kind === 'link') btns = [ext(a.url, a.label || 'Abrir link')];
+  if (a.kind === 'hours') {
+    btns = [h('button', { class: 'btn sm', onclick: () => (location.hash = '#/hours') }, 'Abrir controle de horas'),
+      ext(links.psaUrl, 'Abrir PSA'), ext(links.sheetUrl, 'Abrir planilha'),
+      !links.psaUrl && !links.sheetUrl ? h('span', { class: 'small muted', title: 'Cadastre em Controle de Horas → mês → Links' }, 'sem links do PSA/planilha') : null,
+      h('button', { class: 'btn sm', onclick: () => hoursEmailDialog({ templateId: a.templateId }) }, 'Gerar e-mail')];
+  }
+  if (a.kind === 'email' && p) btns = [h('button', { class: 'btn sm', onclick: () => emGenerate(p, { templateId: a.templateId }) }, 'Gerar e-mail')];
+  btns = btns.filter(Boolean);
+  return btns.length ? h('div', { class: 'rem-actions rem-do' }, btns) : null;
 }
 
 function remSnoozeDialog(x, snooze) {
@@ -100,7 +123,32 @@ function reminderForm(r, after) {
   const proj = h('select', null, h('option', { value: '' }, 'Nenhum'), sortedProjects().map((p) => h('option', { value: p.id }, p.name)));
   proj.value = r?.projectId || '';
   const date = h('input', { type: 'date', value: r?.date || today.slice(0, 10) });
-  const time = h('input', { type: 'time', value: r?.time || '09:00' });
+  const timesBox = h('div', { class: 'inline rem-times' });
+  let times = [...(r?.times?.length ? r.times : [r?.time || '09:00'])];
+  const drawTimes = () => timesBox.replaceChildren(...times.map((t, i) => h('span', { class: 'inline', style: 'gap:2px' },
+    h('input', { type: 'time', value: t, onchange: (e) => { times[i] = e.target.value; } }),
+    times.length > 1 ? h('button', { class: 'btn xs ghost', title: 'Remover este horário', onclick: () => { times.splice(i, 1); drawTimes(); } }, '✕') : null)),
+    times.length < 12 ? h('button', { class: 'btn xs', title: 'Mais um horário no mesmo dia (cada horário é uma ocorrência independente)', onclick: () => { times.push(''); drawTimes(); timesBox.querySelectorAll('input')[times.length - 1]?.focus(); } }, '+ horário') : null);
+  drawTimes();
+  const actKind = h('select', null, [['none', 'Nenhuma'], ['project', 'Abrir projeto'], ['link', 'Abrir link'], ['hours', 'Controle de horas (PSA, planilha, gerar e-mail)'], ['email', 'Gerar comunicação do projeto']].map(([v, l]) => h('option', { value: v }, l)));
+  actKind.value = r?.action?.kind || 'none';
+  const actUrl = h('input', { type: 'text', maxlength: 600, placeholder: 'https://…', value: r?.action?.url || '' });
+  const actLabel = h('input', { type: 'text', maxlength: 60, placeholder: 'Texto do botão (opcional)', value: r?.action?.label || '' });
+  const actTpl = h('select', null, h('option', { value: '' }, 'Carregando modelos…'));
+  const urlBox = h('div', { class: 'cols2' }, field('Link', actUrl), field('Texto do botão', actLabel));
+  const tplBox = field('Modelo de comunicação', actTpl, 'Modelos do Gerador de Comunicações. Controle de horas: só modelos globais (vazio = escolher na hora).');
+  const fillTpl = async () => {
+    let cat; try { cat = await emCatalog(); } catch { return; }
+    const hours = actKind.value === 'hours';
+    const list = cat.templates.filter((t) => t.active && (hours ? t.scope === 'global' : t.scope === 'global' || t.projectId === proj.value));
+    actTpl.replaceChildren(h('option', { value: '' }, hours ? 'Escolher na hora' : '— escolha —'), ...list.map((t) => h('option', { value: t.id }, t.name)));
+    actTpl.value = list.some((t) => t.id === r?.action?.templateId) ? r.action.templateId : '';
+  };
+  const syncAct = () => { urlBox.style.display = actKind.value === 'link' ? '' : 'none'; tplBox.style.display = ['hours', 'email'].includes(actKind.value) ? '' : 'none'; if (['hours', 'email'].includes(actKind.value)) fillTpl(); };
+  actKind.addEventListener('change', syncAct);
+  proj.addEventListener('change', () => { if (actKind.value === 'email') fillTpl(); });
+  syncAct();
+  const actionBody = () => (actKind.value === 'none' ? null : { kind: actKind.value, url: actUrl.value, label: actLabel.value, templateId: actTpl.value || null });
   const prio = h('select', null, h('option', { value: 'normal' }, 'Normal'), h('option', { value: 'important' }, 'Importante'));
   prio.value = r?.priority || 'normal';
   const type = h('select', null, h('option', { value: 'once' }, 'Pontual'), h('option', { value: 'repeat' }, 'Recorrente'));
@@ -120,7 +168,7 @@ function reminderForm(r, after) {
   const sync = () => { repBox.style.display = type.value === 'repeat' ? '' : 'none'; wdBox.style.display = unit.value === 'week' ? '' : 'none'; mdBox.style.display = unit.value === 'month' ? '' : 'none'; until.disabled = !hasUntil.checked; };
   [type, unit, hasUntil].forEach((el) => el.addEventListener('change', sync));
   sync();
-  const body = () => ({ title: title.value, description: desc.value, projectId: proj.value || null, date: date.value, time: time.value, priority: prio.value,
+  const body = () => ({ title: title.value, description: desc.value, projectId: proj.value || null, date: date.value, times: times.filter(Boolean), priority: prio.value, action: actionBody(),
     repeat: type.value === 'repeat' ? { unit: unit.value, every: Number(every.value), weekdays: wd.filter((x) => x.el.checked).map((x) => x.n), monthDays: mdays.value.split(/[\s,;]+/).filter(Boolean).map(Number) } : null,
     until: type.value === 'repeat' && hasUntil.checked ? until.value : null });
   const save = h('button', { class: 'btn primary' }, 'Salvar');
@@ -136,7 +184,9 @@ function reminderForm(r, after) {
   } }, 'Excluir') : null;
   const md = openModal({ title: r ? 'Editar lembrete' : 'Novo lembrete', wide: true,
     body: [field('Título', title), field('Descrição', desc), h('div', { class: 'cols2' }, field('Projeto', proj), field('Prioridade', prio)),
-      h('div', { class: 'cols3' }, field(type.value === 'repeat' ? 'Data inicial' : 'Data', date), field('Hora', time), field('Tipo', type)), repBox,
+      h('div', { class: 'cols2' }, field(type.value === 'repeat' ? 'Data inicial' : 'Data', date), field('Tipo', type)),
+      field('Horários', timesBox, 'Um ou mais horários no mesmo dia. Cada horário é uma ocorrência: concluir a das 09:00 não conclui a das 14:00.'), repBox,
+      h('div', { class: 'box stack' }, field('Ação (opcional)', actKind, 'Botões no card do lembrete; nada é executado sozinho.'), urlBox, tplBox),
       h('div', { class: 'hint' }, 'Para avisar antes de um prazo do cronograma, marque “Criar lembrete” no próprio prazo (Projeto → Cronograma): a data e a antecedência ficam sempre iguais às do prazo.')],
     footer: [del, h('button', { class: 'btn', onclick: () => md.close() }, 'Cancelar'), save].filter(Boolean) });
   title.focus();

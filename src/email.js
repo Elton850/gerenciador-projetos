@@ -24,35 +24,45 @@ const MAX_GENERATIONS = 2000; // histórico guardado no arquivo (as mais antigas
 const CONTACT_KINDS = { stakeholder: 'Stakeholder', client: 'Cliente', other: 'Outro' };
 
 // ---------- Registro de variáveis ----------
-// ctx = { project, data, item, stageName } (montado por contextFor). Valor vazio = "faltando": fica {{chave}} no texto + aviso (campo miss).
+// ctx = { project, data, item, stageName, projects?, hours? } (montado por contextFor). project pode faltar num contexto de vários projetos
+// (ex.: Controle de Horas): variável de projeto vira "faltando" com aviso, nunca erro. Valor vazio = "faltando": fica {{chave}} no texto + aviso (campo miss).
 const fmtDate = (iso) => { if (!iso) return ''; const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString('pt-BR'); };
 const person = (ctx, id) => (id ? ctx.data.coordinators.find((c) => c.id === id) || null : null);
 const currentStage = (ctx) => {
-  const step = (ctx.project.steps || []).find((s) => s.id === ctx.project.stepId);
+  const step = (ctx.project?.steps || []).find((s) => s.id === ctx.project?.stepId);
   return step ? ctx.data.stages.find((s) => s.id === step.stageId)?.name || '' : '';
 };
-const contactsOf = (ctx, kind) => (ctx.project.contacts || []).filter((c) => !kind || c.kind === kind);
+const contactsOf = (ctx, kind) => (ctx.project?.contacts || []).filter((c) => !kind || c.kind === kind);
 // "Início" = quando o projeto entrou na primeira etapa do ciclo (histórico de etapas); o projeto não tem um campo de data de início próprio.
-const startedAt = (ctx) => fmtDate((ctx.project.stageHistory || []).find((x) => x.stepId)?.at);
+const startedAt = (ctx) => fmtDate((ctx.project?.stageHistory || []).find((x) => x.stepId)?.at);
 // Saudação pelo horário LOCAL do momento da geração (ctx.now); a regra (faixas) mora em src/greeting.js, compartilhada com o checklist.
 const { greetingFor } = require('./greeting');
 const nowOf = (c) => c.now || new Date();
+const HOURS_MISS = 'Variável do Controle de Horas usada fora do Controle de Horas.';
 const VARIABLES = [
-  { key: 'project.name', group: 'Projeto', label: 'Nome do projeto', miss: 'Projeto sem nome.', get: (c) => c.project.name },
-  { key: 'project.description', group: 'Projeto', label: 'Descrição do projeto', miss: 'Projeto sem descrição.', get: (c) => c.project.description },
+  { key: 'project.name', group: 'Projeto', label: 'Nome do projeto', miss: 'Projeto sem nome.', get: (c) => c.project?.name },
+  { key: 'project.description', group: 'Projeto', label: 'Descrição do projeto', miss: 'Projeto sem descrição.', get: (c) => c.project?.description },
   { key: 'project.current_stage', group: 'Projeto', label: 'Etapa atual do ciclo', miss: 'Projeto sem etapa atual (ciclo ainda não iniciado).', get: currentStage },
-  { key: 'project.type', group: 'Projeto', label: 'Tipo de projeto', miss: 'Tipo de projeto não definido.', get: (c) => c.data.projectTypes.find((t) => t.id === c.project.projectTypeId)?.name },
-  { key: 'project.cycle', group: 'Projeto', label: 'Ciclo de migração', miss: 'Projeto sem ciclo.', get: (c) => c.data.cycles.find((x) => x.id === c.project.cycleId)?.name },
-  { key: 'project.origin_system', group: 'Projeto', label: 'Sistema de origem', miss: 'Sistema de origem não definido.', get: (c) => c.data.originSystems.find((t) => t.id === c.project.originSystemId)?.name },
+  { key: 'project.type', group: 'Projeto', label: 'Tipo de projeto', miss: 'Tipo de projeto não definido.', get: (c) => c.data.projectTypes.find((t) => t.id === c.project?.projectTypeId)?.name },
+  { key: 'project.cycle', group: 'Projeto', label: 'Ciclo de migração', miss: 'Projeto sem ciclo.', get: (c) => c.data.cycles.find((x) => x.id === c.project?.cycleId)?.name },
+  { key: 'project.origin_system', group: 'Projeto', label: 'Sistema de origem', miss: 'Sistema de origem não definido.', get: (c) => c.data.originSystems.find((t) => t.id === c.project?.originSystemId)?.name },
   { key: 'project.start_date', group: 'Projeto', label: 'Data de início (entrada na 1ª etapa)', miss: 'Projeto sem data de início (nenhuma etapa iniciada).', get: startedAt },
-  { key: 'project.created_at', group: 'Projeto', label: 'Data de cadastro do projeto', miss: 'Projeto sem data de cadastro.', get: (c) => fmtDate(c.project.createdAt) },
-  { key: 'project.coordinator', group: 'Pessoas', label: 'Nome do coordenador', miss: 'Coordenador não cadastrado no projeto.', get: (c) => person(c, c.project.coordinatorId)?.name },
-  { key: 'project.coordinator_email', group: 'Pessoas', label: 'E-mail do coordenador', miss: 'Coordenador sem e-mail cadastrado.', get: (c) => person(c, c.project.coordinatorId)?.email },
-  { key: 'project.analyst', group: 'Pessoas', label: 'Nome do analista', miss: 'Analista não cadastrado no projeto.', get: (c) => person(c, c.project.analystId)?.name },
-  { key: 'project.analyst_email', group: 'Pessoas', label: 'E-mail do analista', miss: 'Analista sem e-mail cadastrado.', get: (c) => person(c, c.project.analystId)?.email },
+  { key: 'project.created_at', group: 'Projeto', label: 'Data de cadastro do projeto', miss: 'Projeto sem data de cadastro.', get: (c) => fmtDate(c.project?.createdAt) },
+  { key: 'project.coordinator', group: 'Pessoas', label: 'Nome do coordenador', miss: 'Coordenador não cadastrado no projeto.', get: (c) => person(c, c.project?.coordinatorId)?.name },
+  { key: 'project.coordinator_email', group: 'Pessoas', label: 'E-mail do coordenador', miss: 'Coordenador sem e-mail cadastrado.', get: (c) => person(c, c.project?.coordinatorId)?.email },
+  { key: 'project.analyst', group: 'Pessoas', label: 'Nome do analista', miss: 'Analista não cadastrado no projeto.', get: (c) => person(c, c.project?.analystId)?.name },
+  { key: 'project.analyst_email', group: 'Pessoas', label: 'E-mail do analista', miss: 'Analista sem e-mail cadastrado.', get: (c) => person(c, c.project?.analystId)?.email },
   { key: 'project.stakeholders', group: 'Pessoas', label: 'Nomes dos stakeholders do projeto', miss: 'Projeto sem stakeholder definido.', get: (c) => contactsOf(c, 'stakeholder').map((x) => x.name).join(', ') },
   { key: 'checklist.item', group: 'Checklist', label: 'Item do checklist (quando gerado a partir de um item)', miss: 'Variável de checklist usada fora de um item do checklist.', get: (c) => c.item?.title },
   { key: 'checklist.stage', group: 'Checklist', label: 'Etapa do item do checklist', miss: 'Variável de checklist usada fora de um item do checklist.', get: (c) => c.stageName },
+  // Controle de Horas (contexto do mês: src/hours.js monthContext). Fora dele ficam faltando, com aviso.
+  { key: 'hours.period', group: 'Controle de horas', label: 'Mês/ano do controle (ex.: Outubro/2026)', miss: HOURS_MISS, get: (c) => c.hours?.label },
+  { key: 'hours.month', group: 'Controle de horas', label: 'Mês do controle (ex.: Outubro)', miss: HOURS_MISS, get: (c) => c.hours?.monthName },
+  { key: 'hours.year', group: 'Controle de horas', label: 'Ano do controle', miss: HOURS_MISS, get: (c) => c.hours?.year },
+  { key: 'hours.project_count', group: 'Controle de horas', label: 'Quantidade de projetos com apontamentos no mês', miss: HOURS_MISS, get: (c) => (c.hours ? String(c.hours.projects.length) : '') },
+  { key: 'hours.projects', group: 'Controle de horas', label: 'Projetos com apontamentos no mês', miss: 'Nenhum projeto com apontamentos neste mês.', get: (c) => c.hours?.projects.map((x) => x.name).join(', ') },
+  { key: 'hours.total_hours', group: 'Controle de horas', label: 'Total de horas apontadas no mês (hh:mm)', miss: HOURS_MISS, get: (c) => c.hours?.totalText },
+  { key: 'hours.coordinators', group: 'Controle de horas', label: 'Coordenadores dos projetos do mês', miss: 'Nenhum coordenador nos projetos do mês.', get: (c) => c.hours?.coordinators.map((x) => x.name).join(', ') },
   { key: 'today', group: 'Geral', label: 'Data de hoje', miss: '', get: (c) => nowOf(c).toLocaleDateString('pt-BR') },
   { key: 'greeting', group: 'Geral', label: 'Saudação pelo horário da geração (Bom dia / Boa tarde / Boa noite)', miss: '', get: (c) => greetingFor(nowOf(c)) },
 ];
@@ -76,7 +86,7 @@ function renderText(text, values) {
   });
   return { text: out, unknown: [...unknown], missing: [...missing] };
 }
-const missingMessage = (key) => VARIABLES.find((v) => v.key === key)?.miss || `Sem valor para {{${key}}}.`;
+const missingMessage = (key, ctx = {}) => (!ctx.project && /^(project|checklist)\./.test(key) ? `Variável de projeto usada fora de um projeto: {{${key}}}.` : VARIABLES.find((v) => v.key === key)?.miss || `Sem valor para {{${key}}}.`);
 
 // ---------- Destinatários ----------
 // Cada entrada é um e-mail fixo ou um papel "role:<x>" resolvido no projeto atual.
@@ -86,6 +96,8 @@ const ROLES = {
   'role:stakeholders': { label: 'Stakeholders do projeto' },
   'role:clients': { label: 'Contatos do cliente' },
   'role:contacts': { label: 'Todos os contatos do projeto' },
+  // Fonte dinâmica: os projetos do CONTEXTO da geração (no projeto = ele mesmo; no Controle de Horas = projetos com apontamentos no mês).
+  'role:context_coordinators': { label: 'Coordenadores dos projetos do contexto (ex.: projetos com horas no mês)' },
 };
 const LEGACY_ROLES = new Set(['role:sender']); // existia quando o app enviava pelo Gmail ("Eu"); ignorado ao salvar/resolver
 const publicRoles = () => Object.entries(ROLES).map(([key, r]) => ({ key, label: r.label }));
@@ -121,11 +133,18 @@ function resolveRecipients(list, ctx) {
     if (!n) warnings.push(none);
   };
   for (const v of list || []) {
-    if (v === 'role:coordinator') people(ctx.project.coordinatorId, 'Coordenador');
-    else if (v === 'role:analyst') people(ctx.project.analystId, 'Analista');
+    if (v === 'role:coordinator') { if (ctx.project) people(ctx.project.coordinatorId, 'Coordenador'); else warnings.push('“Coordenador do projeto” não se aplica fora de um projeto (use “Coordenadores dos projetos do contexto”).'); }
+    else if (v === 'role:analyst') { if (ctx.project) people(ctx.project.analystId, 'Analista'); else warnings.push('“Analista do projeto” não se aplica fora de um projeto.'); }
     else if (v === 'role:stakeholders') contacts('stakeholder', 'Projeto sem stakeholder com e-mail definido.');
     else if (v === 'role:clients') contacts('client', 'Projeto sem contato do cliente com e-mail definido.');
     else if (v === 'role:contacts') contacts(null, 'Projeto sem contatos com e-mail definidos.');
+    else if (v === 'role:context_coordinators') {
+      const list = ctx.projects || (ctx.project ? [{ name: ctx.project.name, coordinatorId: ctx.project.coordinatorId }] : []);
+      const without = [];
+      for (const p of list) { const c = person(ctx, p.coordinatorId); if (c && isEmail(c.email)) add(c.email); else without.push(p.name); }
+      if (without.length) warnings.push(`${without.length === 1 ? '1 projeto não possui' : `${without.length} projetos não possuem`} coordenador com e-mail cadastrado: ${without.join(', ')}.`);
+      if (!list.length) warnings.push('Nenhum projeto no contexto desta comunicação.');
+    }
     else if (isEmail(v)) add(v);
   }
   return { emails, warnings };
@@ -234,7 +253,8 @@ function templateUsage(data, id) {
 
 // ---------- Geração (sem envio) ----------
 // now = instante da geração (padrão: agora); injetável nos testes.
-function contextFor(data, project, { item = null, stageName = '', now = new Date() } = {}) { return { data, project, item, stageName, now }; }
+// projects = lista do contexto [{name, coordinatorId}] (opcional) · hours = contexto do mês do Controle de Horas (opcional).
+function contextFor(data, project, { item = null, stageName = '', now = new Date(), projects = null, hours = null } = {}) { return { data, project, item, stageName, now, projects, hours }; }
 
 // Corpo do modelo com as variáveis resolvidas. Modelo rico (bodyHtml): os valores entram ESCAPADOS no HTML (as tags e estilos
 // permitidos ficam intactos) e o resultado passa de novo pela sanitização; "text" é a versão text/plain. Modelo antigo (só texto):
@@ -269,7 +289,7 @@ function generate(t, ctx) {
   const body = renderBody(t, values);
   const r = { to: resolveRecipients(t.to, ctx), cc: resolveRecipients(t.cc, ctx), bcc: resolveRecipients(t.bcc, ctx) };
   const fields = dedupeFields({ to: r.to.emails, cc: r.cc.emails, bcc: r.bcc.emails });
-  const warnings = [...new Set([...r.to.warnings, ...r.cc.warnings, ...r.bcc.warnings, ...[...subject.missing, ...body.missing].map(missingMessage)])];
+  const warnings = [...new Set([...r.to.warnings, ...r.cc.warnings, ...r.bcc.warnings, ...[...subject.missing, ...body.missing].map((k) => missingMessage(k, ctx))])];
   if ((t.to || []).length && !fields.to.length) warnings.unshift('Nenhum destinatário em “Para” foi resolvido.');
   if (!(t.to || []).length) warnings.unshift('Este modelo não tem destinatários em “Para”.');
   return {
@@ -306,9 +326,9 @@ function buildGmailComposeUrl({ to, cc, bcc, subject } = {}) {
 }
 
 // Fotografia gravada no histórico. "copied" = o que o usuário copiou (to, cc, bcc, subject, body, all). Não é um envio.
-function generationRecord({ project, template, checklist, g, by, attachments = [] }) {
+function generationRecord({ project, template, checklist, g, by, attachments = [], context = null }) {
   return {
-    id: uid(), at: new Date().toISOString(), by: by || null, projectId: project.id, projectName: project.name,
+    id: uid(), at: new Date().toISOString(), by: by || null, projectId: project?.id || null, projectName: project?.name || context || null, ...(context ? { context } : {}),
     templateId: template?.id || null, templateName: template?.name || null, checklist: checklist || null,
     to: g.to, cc: g.cc, bcc: g.bcc, subject: g.subject, body: g.body, ...(g.bodyHtml ? { bodyHtml: g.bodyHtml } : {}), attachments: attachments.map((a) => ({ documentId: a.documentId, title: a.title })), edited: false, copied: [], copiedAt: null,
   };

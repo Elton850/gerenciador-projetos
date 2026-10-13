@@ -1046,3 +1046,11 @@ main.settings-mode { padding-top: 0; } main.settings-mode .page-head { padding-t
 .dot.cancelled { background: var(--muted); opacity: .6; } .pill.cancelled { background: var(--s2); color: var(--muted); text-decoration: line-through; }
 .cancel-banner { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .nav-item:has(.dot.cancelled) .name, .home-proj:has(.dot.cancelled) .home-proj-name { opacity: .6; text-decoration: line-through; }
+
+/* Lembretes: ocorrências de hoje e ações; Controle de Horas: processo do mês */
+.rem-slots { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.rem-slot { font: 11.5px/1.4 var(--mono); padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); background: var(--s1); }
+.rem-slot.done { color: var(--ok-text); border-color: var(--ok-text); } .rem-slot.pending { color: var(--warn-text); border-color: var(--warn-text); font-weight: 700; } .rem-slot.skipped { opacity: .55; }
+.rem-do { padding-top: 0; margin-top: 0; }
+.rem-times input[type=time] { width: 120px; }
+.hr-process { padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--s0); }

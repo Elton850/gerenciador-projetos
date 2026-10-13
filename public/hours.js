@@ -489,7 +489,49 @@ function monthCard(mo) {
     h('div', { class: 'hr-stats' }, stat('Meta acumulada', hm(mo.targetAccum)), stat('Apontado', hm(mo.confirmed)), stat('Diferença', hmSigned(mo.diff)), stat('Meta do mês', hm(mo.targetMonth))),
     h('div', { class: 'hr-stats' }, stat('Dias completos', mo.counts.completo), stat('Dias pendentes', mo.counts.pendente), stat('Dias excedentes', mo.counts.excedente), h('div')),
     h('div', { class: 'hint' }, 'A meta acumulada conta os dias úteis até hoje (ou o mês inteiro, se já passou), a partir da data configurada em “Considerar pendências a partir de”.'),
+    hoursProcessBar(y, m),
     monthNotesSection(mo));
+}
+
+// Processo do mês: links externos (PSA, planilha de controle — globais, abrem no navegador padrão) e comunicação do mês
+// (o MESMO Gerador de Comunicações: contexto = projetos com apontamentos no mês, destinatários pelos coordenadores deles).
+function hoursProcessBar(y, m) {
+  const links = HR.st?.config?.links || {};
+  const ext = (url, label) => (url ? h('a', { class: 'btn sm', href: url, target: '_blank', rel: 'noopener noreferrer', title: url }, label) : null);
+  return h('div', { class: 'inline hr-process' }, h('strong', { class: 'small' }, 'Processo do mês:'),
+    ext(links.psaUrl, 'Abrir PSA'), ext(links.sheetUrl, 'Abrir planilha'),
+    h('button', { class: 'btn sm ghost', title: 'Link do PSA e da planilha de controle de horas', onclick: () => hoursLinksDialog() }, links.psaUrl || links.sheetUrl ? 'Links…' : '+ Links do PSA e da planilha'),
+    h('button', { class: 'btn sm primary', title: 'Gera a comunicação do mês com um modelo do Gerador de Comunicações', onclick: () => hoursEmailDialog({ year: y, month: m }) }, 'Gerar e-mail…'));
+}
+function hoursLinksDialog() {
+  const cur = HR.st?.config?.links || {};
+  const psa = h('input', { type: 'text', maxlength: 600, value: cur.psaUrl || '', placeholder: 'https://…' });
+  const sheet = h('input', { type: 'text', maxlength: 600, value: cur.sheetUrl || '', placeholder: 'https://…' });
+  const md = openModal({ title: 'Links do controle de horas', size: 'md',
+    body: [field('Link do PSA', psa), field('Link da planilha de controle de horas', sheet), h('div', { class: 'hint' }, 'Abrem no navegador padrão. Valem para todos os meses (deixe vazio para remover).')],
+    footer: [h('button', { class: 'btn', onclick: () => md.close() }, 'Cancelar'), h('button', { class: 'btn primary', onclick: (e) => busy(e.target, async () => {
+      const r = await api('PUT', '/api/hours/links', { psaUrl: psa.value, sheetUrl: sheet.value });
+      HR.st.config.links = r.links; md.close(); toast('Links salvos.', 'ok'); hoursPageLoad(); if (typeof remRefresh === 'function') remRefresh();
+    }) }, 'Salvar')] });
+  psa.focus();
+}
+// Gerar e-mail do mês. Com modelo já definido (ex.: ação do lembrete), vai direto para a prévia; senão mostra o contexto e pede o modelo.
+async function hoursEmailDialog({ year, month, templateId } = {}) {
+  let ctx; let cat;
+  try { [ctx, cat] = await Promise.all([api('GET', `/api/hours/month-context?${new URLSearchParams(year ? { year, month } : {})}`), emCatalog(true)]); } catch (e) { return fail(e); }
+  const list = cat.templates.filter((t) => t.active && t.scope === 'global');
+  const go = (tid) => emGenerate(null, { templateId: tid, year: Number(ctx.year), month: ctx.month }, { url: '/api/hours/emails/generate' }).then(() => { if (HR.st?.config) HR.st.config.emailTemplateId = tid; });
+  if (templateId && list.some((t) => t.id === templateId)) return go(templateId);
+  if (!list.length) return toast('Nenhum modelo global ativo. Crie um em Configurações → Comunicações.', 'error');
+  const sel = h('select', null, list.map((t) => h('option', { value: t.id }, t.name)));
+  sel.value = list.some((t) => t.id === ctx.emailTemplateId) ? ctx.emailTemplateId : list[0].id;
+  const without = ctx.projects.filter((p) => !p.coordinatorId || !ctx.coordinators.find((c) => c.id === p.coordinatorId)?.email);
+  const md = openModal({ title: `Comunicação do controle de horas — ${ctx.label}`, size: 'md',
+    body: [h('div', { class: 'small muted' }, `${plural(ctx.projects.length, 'projeto com apontamentos', 'projetos com apontamentos')} · total ${ctx.totalText}`),
+      ctx.projects.length ? h('ul', { class: 'small', style: 'margin:0;padding-left:18px' }, ctx.projects.map((p) => h('li', null, `${p.name} — ${p.coordinatorName || 'sem coordenador'}`))) : h('div', { class: 'empty' }, 'Nenhum apontamento de projeto neste mês.'),
+      without.length ? h('div', { class: 'box warn small' }, `${plural(without.length, 'projeto não possui', 'projetos não possuem')} coordenador com e-mail cadastrado: ${without.map((p) => p.name).join(', ')}. A comunicação segue com os destinatários válidos.`) : null,
+      field('Modelo', sel, 'Use “Coordenadores dos projetos do contexto” nos destinatários do modelo e as variáveis do grupo “Controle de horas”.')],
+    footer: [h('button', { class: 'btn', onclick: () => md.close() }, 'Cancelar'), h('button', { class: 'btn primary', onclick: () => { md.close(); go(sel.value); } }, 'Gerar')] });
 }
 
 function historyCard() {

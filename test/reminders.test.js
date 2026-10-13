@@ -34,7 +34,7 @@ test('lembrete único: concluir encerra; recorrente: concluir só esta ocorrênc
   assert.equal(R.listReminders({ reminders: [once] }, { now: '2026-10-16T10:00' })[0].status, 'done', 'não aparece como pendente');
 
   const rec = mk({ repeat: { unit: 'day', every: 5 }, date: '2026-10-01', current: '2026-10-06' });
-  assert.deepEqual(R.completeReminder(rec, '2026-10-06'), { finished: false, next: '2026-10-11' });
+  assert.deepEqual(R.completeReminder(rec, '2026-10-06'), { finished: false, next: '2026-10-11', nextAt: '2026-10-11T14:00' });
   assert.equal(rec.doneAt, null);
   assert.equal(rec.completions.length, 1);
   // ficou vários dias sem abrir: a próxima é a partir de hoje
@@ -42,6 +42,55 @@ test('lembrete único: concluir encerra; recorrente: concluir só esta ocorrênc
   assert.equal(R.completeReminder(late, '2026-10-09').next, '2026-10-09');
   const last = mk({ repeat: { unit: 'day', every: 1 }, date: '2026-10-01', until: '2026-10-02', current: '2026-10-02' });
   assert.deepEqual(R.completeReminder(last, '2026-10-02'), { finished: true, next: null }, 'última ocorrência encerra a série');
+});
+
+test('vários horários no mesmo dia: cada horário é uma ocorrência; concluir uma não conclui as outras', () => {
+  assert.deepEqual(R.cleanTimes({ times: ['17:30', '09:00', '14:00', '09:00'] }), ['09:00', '14:00', '17:30'], 'sem repetidos, em ordem');
+  assert.deepEqual(R.cleanTimes({ time: '08:15' }), ['08:15'], 'um horário só, como antes');
+  assert.throws(() => R.cleanTimes({ times: ['25:00'] }), /Hora inválida/);
+  // seg a sex (2026-10-12 é segunda) às 09:00, 14:00 e 17:30
+  const r = mk({ date: '2026-10-12', times: ['09:00', '14:00', '17:30'], time: '09:00', repeat: { unit: 'week', every: 1, weekdays: [1, 2, 3, 4, 5] } });
+  const first = R.firstPending(r, '2026-10-12T08:00');
+  assert.deepEqual(first, { date: '2026-10-12', slot: '09:00' });
+  Object.assign(r, { current: first.date, slot: first.slot });
+  let list = R.listReminders({ reminders: [r] }, { now: '2026-10-12T09:30' });
+  assert.equal(list[0].at, '2026-10-12T09:00');
+  assert.equal(list[0].status, 'overdue');
+  assert.deepEqual(list[0].todaySlots.map((x) => `${x.time}:${x.state}`), ['09:00:pending', '14:00:next', '17:30:next']);
+  assert.deepEqual(R.completeReminder(r, '2026-10-12T09:30'), { finished: false, next: '2026-10-12', nextAt: '2026-10-12T14:00' }, 'concluir 09:00 → 14:00 continua pendente');
+  assert.equal(r.doneAt, null, 'o lembrete recorrente nunca é concluído inteiro');
+  list = R.listReminders({ reminders: [r] }, { now: '2026-10-12T10:00' });
+  assert.deepEqual(list[0].todaySlots.map((x) => `${x.time}:${x.state}`), ['09:00:done', '14:00:pending', '17:30:next']);
+  assert.equal(list[0].status, 'today');
+  assert.equal(R.dueForNotification(list, '2026-10-12T14:00').length, 1, 'cada horário avisa');
+  // perdeu 14:00 (app fechado até 18:00): ao concluir, não acumula — vai para o próximo a partir de agora
+  assert.equal(R.completeReminder(r, '2026-10-12T18:00').nextAt, '2026-10-13T09:00');
+  // sexta 17:30 → segunda 09:00
+  Object.assign(r, { current: '2026-10-16', slot: '17:30' });
+  assert.equal(R.completeReminder(r, '2026-10-16T17:31').nextAt, '2026-10-19T09:00');
+  // pontual com dois horários no mesmo dia: encerra só depois do último
+  const once = mk({ times: ['10:00', '15:00'], time: '10:00', current: '2026-10-15', slot: '10:00' });
+  assert.equal(R.completeReminder(once, '2026-10-15T10:05').nextAt, '2026-10-15T15:00');
+  assert.equal(R.completeReminder(once, '2026-10-15T15:05').finished, true);
+  // criar às 15:00 um diário 09:00/14:00/17:30: primeira ocorrência = hoje 17:30
+  assert.deepEqual(R.firstPending({ date: '2026-10-12', times: ['09:00', '14:00', '17:30'], repeat: { unit: 'day', every: 1 } }, '2026-10-12T15:00'), { date: '2026-10-12', slot: '17:30' });
+});
+
+test('ação do lembrete: projeto, link, Controle de Horas e comunicação (validação simples)', () => {
+  const templates = [{ id: 'g1', scope: 'global', active: true }, { id: 'p1', scope: 'project', projectId: 'A', active: true }, { id: 'off', scope: 'global', active: false }];
+  assert.equal(R.cleanAction(null, {}), null);
+  assert.equal(R.cleanAction({ kind: 'none' }, {}), null);
+  assert.deepEqual(R.cleanAction({ kind: 'project' }, { projectId: 'A' }), { kind: 'project' });
+  assert.throws(() => R.cleanAction({ kind: 'project' }, {}), /precisa de um projeto/);
+  assert.deepEqual(R.cleanAction({ kind: 'link', url: 'https://psa.exemplo.test/x' }, {}), { kind: 'link', url: 'https://psa.exemplo.test/x', label: '' });
+  assert.throws(() => R.cleanAction({ kind: 'link', url: 'javascript:alert(1)' }, {}), /http/);
+  assert.deepEqual(R.cleanAction({ kind: 'hours', templateId: 'g1' }, { templates }), { kind: 'hours', templateId: 'g1' });
+  assert.deepEqual(R.cleanAction({ kind: 'hours' }, { templates }), { kind: 'hours', templateId: null }, 'modelo opcional');
+  assert.throws(() => R.cleanAction({ kind: 'hours', templateId: 'p1' }, { templates }), /modelo global/);
+  assert.throws(() => R.cleanAction({ kind: 'hours', templateId: 'off' }, { templates }), /ativo/);
+  assert.deepEqual(R.cleanAction({ kind: 'email', templateId: 'p1' }, { projectId: 'A', templates }), { kind: 'email', templateId: 'p1' });
+  assert.throws(() => R.cleanAction({ kind: 'email', templateId: 'p1' }, { projectId: 'B', templates }), /outro projeto/);
+  assert.throws(() => R.cleanAction({ kind: 'executar', cmd: 'x' }, {}), /inválida/);
 });
 
 test('estado e ordem dos cards: atrasados → hoje → próximos → demais; adiado; avisa uma vez por ocorrência', () => {

@@ -39,18 +39,18 @@ function mount(app, { store }) {
     const project = str(req.query.project, 40);
     const items = all.filter((x) => f(x) && (!project || x.projectId === project));
     const pending = all.filter((x) => !x.done);
-    res.json({ now, nowMs: Date.now(), today: todayStr(), items,
+    res.json({ now, nowMs: Date.now(), today: todayStr(), items, hoursLinks: data().hours?.links || { psaUrl: '', sheetUrl: '' },
       counts: { overdue: pending.filter((x) => x.status === 'overdue').length, today: pending.filter((x) => x.status === 'today').length, pending: pending.length },
       due: R.dueForNotification(all, now).map((x) => ({ key: x.key, notifyAt: x.notifyAt, title: x.title, projectName: x.projectName, at: x.at, dueDay: x.dueDay || null })) });
   });
 
   app.post('/api/reminders', (req, res) => {
     const today = todayStr();
-    const clean = R.cleanReminder(req.body, data().projects, today);
-    const current = R.firstPending(clean, today);
-    if (!current) throw httpError(400, 'Não há nenhuma ocorrência a partir de hoje (confira a data final).');
+    const clean = R.cleanReminder(req.body, data().projects, today, data().emailTemplates || []);
+    const first = R.firstPending(clean, R.nowKey());
+    if (!first) throw httpError(400, 'Não há nenhuma ocorrência a partir de agora (confira a data final).');
     const now = new Date().toISOString();
-    const r = { id: uid(), ...clean, current, snoozeUntil: null, doneAt: null, completions: [], notified: null, createdAt: now, updatedAt: now };
+    const r = { id: uid(), ...clean, current: first.date, slot: first.slot, snoozeUntil: null, doneAt: null, completions: [], notified: null, createdAt: now, updatedAt: now };
     data().reminders.push(r);
     store.save();
     res.json({ ok: true, key: `r:${r.id}` });
@@ -60,13 +60,13 @@ function mount(app, { store }) {
   app.put('/api/reminders/:id', (req, res) => {
     const { r } = target(`r:${req.params.id}`);
     const today = todayStr();
-    const clean = R.cleanReminder(req.body, data().projects, today);
-    const changed = ['date', 'time', 'until'].some((f) => clean[f] !== r[f]) || JSON.stringify(clean.repeat) !== JSON.stringify(r.repeat);
+    const clean = R.cleanReminder(req.body, data().projects, today, data().emailTemplates || []);
+    const changed = ['date', 'until'].some((f) => clean[f] !== r[f]) || JSON.stringify(clean.repeat) !== JSON.stringify(r.repeat) || JSON.stringify(clean.times) !== JSON.stringify(R.timesOf(r));
     Object.assign(r, clean, { updatedAt: new Date().toISOString() });
     if (changed) {
-      const current = R.firstPending(r, today);
-      if (!current) throw httpError(400, 'Não há nenhuma ocorrência a partir de hoje (confira a data final).');
-      Object.assign(r, { current, doneAt: null, snoozeUntil: null, notified: null });
+      const first = R.firstPending(r, R.nowKey());
+      if (!first) throw httpError(400, 'Não há nenhuma ocorrência a partir de agora (confira a data final).');
+      Object.assign(r, { current: first.date, slot: first.slot, doneAt: null, snoozeUntil: null, notified: null });
     }
     store.save();
     res.json({ ok: true });
@@ -86,7 +86,7 @@ function mount(app, { store }) {
   app.post('/api/reminders/:key/complete', (req, res) => {
     const t = target(req.params.key);
     let out;
-    if (t.kind === 'reminder') out = R.completeReminder(t.r, todayStr());
+    if (t.kind === 'reminder') out = R.completeReminder(t.r, R.nowKey());
     else {
       if (t.m.done || t.m.reminder.dismissedFor === t.m.dueDate) throw httpError(400, 'Este aviso já foi concluído.');
       Object.assign(t.m.reminder, { dismissedFor: t.m.dueDate, snoozeUntil: null });

@@ -199,6 +199,32 @@ function mount(app, { store, audit, getProject, getIn, publicProject, dataDir })
     res.json({ ...g, warnings: [...g.warnings, ...extra], generationId: rec.id, template: brief(src.t), checklist: src.checklist, attachments, html: out.html, text: out.text });
   });
 
+  // Comunicação do Controle de Horas (mês): o MESMO gerador, sem projeto único — contexto = projetos com apontamentos no mês.
+  // Só modelos globais e ativos. Destinatários dinâmicos via role:context_coordinators; histórico com a origem “Controle de Horas — Mês/Ano”.
+  app.post('/api/hours/emails/generate', (req, res) => {
+    const H = require('./hours');
+    const now = new Date();
+    const y = Number(req.body.year) || now.getFullYear(); const m = Number(req.body.month) || now.getMonth() + 1;
+    if (!Number.isInteger(y) || y < 2000 || y > 2100 || !Number.isInteger(m) || m < 1 || m > 12) throw httpError(400, 'Mês inválido.');
+    const t = tplOrThrow(str(req.body.templateId, 40));
+    if (!t.active) throw httpError(409, `O modelo “${t.name}” está desativado.`, { code: 'EMAIL_TEMPLATE_UNAVAILABLE' });
+    if (t.scope !== 'global') throw httpError(409, `O modelo “${t.name}” é específico de um projeto; use um modelo global.`, { code: 'EMAIL_TEMPLATE_UNAVAILABLE' });
+    const mc = H.monthContext(data(), y, m);
+    const context = `Controle de Horas — ${mc.label}`;
+    const g = M.generate(t, M.contextFor(data(), null, { projects: mc.projects.map((p) => ({ name: p.name, coordinatorId: p.coordinatorId })), hours: mc }));
+    const attachments = resolveAttachments(t.attachments);
+    const out = outFor(g.bodyHtml);
+    const extra = [...attachments.filter((a) => a.problem).map((a) => `⚠ ${a.title}: ${a.problem}`), ...(out.missingImages.length ? ['⚠ Uma imagem do modelo não foi encontrada e ficou de fora.'] : [])];
+    const rec = M.generationRecord({ project: null, template: t, checklist: null, g, by: EH.whoAmI(), attachments, context });
+    gens().push(rec);
+    if (gens().length > M.MAX_GENERATIONS) gens().splice(0, gens().length - M.MAX_GENERATIONS);
+    if (data().hours) data().hours.emailTemplateId = t.id; // lembra o último modelo usado no Controle de Horas
+    store.save();
+    log('email-gerado', null, { detalhe: `${t.name} — ${context}` });
+    res.json({ ...g, warnings: [...g.warnings, ...extra], generationId: rec.id, template: brief(t), checklist: null, context, month: { label: mc.label, projects: mc.projects.length, total: mc.totalText },
+      attachments, html: out.html, text: out.text });
+  });
+
   // Corpo editado na tela (HTML do editor): sanitiza e devolve o MESMO HTML/texto que a prévia mostra e a cópia usa.
   // Também aceita { body } (texto simples antigo) e { html } só para sanitizar um colar (sem imagens inlinadas).
   app.post('/api/emails/render', (req, res) => {

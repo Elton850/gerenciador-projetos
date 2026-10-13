@@ -136,6 +136,20 @@ function mount(app, { store, audit, dataDir, SYS }) {
     log('horas-config', { detalhe: `Jornada ${next.schedule.start}–${next.schedule.end}, intervalo ${H.fmtHM(next.schedule.breakMin)}` });
     res.json({ config: data().hours });
   });
+  // Links do PSA e da planilha de controle (globais; o resto da jornada não muda).
+  app.put('/api/hours/links', (req, res) => {
+    data().hours.links = H.cleanLinks(req.body || {});
+    store.save();
+    log('horas-links', { detalhe: [data().hours.links.psaUrl ? 'PSA' : null, data().hours.links.sheetUrl ? 'planilha' : null].filter(Boolean).join(' e ') || 'links removidos' });
+    res.json({ links: data().hours.links });
+  });
+  // Contexto do mês para comunicações: projetos com apontamentos, total, coordenadores (e quem está sem e-mail).
+  app.get('/api/hours/month-context', (req, res) => {
+    const [ty, tm] = H.localParts(nowMs()).date.split('-').map(Number);
+    const y = Number(req.query.year) || ty; const m = Number(req.query.month) || tm;
+    if (!Number.isInteger(y) || y < 2000 || y > 2100 || !Number.isInteger(m) || m < 1 || m > 12) throw httpError(400, 'Mês inválido.');
+    res.json({ ...H.monthContext(data(), y, m), links: data().hours.links, emailTemplateId: data().hours.emailTemplateId });
+  });
   app.post('/api/hours/overrides', (req, res) => {
     const o = H.cleanOverride(req.body || {});
     const list = data().hours.overrides.filter((x) => x.date !== o.date);

@@ -71,28 +71,39 @@ test('grupo do WhatsApp: só convite chat.whatsapp.com, normalizado; vazio remov
   assert.equal(legacy.whatsappGroupUrl, ''); // projeto sem o campo continua válido
 });
 
+const byKind = (list, kind) => list.find((e) => e.kind === kind);
 test('ambientes: salvar link e diretório (validação); projeto antigo sem o campo vem vazio', async () => {
   const p = ok(await api('POST', '/api/projects', { name: 'Ambientes', rootDirKind: 'local', rootDir: '' }));
   S.p = p;
   const first = ok(await api('GET', `/api/projects/${p.id}/environments`)).environments;
-  assert.deepEqual(first.map((e) => [e.kind, e.label, e.downloadUrl, e.dir, e.dirExists, e.exes.length]), [['hml', 'Homologação', '', '', false, 0], ['prod', 'Produção', '', '', false, 0]]);
+  assert.deepEqual(first.map((e) => [e.kind, e.label, e.downloadUrl, e.dir, e.dirExists, e.exes.length]), [['dev', 'Desenvolvimento', '', '', false, 0], ['hml', 'Homologação', '', '', false, 0], ['prod', 'Produção', '', '', false, 0]]); // dev opcional: vem vazio
   for (const bad of [{ hml: { dir: 'relativo\\pasta' } }, { hml: { dir: 'C:\\' } }, { hml: { downloadUrl: 'javascript:alert(1)' } }, { prod: { downloadUrl: 'ftp://x.com/a' } }, { prod: { downloadUrl: 'não é url' } }]) {
     assert.equal((await api('PUT', `/api/projects/${p.id}/environments`, bad)).status, 400, JSON.stringify(bad));
   }
   const saved = ok(await api('PUT', `/api/projects/${p.id}/environments`, { hml: { downloadUrl: 'https://exemplo.com/hmg.zip', dir: `${BOA}\\` } }));
-  assert.equal(saved.environments[0].downloadUrl, 'https://exemplo.com/hmg.zip');
-  assert.equal(saved.environments[0].dir, BOA); // barra final removida
+  assert.equal(byKind(saved.environments, 'hml').downloadUrl, 'https://exemplo.com/hmg.zip');
+  assert.equal(byKind(saved.environments, 'hml').dir, BOA); // barra final removida
   assert.equal(saved.project.environments.hml.dir, BOA);
-  assert.equal(saved.environments[1].dir, ''); // prod não enviado: continua vazio
+  assert.equal(byKind(saved.environments, 'prod').dir, ''); // prod não enviado: continua vazio
+  assert.equal(byKind(saved.environments, 'dev').dir, ''); // dev também
   ok(await api('PUT', `/api/projects/${p.id}/environments`, { prod: { downloadUrl: 'http://exemplo.com/prd.zip', dir: GEN } }));
   const after = ok(await api('GET', `/api/projects/${p.id}/environments`)).environments;
-  assert.equal(after[0].downloadUrl, 'https://exemplo.com/hmg.zip'); // enviar só prod não apaga hml
-  assert.equal(after[1].dir, GEN);
+  assert.equal(byKind(after, 'hml').downloadUrl, 'https://exemplo.com/hmg.zip'); // enviar só prod não apaga hml
+  assert.equal(byKind(after, 'prod').dir, GEN);
+  // Desenvolvimento (se houver): mesmas validações e mesma busca; enviar só dev não apaga hml/prod
+  assert.equal((await api('PUT', `/api/projects/${p.id}/environments`, { dev: { dir: 'relativo\\pasta' } })).status, 400);
+  assert.equal((await api('PUT', `/api/projects/${p.id}/environments`, { dev: { downloadUrl: 'javascript:alert(1)' } })).status, 400);
+  const withDev = ok(await api('PUT', `/api/projects/${p.id}/environments`, { dev: { downloadUrl: 'https://exemplo.com/dev.zip', dir: GEN } }));
+  assert.equal(byKind(withDev.environments, 'dev').dir, GEN);
+  assert.equal(byKind(withDev.environments, 'hml').downloadUrl, 'https://exemplo.com/hmg.zip');
+  assert.equal(byKind(withDev.environments, 'prod').dir, GEN);
+  assert.equal(withDev.project.environments.dev.downloadUrl, 'https://exemplo.com/dev.zip');
 });
 
 test('busca: SOMENTE na pasta informada (nunca em subpastas), qualquer caixa, ignora parecidos e pasta chamada RM.exe; só leitura', async () => {
   const before = snapshot(path.join(tmp, 'rm'));
-  const [hml, prod] = ok(await api('GET', `/api/projects/${S.p.id}/environments`)).environments;
+  const envs = ok(await api('GET', `/api/projects/${S.p.id}/environments`)).environments;
+  const [hml, prod] = [byKind(envs, 'hml'), byKind(envs, 'prod')];
   assert.equal(hml.dirExists, true);
   assert.deepEqual(hml.exes.map((e) => e.rel), ['RM.exe']); // o UPDATE_LastVersion\RM.exe da subpasta não aparece
   assert.deepEqual(prod.exes.map((e) => e.rel), ['RM.exe']);
@@ -129,9 +140,13 @@ test('abrir: direto (sem confirmação), só o RM.exe da pasta informada, -Multi
   for (const rel of ['UPDATE_LastVersion\\RM.exe', 'UPDATE_LastVersion/RM.exe', '..\\CLIENTE BETA\\rm.EXE', path.join(GEN, 'RM.exe'), 'RM.Atualizador.exe', 'Biblioteca.dll', '.\\..\\PRD', '', 'RM.exe\\..\\RM.exe']) {
     assert.equal((await api('POST', `/api/projects/${S.p.id}/environments/hml/open`, { rel })).status, 404, rel);
   }
-  assert.equal((await api('POST', `/api/projects/${S.p.id}/environments/dev/open`, { rel: 'RM.exe' })).status, 404); // ambiente que não existe
+  assert.equal((await api('POST', `/api/projects/${S.p.id}/environments/qa/open`, { rel: 'RM.exe' })).status, 404); // ambiente que não existe
   assert.equal(launches.length, n); // nenhuma tentativa recusada iniciou algo
   assert.deepEqual(snapshot(path.join(tmp, 'rm')), before);
+  ok(await api('POST', `/api/projects/${S.p.id}/environments/dev/open`, { rel: 'RM.exe' })); // Desenvolvimento abre igual (direto, -Multi=True)
+  assert.equal(launches.length, n + 1);
+  assert.deepEqual(launches[launches.length - 1].args, ['-Multi=True']);
+  assert.deepEqual(snapshot(path.join(tmp, 'rm')), before); // e também não altera nada em disco
 
   const q = ok(await api('POST', '/api/projects', { name: 'Sem pasta', rootDirKind: 'local', rootDir: '' }));
   assert.equal((await api('POST', `/api/projects/${q.id}/environments/prod/open`, { rel: 'RM.exe' })).status, 400); // sem diretório definido

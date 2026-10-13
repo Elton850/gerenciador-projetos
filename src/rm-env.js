@@ -1,4 +1,4 @@
-// Ambientes RM do projeto (Homologação / Produção): link de download + diretório local onde ficam os RM.exe.
+// Ambientes RM do projeto (Desenvolvimento / Homologação / Produção): link de download + diretório local onde ficam os RM.exe.
 //
 // SEGURANÇA — são ambientes de clientes reais:
 //  - A busca é SOMENTE LEITURA e olha apenas a pasta informada pelo usuário (não entra em subpastas): confere (lstat) o arquivo
@@ -10,7 +10,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { httpError, str } = require('./util');
 
-const KINDS = { hml: 'Homologação', prod: 'Produção' };
+const KINDS = { dev: 'Desenvolvimento', hml: 'Homologação', prod: 'Produção' }; // ordem de exibição; dev é opcional
 const EXE_NAME = 'rm.exe';
 const LAUNCH_ARGS = ['-Multi=True'];
 
@@ -32,7 +32,7 @@ function cleanEnv(b) {
   return { downloadUrl, dir };
 }
 
-// Lê só os ambientes enviados (hml/prod); o que não vier continua como está. Projeto antigo sem o campo = tudo vazio.
+// Lê só os ambientes enviados (dev/hml/prod); o que não vier continua como está. Projeto antigo sem o campo = tudo vazio.
 function cleanEnvironments(body, existing) {
   const out = { ...(existing || {}) };
   for (const k of Object.keys(KINDS)) if (body && body[k] !== undefined) out[k] = cleanEnv(body[k]);

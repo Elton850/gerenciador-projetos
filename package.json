@@ -1,6 +1,6 @@
 {
   "name": "gerenciador-projetos",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Gerenciador de projetos de migraÃ§Ã£o: diretÃ³rios, bases SQL Server, planilhas DE-PARA e cronograma simples.",
   "main": "main.js",
   "private": true,

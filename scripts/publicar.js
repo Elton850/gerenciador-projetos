@@ -8,19 +8,36 @@
 // A mesma publicação existe na tela: Configurações → Atualizações → Publicar esta versão.
 'use strict';
 const path = require('path');
-const readline = require('readline');
 const { execFileSync } = require('child_process');
 
 const ROOT = path.join(__dirname, '..');
 const args = process.argv.slice(2);
 const opt = (n) => { const i = args.indexOf(`--${n}`); return i >= 0 ? args[i + 1] : undefined; };
 
-// Pergunta a senha sem ecoar no terminal.
+// Pergunta a senha sem ecoar: lê o teclado em modo bruto (o console não mostra nada do que é digitado). Sem terminal interativo,
+// recusa em vez de ler às claras (use GP_CHAVE_SENHA ou a tela Configurações → Atualizações).
 function ask(question) {
-  return new Promise((resolve) => {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
-    rl._writeToOutput = (s) => { if (s.includes(question)) rl.output.write(s); };
-    rl.question(question, (a) => { rl.close(); process.stdout.write('\n'); resolve(a); });
+  return new Promise((resolve, reject) => {
+    const input = process.stdin;
+    if (!input.isTTY || typeof input.setRawMode !== 'function') {
+      reject(new Error('Este terminal não permite digitar a senha escondida. Use a variável GP_CHAVE_SENHA ou publique pela tela.'));
+      return;
+    }
+    process.stdout.write(question);
+    let typed = '';
+    const end = () => { input.off('data', onData); input.setRawMode(false); input.pause(); process.stdout.write('\n'); };
+    const onData = (chunk) => {
+      for (const c of chunk) {
+        if (c === '\r' || c === '\n') { end(); resolve(typed); return; }
+        if (c === '\u0003') { end(); reject(new Error('Cancelado.')); return; } // Ctrl+C
+        if (c === '\u007f' || c === '\b') typed = typed.slice(0, -1);
+        else if (c >= ' ') typed += c;
+      }
+    };
+    input.setRawMode(true);
+    input.setEncoding('utf8');
+    input.on('data', onData);
+    input.resume();
   });
 }
 

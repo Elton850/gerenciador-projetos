@@ -1,9 +1,10 @@
 'use strict';
 // Lembretes: cards na Visão Geral, página #/reminders e aviso no horário (dentro do app e, se o Windows permitir, notificação
 // do sistema — a mesma API Notification já usada pelo Controle de Horas). Uma checagem por minuto, também com a janela
-// minimizada; com o app fechado nada roda: ao abrir, os vencidos aparecem e são avisados uma vez. Regras: src/reminders.js.
+// minimizada; com o app fechado nada roda: ao abrir, os pendentes que já chegaram (atrasados, não concluídos) avisam de novo uma vez.
+// Regras: src/reminders.js.
 
-const REM = { data: null, offset: 0, filter: 'all', project: '', started: false, ticking: false, summary: false, failWarned: false, toasted: new Set() };
+const REM = { data: null, offset: 0, filter: 'all', project: '', started: false, ticking: false, summary: false, failWarned: false, toasted: new Set(), reopen: new Set() };
 const REM_STATUS = { overdue: ['Atrasado', 'overdue'], today: ['Hoje', 'soon'], soon: ['Próximo', 'done'], later: ['Agendado', ''], snoozed: ['Adiado', ''], done: ['Concluído', 'ok'] };
 const remPad = (n) => String(n).padStart(2, '0');
 const remKeyOf = (d) => `${d.getFullYear()}-${remPad(d.getMonth() + 1)}-${remPad(d.getDate())}T${remPad(d.getHours())}:${remPad(d.getMinutes())}`;
@@ -267,7 +268,7 @@ function remSystemNotify(title, body) {
 // confirmou ter exibido (ou, sem notificação do sistema, o aviso no app); o resto continua pendente e é reenviado no próximo minuto,
 // também depois de reiniciar o app. O aviso dentro do app sai uma vez por ocorrência nesta sessão (não repete a cada minuto).
 async function remNotify(due, first) {
-  if (!due.length) return;
+  if (!due.length) return [];
   const id = (x) => `${x.key}|${x.notifyAt}`;
   const inApp = (x, text) => { if (!REM.toasted.has(id(x))) { REM.toasted.add(id(x)); if (text) toast(text); } };
   const marked = [];
@@ -287,8 +288,9 @@ async function remNotify(due, first) {
     }
   }
   if (failed && !REM.failWarned) { REM.failWarned = true; toast('A notificação do Windows não foi exibida; o aviso fica aqui no app e será reenviado a cada minuto.', 'error'); }
-  if (!marked.length) return;
+  if (!marked.length) return [];
   try { await api('POST', '/api/reminders/notified', { items: marked.map((x) => ({ key: x.key, notifyAt: x.notifyAt })) }); } catch { /* tenta de novo no próximo minuto */ }
+  return marked;
 }
 async function remTick() {
   if (REM.ticking) return; // a confirmação do Windows pode levar alguns segundos: não sobrepor checagens
@@ -299,7 +301,14 @@ async function remTick() {
     try { await remLoad(); } catch { return; }
     remPaintHome();
     remRepaintCounts();
-    await remNotify(REM.data.due, first);
+    // Ao abrir o app: os pendentes que já chegaram (atrasados e não concluídos) avisam de novo uma vez, mesmo já avisados antes;
+    // ficam em `reopen` até a notificação ser exibida. Depois disso, cada ocorrência avisa uma vez só (lista `due`).
+    const id = (x) => `${x.key}|${x.notifyAt}`;
+    if (first) REM.reopen = new Set((REM.data.arrived || []).map(id));
+    const list = [...REM.data.due];
+    for (const x of REM.data.arrived || []) if (REM.reopen.has(id(x)) && !list.some((y) => id(y) === id(x))) list.push(x);
+    const shown = await remNotify(list, first);
+    for (const x of shown || []) REM.reopen.delete(id(x));
   } finally { REM.ticking = false; }
 }
 // Uma checagem por minuto (também minimizado: o aviso precisa sair no horário). Primeira logo depois de abrir o app.

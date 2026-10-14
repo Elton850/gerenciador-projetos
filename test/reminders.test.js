@@ -112,6 +112,16 @@ test('aviso: cada horário/dia que chega avisa mesmo sem concluir o anterior; re
   // adiar um lembrete futuro para antes do horário continua avisando no fim do adiamento
   const fut = mk({ date: '2026-10-20', current: '2026-10-20', time: '15:00', snoozeUntil: '2026-10-14T10:00' });
   assert.equal(R.listReminders({ reminders: [fut] }, { now: '2026-10-14T10:00' })[0].notifyAt, '2026-10-14T10:00');
+  // ao abrir o app: pendentes que já chegaram avisam de novo (mesmo já avisados); adiado, futuro e concluído não
+  const state = { projects: [], reminders: [
+    mk({ id: 'av', title: 'avisado', current: '2026-10-14', time: '09:00', notified: '2026-10-14T09:00' }),
+    mk({ id: 'ad', title: 'adiado', current: '2026-10-14', time: '09:00', snoozeUntil: '2026-10-14T12:00' }),
+    mk({ id: 'fu', title: 'futuro', current: '2026-10-14', time: '18:00' }),
+    mk({ id: 'ok', title: 'concluído', current: null, doneAt: '2026-10-14T09:05:00.000Z' }),
+  ] };
+  const all = R.listReminders(state, { now: '2026-10-14T09:30' });
+  assert.deepEqual(R.arrivedForNotification(all, '2026-10-14T09:30').map((x) => x.title), ['avisado']);
+  assert.equal(R.dueForNotification(all, '2026-10-14T09:30').length, 0, 'com o app aberto não repete');
 });
 
 test('ação do lembrete: projeto, link, Controle de Horas e comunicação (validação simples)', () => {
@@ -212,6 +222,7 @@ test('API: avulsos (único e recorrente), concluir, adiar, avisar uma vez; prazo
   assert.deepEqual(d.due.map((x) => x.title), ['Enviar documentação']);
   ok(await api('POST', '/api/reminders/notified', { items: d.due }));
   assert.equal((await list()).due.length, 0, 'aviso não se repete');
+  assert.deepEqual((await list()).arrived.map((x) => x.title), ['Enviar documentação'], 'ao abrir o app, o atrasado avisa de novo');
 
   // adiar 1 dia → sai dos atrasados; concluir pontual → vai para Concluídos
   const kDoc = d.items[0].key;

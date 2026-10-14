@@ -76,6 +76,44 @@ test('vários horários no mesmo dia: cada horário é uma ocorrência; concluir
   assert.deepEqual(R.firstPending({ date: '2026-10-12', times: ['09:00', '14:00', '17:30'], repeat: { unit: 'day', every: 1 } }, '2026-10-12T15:00'), { date: '2026-10-12', slot: '17:30' });
 });
 
+test('aviso: cada horário/dia que chega avisa mesmo sem concluir o anterior; reiniciar o app não repete o que já foi avisado', () => {
+  // diário 09:00/11:00/15:00/17:00, pendente 09:00 de 2026-10-14 sem concluir
+  const r = mk({ date: '2026-10-09', times: ['09:00', '11:00', '15:00', '17:00'], time: '09:00', repeat: { unit: 'day', every: 1 }, current: '2026-10-14', slot: '09:00' });
+  const at = (now) => R.listReminders({ reminders: [r] }, { now })[0];
+  const due = (now) => R.dueForNotification(R.listReminders({ reminders: [r] }, { now }), now);
+  assert.equal(at('2026-10-14T08:59').notifyAt, '2026-10-14T09:00');
+  assert.equal(due('2026-10-14T08:59').length, 0, 'antes do horário');
+  assert.equal(due('2026-10-14T09:00')[0].notifyAt, '2026-10-14T09:00');
+  r.notified = '2026-10-14T09:00';
+  assert.equal(due('2026-10-14T10:59').length, 0, 'já avisado: reiniciar o app não repete');
+  assert.equal(due('2026-10-14T11:00')[0].notifyAt, '2026-10-14T11:00', '11:00 avisa sem concluir a das 09:00');
+  assert.equal(at('2026-10-14T11:00').at, '2026-10-14T09:00', 'a pendente continua a das 09:00 (concluir não muda)');
+  assert.equal(at('2026-10-14T11:00').reachedAt, '2026-10-14T11:00');
+  // app fechado das 11:00 às 18:00: avisa só a mais recente (17:00), sem acumular as perdidas
+  assert.deepEqual(due('2026-10-14T18:00').map((x) => x.notifyAt), ['2026-10-14T17:00']);
+  // dia seguinte, ainda sem concluir: 09:00 do outro dia avisa
+  r.notified = '2026-10-14T17:00';
+  assert.equal(due('2026-10-15T08:00').length, 0);
+  assert.equal(due('2026-10-15T09:00')[0].notifyAt, '2026-10-15T09:00');
+  // virada do dia (23:59 → 00:00) e pontual com vários horários
+  const late = mk({ date: '2026-10-14', times: ['23:59'], time: '23:59', repeat: { unit: 'day', every: 1 }, current: '2026-10-14', slot: '23:59' });
+  assert.equal(R.latestReached(late, '2026-10-14T23:59', '2026-10-15T23:59'), '2026-10-15T23:59');
+  const once = mk({ times: ['10:00', '15:00'], time: '10:00', current: '2026-10-15', slot: '10:00', notified: '2026-10-15T10:00' });
+  assert.equal(R.dueForNotification(R.listReminders({ reminders: [once] }, { now: '2026-10-15T15:00' }), '2026-10-15T15:00')[0].notifyAt, '2026-10-15T15:00');
+  assert.equal(R.dueForNotification(R.listReminders({ reminders: [once] }, { now: '2026-10-16T09:00' }), '2026-10-16T09:00').length, 1, 'pontual não passa do último horário');
+  // adiado: segura os horários até o fim do adiamento; depois dele, um horário novo avisa de novo
+  const s = mk({ date: '2026-10-14', times: ['09:00', '11:00', '15:00', '17:00'], time: '09:00', repeat: { unit: 'day', every: 1 }, current: '2026-10-14', slot: '09:00', notified: '2026-10-14T09:00', snoozeUntil: '2026-10-14T16:00' });
+  const sd = (now) => R.dueForNotification(R.listReminders({ reminders: [s] }, { now }), now);
+  assert.equal(sd('2026-10-14T15:00').length, 0, '15:00 durante o adiamento não avisa');
+  assert.equal(sd('2026-10-14T16:00')[0].notifyAt, '2026-10-14T16:00');
+  s.notified = '2026-10-14T16:00';
+  assert.equal(sd('2026-10-14T16:30').length, 0);
+  assert.equal(sd('2026-10-14T17:00')[0].notifyAt, '2026-10-14T17:00');
+  // adiar um lembrete futuro para antes do horário continua avisando no fim do adiamento
+  const fut = mk({ date: '2026-10-20', current: '2026-10-20', time: '15:00', snoozeUntil: '2026-10-14T10:00' });
+  assert.equal(R.listReminders({ reminders: [fut] }, { now: '2026-10-14T10:00' })[0].notifyAt, '2026-10-14T10:00');
+});
+
 test('ação do lembrete: projeto, link, Controle de Horas e comunicação (validação simples)', () => {
   const templates = [{ id: 'g1', scope: 'global', active: true }, { id: 'p1', scope: 'project', projectId: 'A', active: true }, { id: 'off', scope: 'global', active: false }];
   assert.equal(R.cleanAction(null, {}), null);

@@ -3,7 +3,7 @@
 // do sistema — a mesma API Notification já usada pelo Controle de Horas). Uma checagem por minuto, também com a janela
 // minimizada; com o app fechado nada roda: ao abrir, os vencidos aparecem e são avisados uma vez. Regras: src/reminders.js.
 
-const REM = { data: null, offset: 0, filter: 'all', project: '', started: false };
+const REM = { data: null, offset: 0, filter: 'all', project: '', started: false, ticking: false, summary: false, failWarned: false, toasted: new Set() };
 const REM_STATUS = { overdue: ['Atrasado', 'overdue'], today: ['Hoje', 'soon'], soon: ['Próximo', 'done'], later: ['Agendado', ''], snoozed: ['Adiado', ''], done: ['Concluído', 'ok'] };
 const remPad = (n) => String(n).padStart(2, '0');
 const remKeyOf = (d) => `${d.getFullYear()}-${remPad(d.getMonth() + 1)}-${remPad(d.getDate())}T${remPad(d.getHours())}:${remPad(d.getMinutes())}`;
@@ -246,25 +246,61 @@ function remAskPermission() {
   try { if (typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission(); } catch { /* sem suporte */ }
 }
 const remBody = (x) => `${x.projectName ? `Projeto ${x.projectName}\n` : ''}${x.dueDay ? `Prazo ${fmtDate(x.dueDay)}` : `${fmtDate(x.at.slice(0, 10))} às ${x.at.slice(11)}`} — ${remCountdown({ ...x, kind: x.dueDay ? 'milestone' : 'reminder', status: '' })}`;
+// Notificação do Windows com confirmação: true = exibida (evento show) · false = não exibida (erro, fechada antes ou sem resposta
+// em 10 s: tenta de novo no próximo minuto) · null = sem notificação do sistema (sem suporte/permissão: vale só o aviso no app).
+const REM_LIVE = new Set(); // mantém a notificação viva até fechar (sem isso o navegador pode descartá-la)
+function remSystemNotify(title, body) {
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return Promise.resolve(null);
+  return new Promise((resolve) => {
+    let n = null; let settled = false;
+    const end = (v) => { if (!settled) { settled = true; clearTimeout(timer); resolve(v); } };
+    const timer = setTimeout(() => end(false), 10000);
+    try { n = new Notification(title, { body }); } catch { end(false); return; }
+    REM_LIVE.add(n);
+    n.onshow = () => end(true);
+    n.onerror = () => { REM_LIVE.delete(n); end(false); };
+    n.onclose = () => { REM_LIVE.delete(n); end(false); };
+    n.onclick = () => { try { window.focus(); } catch { /* */ } location.hash = '#/reminders'; };
+  });
+}
+// Verifica o que já chegou no horário e ainda não foi avisado (a lista `due` do servidor) e avisa. Só grava “avisado” o que o Windows
+// confirmou ter exibido (ou, sem notificação do sistema, o aviso no app); o resto continua pendente e é reenviado no próximo minuto,
+// também depois de reiniciar o app. O aviso dentro do app sai uma vez por ocorrência nesta sessão (não repete a cada minuto).
 async function remNotify(due, first) {
   if (!due.length) return;
-  const can = typeof Notification !== 'undefined' && Notification.permission === 'granted';
-  const show = (title, body) => { if (can) { try { const n = new Notification(title, { body }); n.onclick = () => { try { window.focus(); } catch { /* */ } location.hash = '#/reminders'; }; } catch { /* sem suporte: fica o aviso no app */ } } };
-  if (first && due.length > 3) {
-    show('Gerenciador de Projetos', `${plural(due.length, 'lembrete vencido ou chegando', 'lembretes vencidos ou chegando')}: ${due.slice(0, 3).map((x) => x.title).join(', ')}…`);
-    toast(`⏰ ${plural(due.length, 'lembrete pendente', 'lembretes pendentes')}. Veja em Lembretes.`);
+  const id = (x) => `${x.key}|${x.notifyAt}`;
+  const inApp = (x, text) => { if (!REM.toasted.has(id(x))) { REM.toasted.add(id(x)); if (text) toast(text); } };
+  const marked = [];
+  let failed = false;
+  if ((first || REM.summary) && due.length > 3) {
+    REM.summary = true;
+    const ok = await remSystemNotify('Gerenciador de Projetos', `${plural(due.length, 'lembrete vencido ou chegando', 'lembretes vencidos ou chegando')}: ${due.slice(0, 3).map((x) => x.title).join(', ')}…`);
+    if (due.some((x) => !REM.toasted.has(id(x)))) toast(`⏰ ${plural(due.length, 'lembrete pendente', 'lembretes pendentes')}. Veja em Lembretes.`);
+    due.forEach((x) => inApp(x, null));
+    if (ok === false) failed = true; else { marked.push(...due); REM.summary = false; }
   } else {
-    for (const x of due) { show(`Gerenciador de Projetos — ${x.title}`, remBody(x)); toast(`⏰ ${x.title}${x.projectName ? ` (${x.projectName})` : ''}`); }
+    REM.summary = false;
+    for (const x of due) {
+      const ok = await remSystemNotify(`Gerenciador de Projetos — ${x.title}`, remBody(x));
+      inApp(x, `⏰ ${x.title}${x.projectName ? ` (${x.projectName})` : ''}`);
+      if (ok === false) failed = true; else marked.push(x);
+    }
   }
-  try { await api('POST', '/api/reminders/notified', { items: due.map((x) => ({ key: x.key, notifyAt: x.notifyAt })) }); } catch { /* tenta de novo no próximo minuto */ }
+  if (failed && !REM.failWarned) { REM.failWarned = true; toast('A notificação do Windows não foi exibida; o aviso fica aqui no app e será reenviado a cada minuto.', 'error'); }
+  if (!marked.length) return;
+  try { await api('POST', '/api/reminders/notified', { items: marked.map((x) => ({ key: x.key, notifyAt: x.notifyAt })) }); } catch { /* tenta de novo no próximo minuto */ }
 }
 async function remTick() {
-  const first = !REM.started;
-  REM.started = true;
-  try { await remLoad(); } catch { return; }
-  remPaintHome();
-  remRepaintCounts();
-  await remNotify(REM.data.due, first);
+  if (REM.ticking) return; // a confirmação do Windows pode levar alguns segundos: não sobrepor checagens
+  REM.ticking = true;
+  try {
+    const first = !REM.started;
+    REM.started = true;
+    try { await remLoad(); } catch { return; }
+    remPaintHome();
+    remRepaintCounts();
+    await remNotify(REM.data.due, first);
+  } finally { REM.ticking = false; }
 }
 // Uma checagem por minuto (também minimizado: o aviso precisa sair no horário). Primeira logo depois de abrir o app.
 setTimeout(remTick, 2500);

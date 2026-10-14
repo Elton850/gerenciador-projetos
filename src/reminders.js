@@ -159,6 +159,22 @@ function nextOccurrence(r, from) {
   if (d === fromDay) { const t = times.find((x) => x >= fromTime); if (t) return { date: d, slot: t }; d = nextOnOrAfter(series, addDays(d, 1)); }
   return d ? { date: d, slot: times[0] } : null;
 }
+// Ocorrência mais recente que JÁ CHEGOU (≤ now), a partir da pendente `at` ('AAAA-MM-DDTHH:MM'). Serve só para o aviso: com
+// vários horários ou recorrência, cada nova ocorrência avisa mesmo sem concluir a anterior (a pendente não muda). Perdidas não
+// acumulam: só a mais recente avisa. Ainda não chegou → `at`.
+const nextMinute = (k) => {
+  const m = Number(k.slice(11, 13)) * 60 + Number(k.slice(14, 16)) + 1;
+  return m === 1440 ? `${addDays(k.slice(0, 10), 1)}T00:00` : `${k.slice(0, 10)}T${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
+};
+function latestReached(r, at, now) {
+  let last = at;
+  for (let i = 0; i < MAX_STEPS && last < now; i++) {
+    const n = nextOccurrence(r, nextMinute(last));
+    if (!n || `${n.date}T${n.slot}` > now) break;
+    last = `${n.date}T${n.slot}`;
+  }
+  return last;
+}
 // Ocorrência pendente depois de criar/editar: pontual = a 1ª do dia (atrasada se a data já passou); recorrente = a primeira a partir de agora.
 // `now` aceita 'AAAA-MM-DD' (meia-noite) ou 'AAAA-MM-DDTHH:MM'.
 function firstPending(r, now) {
@@ -209,14 +225,17 @@ function listReminders(state, { now = nowKey(), warnDays = 7 } = {}) {
     if (!done && r.projectId && cancelled.has(r.projectId)) continue; // projeto cancelado: sem lembrete (volta ao descancelar)
     const times = timesOf(r);
     const at = r.current ? `${r.current}T${slotOf(r)}` : `${r.date}T${times[0]}`;
-    const notifyAt = r.snoozeUntil || at;
+    // Aviso: a pendente (ou o fim do adiamento); se uma ocorrência mais nova já chegou depois disso, avisa a mais nova.
+    const reached = done ? at : latestReached(r, at, now);
+    const base = r.snoozeUntil || at;
+    const notifyAt = reached > at && reached > base ? reached : base;
     // Ocorrências de HOJE (quando o lembrete tem vários horários): concluída / pendente / próxima.
     const today = now.slice(0, 10);
     const occursToday = times.length > 1 && (r.current === today || (r.completions || []).some((c) => c.date === today));
     const todaySlots = occursToday ? times.map((t) => ({ time: t, state: (r.completions || []).some((c) => c.date === today && c.time === t) ? 'done' : r.current === today && t === slotOf(r) ? 'pending' : r.current === today && t > slotOf(r) ? 'next' : 'skipped' })) : null;
     items.push({ key: `r:${r.id}`, kind: 'reminder', id: r.id, title: r.title, description: r.description, projectId: r.projectId, projectName: pname(r.projectId),
       date: r.date, time: times[0], times, slot: r.current ? slotOf(r) : null, todaySlots, action: r.action || null, priority: r.priority, repeat: r.repeat, until: r.until,
-      repeatText: `${repeatText(r.repeat, r.until)}${times.length > 1 ? ` · ${times.join(', ')}` : ''}`, at, notifyAt, snoozeUntil: r.snoozeUntil || null,
+      repeatText: `${repeatText(r.repeat, r.until)}${times.length > 1 ? ` · ${times.join(', ')}` : ''}`, at, notifyAt, reachedAt: reached > at ? reached : null, snoozeUntil: r.snoozeUntil || null,
       done, doneAt: r.doneAt || null, completions: (r.completions || []).length, notified: r.notified || null,
       status: statusOf({ done, at, notifyAt, snoozeUntil: r.snoozeUntil }, now, warnDays) });
   }
@@ -240,9 +259,10 @@ function listReminders(state, { now = nowKey(), warnDays = 7 } = {}) {
   return items;
 }
 
-// Lembretes que chegaram no horário e ainda não foram notificados (cada ocorrência/adiamento notifica uma vez só).
+// Lembretes que chegaram no horário e ainda não foram notificados (cada ocorrência/adiamento notifica uma vez só). `notified` só é
+// gravado quando a tela confirma que o aviso foi exibido; enquanto não for, o item continua aqui e a tela tenta de novo.
 function dueForNotification(items, now = nowKey()) {
   return items.filter((x) => !x.done && x.notifyAt <= now && x.notified !== x.notifyAt);
 }
 
-module.exports = { nowKey, addDays, isoDow, cleanDate, cleanTime, cleanKey, cleanRepeat, cleanTimes, cleanAction, timesOf, cleanReminder, firstPending, nextOnOrAfter, nextOccurrence, completeReminder, listReminders, dueForNotification, repeatText };
+module.exports = { nowKey, addDays, isoDow, cleanDate, cleanTime, cleanKey, cleanRepeat, cleanTimes, cleanAction, timesOf, cleanReminder, firstPending, nextOnOrAfter, nextOccurrence, latestReached, completeReminder, listReminders, dueForNotification, repeatText };

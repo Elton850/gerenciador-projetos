@@ -262,7 +262,11 @@ function listReminders(state, { now = nowKey(), warnDays = 7 } = {}) {
 // Lembretes que chegaram no horário e ainda não foram notificados (cada ocorrência/adiamento notifica uma vez só). `notified` só é
 // gravado quando a tela confirma que o aviso foi exibido; enquanto não for, o item continua aqui e a tela tenta de novo.
 function dueForNotification(items, now = nowKey()) {
-  return items.filter((x) => !x.done && x.notifyAt <= now && x.notified !== x.notifyAt);
+  return arrivedForNotification(items, now).filter((x) => x.notified !== x.notifyAt);
+}
+// Pendentes cujo aviso já chegou (não concluídos e fora do adiamento), avisados ou não: ao ABRIR o app, avisam de novo uma vez.
+function arrivedForNotification(items, now = nowKey()) {
+  return items.filter((x) => !x.done && x.notifyAt <= now);
 }
 
-module.exports = { nowKey, addDays, isoDow, cleanDate, cleanTime, cleanKey, cleanRepeat, cleanTimes, cleanAction, timesOf, cleanReminder, firstPending, nextOnOrAfter, nextOccurrence, latestReached, completeReminder, listReminders, dueForNotification, repeatText };
+module.exports = { nowKey, addDays, isoDow, cleanDate, cleanTime, cleanKey, cleanRepeat, cleanTimes, cleanAction, timesOf, cleanReminder, firstPending, nextOnOrAfter, nextOccurrence, latestReached, completeReminder, listReminders, dueForNotification, arrivedForNotification, repeatText };

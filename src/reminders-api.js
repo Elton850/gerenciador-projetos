@@ -39,9 +39,10 @@ function mount(app, { store }) {
     const project = str(req.query.project, 40);
     const items = all.filter((x) => f(x) && (!project || x.projectId === project));
     const pending = all.filter((x) => !x.done);
+    const alert = (x) => ({ key: x.key, notifyAt: x.notifyAt, title: x.title, projectName: x.projectName, at: x.reachedAt || x.at, dueDay: x.dueDay || null });
     res.json({ now, nowMs: Date.now(), today: todayStr(), items, hoursLinks: data().hours?.links || { psaUrl: '', sheetUrl: '' },
       counts: { overdue: pending.filter((x) => x.status === 'overdue').length, today: pending.filter((x) => x.status === 'today').length, pending: pending.length },
-      due: R.dueForNotification(all, now).map((x) => ({ key: x.key, notifyAt: x.notifyAt, title: x.title, projectName: x.projectName, at: x.reachedAt || x.at, dueDay: x.dueDay || null })) });
+      due: R.dueForNotification(all, now).map(alert), arrived: R.arrivedForNotification(all, now).map(alert) });
   });
 
   app.post('/api/reminders', (req, res) => {

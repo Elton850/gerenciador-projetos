@@ -4,7 +4,8 @@
 //                                    <raiz>\app\resources\app.asar            ← CÓDIGO: é o que a atualização troca
 //                                    <raiz>\data\                              ← DADOS do usuário (fora de app\; nunca tocados)
 //                                    <raiz>\atualizacoes\                      ← pacotes baixados e resultado da última atualização
-// Publicar (computador principal): ZIP de app\resources (+ assinatura) e ZIP de instalação completa → pasta do canal.
+// Publicar (qualquer computador com a pasta do canal + a senha da chave): ZIP de app\resources (+ assinatura) e ZIP de instalação
+//   completa → pasta do canal.
 // Atualizar (outra máquina): confere assinatura e SHA-256 → extrai em app\resources.nova → confere de novo → fecha o app →
 //   script fixo do PowerShell troca resources ↔ resources.nova (anterior guardada em resources.anterior) → abre a versão nova e espera
 //   o sinal de que ela subiu; se não subir em 90 s, volta a anterior e abre de novo. Resultado em atualizacoes\resultado.json.
@@ -53,7 +54,8 @@ const readme = (folder, version) => [
 ].join('\r\n');
 
 // Publica a versão instalada em appDir no canal. version/electron/schemaVersion = da instalação que está sendo publicada.
-async function publishApp({ appDir, channelDir, version, electron, schemaVersion, notes = '', protect, unprotect, now = new Date() }) {
+// Assina com a chave da pasta do canal (senha). Pasta sem chave → 409 KEY_MISSING; com createKey: true, cria a chave com essa senha.
+async function publishApp({ appDir, channelDir, version, electron, schemaVersion, notes = '', password, createKey = false, now = new Date() }) {
   if (!channelDir || !fs.existsSync(channelDir)) throw fail('CHANNEL_MISSING', 'Escolha a pasta de publicação (canal) antes de publicar.');
   const resourcesDir = path.join(appDir, 'resources');
   if (!fs.existsSync(path.join(resourcesDir, 'app.asar'))) throw fail('NOT_PACKAGED', 'Não há aplicativo gerado para publicar (falta resources\\app.asar). Gere o aplicativo antes (npm run build:desktop).');
@@ -62,7 +64,9 @@ async function publishApp({ appDir, channelDir, version, electron, schemaVersion
   if (ch.app?.version && C.compareVersions(version, ch.app.version) <= 0) {
     throw fail('VERSION_NOT_NEWER', `O canal já tem a versão ${ch.app.version}. Aumente a versão em package.json (ex.: npm version patch), gere o aplicativo e publique de novo.`);
   }
-  const keys = await C.publishingKeys({ protect, unprotect });
+  const hasKey = !!C.readKeyFile(channelDir);
+  if (!hasKey && !createKey) throw fail('KEY_MISSING', 'A pasta de publicação ainda não tem chave de publicação: crie uma (com senha) para publicar.', 409);
+  const keys = hasKey ? C.unlockChannelKey(channelDir, password) : C.createChannelKey(channelDir, password, now);
   // A chave pública viaja dentro do aplicativo: é nela que as outras instalações confiam.
   C.writeAtomic(path.join(resourcesDir, C.PUBKEY_FILE), keys.pubPem);
   const appAsarSha256 = await C.sha256File(path.join(resourcesDir, 'app.asar'));
@@ -106,7 +110,10 @@ function checkApp({ channelDir, lay = layout(), appVersion, electron }) {
   const e = ch?.app;
   if (!e) return { ...base, status: 'up-to-date', available: false, message: 'Nenhuma versão publicada ainda nesta pasta.' };
   const pem = trustedKey(lay);
-  const signature = !pem ? 'no-key' : (e.keyId === C.keyIdOf(pem) && C.verify(e, ch.appSignature, pem) ? 'ok' : 'invalid');
+  let signature = !pem ? 'no-key' : (e.keyId === C.keyIdOf(pem) && C.verify(e, ch.appSignature, pem) ? 'ok' : 'invalid');
+  // Assinada pela chave da pasta, que esta instalação ainda não conhece (chave nova): dá para passar a confiar nela com a senha.
+  const k = signature === 'ok' ? null : C.channelKeyInfo(channelDir);
+  if (k && k.keyId === e.keyId && C.verify(e, ch.appSignature, k.pubPem)) signature = 'new-key';
   const available = C.compareVersions(e.version, appVersion) > 0;
   const fullInstallRequired = available && !!e.electron && !!electron && e.electron !== electron;
   const out = { ...base, latest: e.version, notes: e.notes, publishedAt: e.publishedAt, available, signature, fullInstallRequired,
@@ -114,10 +121,20 @@ function checkApp({ channelDir, lay = layout(), appVersion, electron }) {
   if (!available) return { ...out, status: 'up-to-date', message: `O aplicativo está atualizado (versão ${appVersion}).` };
   let blocked = null;
   if (!lay.packaged) blocked = 'Atualização automática só no aplicativo instalado (este é o modo de desenvolvimento).';
+  else if (signature === 'new-key') blocked = 'Esta versão foi assinada com a chave de publicação da pasta, que esta instalação ainda não conhece. Informe a senha da chave para passar a confiar nela.';
   else if (signature === 'no-key') blocked = 'Esta instalação não tem a chave de publicação: instale uma vez pelo pacote de instalação do canal.';
   else if (signature === 'invalid') blocked = 'A assinatura da versão publicada NÃO confere com a chave desta instalação. Atualização recusada.';
   else if (fullInstallRequired) blocked = `Esta versão usa outro runtime (Electron ${e.electron}); instale pelo pacote de instalação completo. Seus dados ficam na pasta "data" e não são tocados.`;
-  return { ...out, status: 'available', canApply: !blocked, blocked, message: `Existe uma nova versão da aplicação disponível: ${e.version}.` };
+  return { ...out, status: 'available', canApply: !blocked, blocked, canTrust: lay.packaged && signature === 'new-key', message: `Existe uma nova versão da aplicação disponível: ${e.version}.` };
+}
+
+// Passa a confiar na chave da pasta do canal (a senha prova quem é o dono da chave). Só a parte pública é gravada na instalação.
+function trustChannelKey({ channelDir, lay = layout(), password }) {
+  if (!lay.packaged) throw fail('NOT_PACKAGED', 'Confiar na chave só no aplicativo instalado.');
+  if (!channelDir || !fs.existsSync(channelDir)) throw fail('CHANNEL_MISSING', 'Escolha a pasta de publicação.');
+  const keys = C.unlockChannelKey(channelDir, password);
+  C.writeAtomic(path.join(lay.resourcesDir, C.PUBKEY_FILE), keys.pubPem);
+  return { keyId: keys.keyId };
 }
 
 // Baixa, confere e prepara a pasta resources.nova (o aplicativo continua funcionando até a troca).
@@ -217,4 +234,4 @@ function takeResult(lay = layout()) {
   } catch { return null; }
 }
 
-module.exports = { layout, trustedKey, publishApp, checkApp, prepareUpdate, launchUpdater, takeResult, UPDATER, PACKAGE_FORMAT };
+module.exports = { layout, trustedKey, publishApp, checkApp, trustChannelKey, prepareUpdate, launchUpdater, takeResult, UPDATER, PACKAGE_FORMAT };

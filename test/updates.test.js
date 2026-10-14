@@ -10,11 +10,9 @@ const crypto = require('crypto');
 const { spawn, execFileSync } = require('child_process');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gp-upd-'));
-process.env.GP_PUBLISH_KEY_DIR = path.join(tmp, 'chave');
 process.env.GP_WINDOW_STYLE = 'Hidden'; // o "aplicativo" falso não abre janela durante o teste
 const C = require('../src/channel');
 const U = require('../src/updates');
-const { protect, unprotect } = require('../src/secrets');
 test.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
 const CANAL = path.join(tmp, 'canal');
@@ -34,7 +32,8 @@ function fakeApp(root, code, { exe = 'ok' } = {}) {
 const publisher = fakeApp(path.join(tmp, 'principal'), 'CODIGO-1.1.0');
 fs.writeFileSync(path.join(publisher.appDir, 'selftest.json'), '{}'); // não pode ir no pacote de instalação
 fs.mkdirSync(CANAL);
-const trust = (lay) => fs.copyFileSync(path.join(process.env.GP_PUBLISH_KEY_DIR, C.PUBKEY_FILE), path.join(lay.resourcesDir, C.PUBKEY_FILE));
+const SENHA = 'senha-de-teste-123';
+const trust = (lay) => fs.writeFileSync(path.join(lay.resourcesDir, C.PUBKEY_FILE), C.channelKeyInfo(CANAL).pubPem);
 const shortProcess = () => spawn(process.execPath, ['-e', 'setTimeout(() => {}, 1500)'], { stdio: 'ignore' });
 const runUpdater = (opts) => new Promise((resolve) => U.launchUpdater({ ...opts, independent: false }).on('exit', resolve));
 
@@ -47,21 +46,25 @@ test('versões: comparação semver', () => {
 });
 
 test('publicar: pacote de atualização (só o código) + pacote de instalação, assinados; versão repetida ou menor é recusada', async () => {
-  await assert.rejects(U.publishApp({ appDir: publisher.appDir, channelDir: path.join(tmp, 'nao-existe'), version: '1.1.0', electron: ELECTRON, schemaVersion: 1, protect, unprotect }), { code: 'CHANNEL_MISSING' });
-  const e = await U.publishApp({ appDir: publisher.appDir, channelDir: CANAL, version: '1.1.0', electron: ELECTRON, schemaVersion: 1, notes: 'Tela nova', protect, unprotect });
+  await assert.rejects(U.publishApp({ appDir: publisher.appDir, channelDir: path.join(tmp, 'nao-existe'), version: '1.1.0', electron: ELECTRON, schemaVersion: 1, password: SENHA }), { code: 'CHANNEL_MISSING' });
+  await assert.rejects(U.publishApp({ appDir: publisher.appDir, channelDir: CANAL, version: '1.1.0', electron: ELECTRON, schemaVersion: 1, password: SENHA }), { code: 'KEY_MISSING' }, 'pasta sem chave: só cria pedindo');
+  await assert.rejects(U.publishApp({ appDir: publisher.appDir, channelDir: CANAL, version: '1.1.0', electron: ELECTRON, schemaVersion: 1, password: 'curta', createKey: true }), { code: 'KEY_PASSWORD_WEAK' });
+  const e = await U.publishApp({ appDir: publisher.appDir, channelDir: CANAL, version: '1.1.0', electron: ELECTRON, schemaVersion: 1, notes: 'Tela nova', password: SENHA, createKey: true });
   const ch = C.readChannel(CANAL);
   assert.equal(ch.app.version, '1.1.0'); assert.equal(ch.app.notes, 'Tela nova'); assert.ok(ch.appSignature);
   assert.equal(sha(path.join(CANAL, ...e.update.file.split('/'))), e.update.sha256);
-  const keyFiles = fs.readdirSync(process.env.GP_PUBLISH_KEY_DIR);
-  assert.ok(keyFiles.includes('chave-privada.dpapi'));
-  assert.ok(!fs.readFileSync(path.join(process.env.GP_PUBLISH_KEY_DIR, 'chave-privada.dpapi'), 'utf8').includes('PRIVATE KEY'), 'chave privada só protegida pela DPAPI');
+  const keyFile = fs.readFileSync(path.join(CANAL, C.KEY_FILE), 'utf8');
+  assert.ok(!keyFile.includes('PRIVATE KEY') && !keyFile.includes(SENHA), 'chave privada só cifrada pela senha; a senha não é gravada');
+  assert.equal(e.keyId, C.channelKeyInfo(CANAL).keyId);
+  await assert.rejects(U.publishApp({ appDir: publisher.appDir, channelDir: CANAL, version: '1.1.1', electron: ELECTRON, schemaVersion: 1, password: 'senha-errada-000' }), { code: 'KEY_PASSWORD' });
+  assert.equal(C.readChannel(CANAL).app.version, '1.1.0', 'senha errada não publica nada');
   const list = execFileSync(C.TAR, ['-t', '-f', path.join(CANAL, ...e.install.file.split('/'))], { encoding: 'utf8' }).split(/\r?\n/);
   assert.ok(list.includes('LEIA-ME.txt'));
   assert.ok(list.some((l) => l === 'app/resources/app.asar'));
   assert.ok(list.some((l) => l === 'app/resources/gp-publicacao.pub'), 'a chave pública viaja dentro do aplicativo');
   assert.ok(!list.some((l) => /selftest\.json|(^|\/)data\//.test(l)), 'nem dados nem resto de autoteste');
   for (const v of ['1.1.0', '1.0.9']) {
-    await assert.rejects(U.publishApp({ appDir: publisher.appDir, channelDir: CANAL, version: v, electron: ELECTRON, schemaVersion: 1, protect, unprotect }), { code: 'VERSION_NOT_NEWER' });
+    await assert.rejects(U.publishApp({ appDir: publisher.appDir, channelDir: CANAL, version: v, electron: ELECTRON, schemaVersion: 1, password: SENHA }), { code: 'VERSION_NOT_NEWER' });
   }
 });
 
@@ -85,6 +88,32 @@ test('verificar: atualizado · versão nova disponível · bloqueios (desenvolvi
   assert.equal(t.signature, 'invalid'); assert.equal(t.canApply, false);
   assert.equal(U.checkApp({ channelDir: '', lay: client, appVersion: '1.0.0' }).status, 'no-channel');
   assert.equal(U.checkApp({ channelDir: path.join(tmp, 'sumiu'), lay: client, appVersion: '1.0.0' }).status, 'unreachable');
+});
+
+test('chave nova na pasta: instalação que confiava em outra chave só passa a confiar com a senha; chave adulterada não vale', async () => {
+  const client = fakeApp(path.join(tmp, 'notebook-chave-antiga'), 'CODIGO-1.0.0');
+  // a instalação confiava na chave de um computador antigo
+  fs.writeFileSync(path.join(client.resourcesDir, C.PUBKEY_FILE), crypto.generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'pem' }));
+  const c = U.checkApp({ channelDir: CANAL, lay: client, appVersion: '1.0.0', electron: ELECTRON });
+  assert.deepEqual([c.signature, c.canApply, c.canTrust], ['new-key', false, true]);
+  assert.match(c.blocked, /senha da chave/);
+  assert.throws(() => U.trustChannelKey({ channelDir: CANAL, lay: client, password: 'senha-errada-000' }), { code: 'KEY_PASSWORD' });
+  assert.equal(U.checkApp({ channelDir: CANAL, lay: client, appVersion: '1.0.0', electron: ELECTRON }).signature, 'new-key', 'senha errada não muda nada');
+  assert.throws(() => U.trustChannelKey({ channelDir: CANAL, lay: { packaged: false }, password: SENHA }), { code: 'NOT_PACKAGED' });
+  assert.equal(U.trustChannelKey({ channelDir: CANAL, lay: client, password: SENHA }).keyId, C.channelKeyInfo(CANAL).keyId);
+  const ok = U.checkApp({ channelDir: CANAL, lay: client, appVersion: '1.0.0', electron: ELECTRON });
+  assert.deepEqual([ok.signature, ok.canApply, ok.canTrust], ['ok', true, false]);
+  assert.ok(!fs.readFileSync(path.join(client.resourcesDir, C.PUBKEY_FILE), 'utf8').includes('PRIVATE'), 'só a parte pública vai para a instalação');
+  // alguém troca a chave pública da pasta (sem a senha): a versão publicada deixa de conferir e nada é oferecido
+  const canal2 = path.join(tmp, 'canal-chave-adulterada'); fs.cpSync(CANAL, canal2, { recursive: true });
+  const kf = path.join(canal2, C.KEY_FILE); const k = JSON.parse(fs.readFileSync(kf, 'utf8'));
+  k.publicKey = crypto.generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'pem' }); k.keyId = C.keyIdOf(k.publicKey);
+  fs.writeFileSync(kf, JSON.stringify(k));
+  const other = fakeApp(path.join(tmp, 'notebook-adulterado'), 'CODIGO-1.0.0');
+  fs.writeFileSync(path.join(other.resourcesDir, C.PUBKEY_FILE), crypto.generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'pem' }));
+  const bad = U.checkApp({ channelDir: canal2, lay: other, appVersion: '1.0.0', electron: ELECTRON });
+  assert.deepEqual([bad.signature, bad.canTrust], ['invalid', false]);
+  assert.throws(() => C.unlockChannelKey(canal2, SENHA), { code: 'KEY_PASSWORD' }, 'chave adulterada não abre nem com a senha certa');
 });
 
 test('pacote corrompido no canal: recusado pelo SHA-256; a instalação atual fica intacta', async () => {

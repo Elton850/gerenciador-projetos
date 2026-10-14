@@ -1,6 +1,6 @@
 ## Rota de contexto (ler antes de tudo)
 
-Vault Obsidian: `C:\Vault\Gerenciador de Projetos\Apps\GerenciadorProjetos`. Papéis: **Obsidian** = arquitetura, regras de negócio e decisões; **graphify** = navegação técnica e dependências do código; **código-fonte** = fonte final da implementação.
+Vault Obsidian: `C:\Vaults\Gerenciador de Projetos\Apps\GerenciadorProjetos`. Papéis: **Obsidian** = arquitetura, regras de negócio e decisões; **graphify** = navegação técnica e dependências do código; **código-fonte** = fonte final da implementação.
 
 1. Ler só `99-Claude/context.md` e `99-Claude/task-routing.md` do Vault.
 2. Pela rota, achar o domínio e os documentos pertinentes (não abrir docs "por segurança").

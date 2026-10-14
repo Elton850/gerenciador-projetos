@@ -3,19 +3,22 @@
 //   PUT  /api/updates/channel        { path? | clear } escolhe (seletor do Windows) ou limpa a pasta de publicação desta instalação
 //   POST /api/updates/check          consulta o canal: versão disponível + configurações novas (nada é baixado)
 //   POST /api/updates/apply          backup automático → prepara a versão nova → fecha, troca e reabre (script fixo)
-//   POST /api/updates/publish        { notes } publica no canal a versão INSTALADA (só no aplicativo empacotado)
+//   POST /api/updates/publish        { notes, password, createKey? } publica no canal a versão INSTALADA (só no aplicativo empacotado),
+//                                    assinada com a chave da pasta (senha); pasta sem chave → 409 KEY_MISSING (createKey cria)
+//   POST /api/updates/trust-key      { password } passa a confiar na chave da pasta (versão assinada com chave nova)
 //   POST /api/config-sync/check      o que mudaria aqui · POST /api/config-sync/apply { revision } · POST /api/config-sync/publish
 'use strict';
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const U = require('./updates');
+const C = require('./channel');
 const CS = require('./config-sync');
 const B = require('./backup');
 const { pickFolder } = require('./dialogs');
 const { httpError, str } = require('./util');
 
-function mount(app, { store, audit, dataDir, protect, unprotect, appVersion, backupsDir, onQuit = () => {}, lay = U.layout() }) {
+function mount(app, { store, audit, dataDir, unprotect, appVersion, backupsDir, onQuit = () => {}, lay = U.layout() }) {
   const backups = backupsDir || path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'GerenciadorProjetos', 'backups');
   const electron = process.versions.electron || null;
   const channel = () => store.data.settings?.updateChannel || '';
@@ -34,8 +37,10 @@ function mount(app, { store, audit, dataDir, protect, unprotect, appVersion, bac
     const r = lastResult; lastResult = null;
     res.json({ appVersion, electron, packaged: lay.packaged, schemaVersion: store.data.schemaVersion ?? null, migrations: store.data.migrations || [],
       channel: channel(), channelExists: !!channel() && fs.existsSync(channel()), configSync: store.data.settings?.configSync ? { revision: store.data.settings.configSync.revision, appliedAt: store.data.settings.configSync.appliedAt } : null,
-      lastResult: r, trustedKey: !!U.trustedKey(lay) });
+      lastResult: r, trustedKey: !!U.trustedKey(lay), channelKey: C.channelKeyInfo(channel()) ? { keyId: C.channelKeyInfo(channel()).keyId } : null });
   });
+  // Senha da chave de publicação: só usada em memória (nunca gravada, auditada nem devolvida).
+  const password = (req) => String(req.body?.password ?? '').slice(0, 200);
 
   app.put('/api/updates/channel', async (req, res) => {
     let dir = str(req.body?.path, 600);
@@ -71,9 +76,16 @@ function mount(app, { store, audit, dataDir, protect, unprotect, appVersion, bac
 
   app.post('/api/updates/publish', async (req, res) => {
     if (!lay.packaged) throw httpError(400, 'Publicar só pelo aplicativo instalado (ou pelo comando npm run publicar no computador de desenvolvimento).', { code: 'NOT_PACKAGED' });
-    const entry = await U.publishApp({ appDir: lay.appDir, channelDir: channel(), version: appVersion, electron, schemaVersion: store.schemaVersion, notes: str(req.body?.notes, 2000), protect, unprotect });
-    audit.log({ action: 'versao-publicada', versao: entry.version });
+    const entry = await U.publishApp({ appDir: lay.appDir, channelDir: channel(), version: appVersion, electron, schemaVersion: store.schemaVersion, notes: str(req.body?.notes, 2000),
+      password: password(req), createKey: req.body?.createKey === true });
+    audit.log({ action: 'versao-publicada', versao: entry.version, chave: entry.keyId });
     res.json(entry);
+  });
+
+  app.post('/api/updates/trust-key', (req, res) => {
+    const r = U.trustChannelKey({ channelDir: channel(), lay, password: password(req) });
+    audit.log({ action: 'chave-publicacao-confiada', chave: r.keyId });
+    res.json(r);
   });
 
   app.post('/api/config-sync/publish', async (req, res) => {

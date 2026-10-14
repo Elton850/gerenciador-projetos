@@ -28,7 +28,7 @@ configuracoes\configuracoes-r<N>.gpconfig          configurações compartilháv
 ```
 Nada de dados pessoais vai para a pasta (projetos, horas, conexões, contatos de projeto ficam de fora).
 
-## Versão nova do aplicativo (computador principal / desenvolvimento)
+## Versão nova do aplicativo (qualquer computador com a pasta do canal)
 1. Faça a alteração e rode `npm test`.
 2. Aumente a versão (semver: correção `patch`, recurso `minor`, quebra `major`):
    ```bash
@@ -38,11 +38,17 @@ Nada de dados pessoais vai para a pasta (projetos, horas, conexões, contatos de
    ```bash
    npm run publicar -- --canal "D:\OneDrive\GerenciadorProjetos-canal" --notas "o que mudou"
    ```
-   (Ou: `npm run build:desktop`, abra o app e use **Configurações → Atualizações → Publicar esta versão**.)
+   O comando pede a **senha da chave de publicação** (ou use a variável `GP_CHAVE_SENHA`). Pasta ainda sem chave: acrescente
+   `--nova-chave` (uma vez). (Ou: `npm run build:desktop`, abra o app e use **Configurações → Atualizações → Publicar esta versão**.)
 
-A primeira publicação cria a **chave de publicação** deste computador (`%LOCALAPPDATA%\GerenciadorProjetos\publicacao\`,
-privada protegida pela DPAPI). Cada pacote é assinado com ela; as instalações só aceitam atualização assinada pela chave que veio no
-pacote de instalação. Versão igual ou menor que a do canal é recusada.
+A **chave de publicação** fica na própria pasta do canal (`chave-publicacao.json`): a parte privada vai cifrada com a sua senha
+(scrypt + AES-256-GCM; a senha nunca é gravada). Assim qualquer computador com acesso à pasta publica, sem depender de uma máquina.
+Cada pacote é assinado com ela; as instalações só aceitam atualização assinada pela chave em que confiam (a que veio no pacote de
+instalação). Versão igual ou menor que a do canal é recusada.
+
+**Chave nova** (primeira chave da pasta ou troca): instalações que confiavam em outra chave mostram “Confiar na nova chave” em
+**Configurações → Atualizações** e pedem a mesma senha uma vez; sem a senha, nada muda. Quem consegue gravar na pasta, mas não sabe
+a senha, não publica código nem faz as instalações trocarem de chave.
 
 ## Máquina nova
 1. Copie `versoes\GerenciadorProjetos-<v>-instalacao.zip` da pasta de publicação e extraia numa pasta sua (ex.: `C:\GerenciadorProjetos`).
@@ -81,7 +87,7 @@ versão nova: os projetos mostram “nova versão do ciclo” e só mudam ao **A
 
 ## Limitações
 - O executável não tem certificado de assinatura de código: o Windows pode avisar “editor desconhecido” na primeira abertura.
-- Perdeu a chave de publicação (formatou o computador principal)? Gere uma nova publicando de novo e reinstale as outras máquinas pelo
-  pacote de instalação (a confiança vem dele).
+- Esqueceu a senha da chave? Ela não pode ser recuperada: apague `chave-publicacao.json` da pasta, publique com `--nova-chave` e
+  reinstale as outras máquinas pelo pacote de instalação (sem a senha antiga, “Confiar na nova chave” não tem como provar a troca).
 - Voltar manualmente para a versão anterior não tem botão: a anterior fica em `app\resources.anterior` (troca automática só quando a
   nova não sobe).

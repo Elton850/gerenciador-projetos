@@ -5,14 +5,15 @@
 //   <canal>\versoes\GerenciadorProjetos-<v>.gpupdate      atualização (ZIP da pasta resources do aplicativo = código)
 //   <canal>\versoes\GerenciadorProjetos-<v>-instalacao.zip  instalação completa para uma máquina nova (pasta app\ + LEIA-ME)
 //   <canal>\configuracoes\configuracoes-r<N>.gpconfig     ciclos, checklists, modelos… (src/config-sync.js)
+//   <canal>\chave-publicacao.json                        chave de publicação (privada cifrada com a SENHA do usuário)
 //
-// Assinatura (só das versões do aplicativo, que são código executável): Ed25519. A chave privada fica SÓ no computador que publica,
-// protegida pela DPAPI (%LOCALAPPDATA%\GerenciadorProjetos\publicacao); a pública vai dentro do aplicativo (resources\gp-publicacao.pub)
-// e é nela que cada instalação confia. Quem consegue gravar na pasta do canal não consegue publicar código sem a chave privada.
+// Assinatura (só das versões do aplicativo, que são código executável): Ed25519. A chave fica NA PASTA DO CANAL, com a privada cifrada
+// pela senha (scrypt + AES-256-GCM): qualquer computador com acesso à pasta publica informando a senha (não depende de uma máquina).
+// A pública vai dentro do aplicativo (resources\gp-publicacao.pub) e é nela que cada instalação confia; passar a confiar em outra
+// chave também exige a senha. Quem consegue gravar na pasta do canal não consegue publicar código sem a senha.
 'use strict';
 // Dentro do Electron o fs comum trata arquivos .asar como pastas; aqui eles são arquivos comuns (copiar, conferir, apagar).
 const fs = (() => { try { return require('original-fs'); } catch { return require('fs'); } })();
-const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { execFile } = require('child_process');
@@ -21,6 +22,10 @@ const { SYS } = require('./powershell');
 const CHANNEL_FILE = 'canal.json';
 const FORMAT = 'GerenciadorProjetosCanal';
 const PUBKEY_FILE = 'gp-publicacao.pub';
+const KEY_FILE = 'chave-publicacao.json';
+const KEY_FORMAT = 'GerenciadorProjetosChave';
+const SCRYPT = { N: 2 ** 17, r: 8, p: 1, maxmem: 256 * 1024 * 1024 }; // mesmo custo da senha do backup
+const MIN_PASSWORD = 8;
 const TAR = path.join(SYS, 'System32', 'tar.exe'); // bsdtar do Windows 10/11: cria e extrai ZIP sem dependências
 
 const fail = (code, message, status = 400) => Object.assign(new Error(message), { code, status });
@@ -110,24 +115,60 @@ const canonical = (v) => (Array.isArray(v) ? `[${v.map(canonical).join(',')}]`
     : JSON.stringify(v));
 const keyIdOf = (pem) => crypto.createHash('sha256').update(String(pem).trim()).digest('hex').slice(0, 16);
 
-function keyDir() { return process.env.GP_PUBLISH_KEY_DIR || path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'GerenciadorProjetos', 'publicacao'); }
-
-// Par de chaves de publicação deste computador (criado na primeira publicação). Privada: só protegida pela DPAPI.
-async function publishingKeys({ protect, unprotect }) {
-  const dir = keyDir();
-  const privFile = path.join(dir, 'chave-privada.dpapi');
-  const pubFile = path.join(dir, PUBKEY_FILE);
-  if (!fs.existsSync(privFile) || !fs.existsSync(pubFile)) {
-    const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
-    const pubPem = publicKey.export({ type: 'spki', format: 'pem' });
-    const enc = await protect(privateKey.export({ type: 'pkcs8', format: 'pem' }));
-    fs.mkdirSync(dir, { recursive: true });
-    writeAtomic(privFile, enc);
-    writeAtomic(pubFile, pubPem);
+// ---------- chave de publicação na pasta do canal (privada cifrada com a senha) ----------
+const KEY_BAD = 'A chave de publicação da pasta está ilegível.';
+const keyAad = (k) => Buffer.from(canonical({ format: k.format, keyId: k.keyId, publicKey: k.publicKey }));
+function scryptKey(password, salt, { N, r, p }) {
+  if (![N, r, p].every(Number.isInteger) || N > 2 ** 20 || r > 16 || p > 4) throw fail('KEY_INVALID', KEY_BAD);
+  return crypto.scryptSync(String(password ?? '').normalize('NFC'), salt, 32, { N, r, p, maxmem: SCRYPT.maxmem * 2 });
+}
+// Arquivo da chave (sem a senha só dá para ler a parte pública). null = a pasta ainda não tem chave.
+function readKeyFile(dir) {
+  const file = dir && path.join(dir, KEY_FILE);
+  if (!file || !fs.existsSync(file)) return null;
+  let k;
+  try { k = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { throw fail('KEY_INVALID', KEY_BAD); }
+  if (k.format !== KEY_FORMAT || !k.publicKey || keyIdOf(k.publicKey) !== k.keyId || k.cipher !== 'aes-256-gcm' || k.kdf?.name !== 'scrypt') throw fail('KEY_INVALID', KEY_BAD);
+  return k;
+}
+function channelKeyInfo(dir) {
+  try { const k = readKeyFile(dir); return k ? { keyId: k.keyId, pubPem: k.publicKey, createdAt: k.createdAt || null } : null; } catch { return null; }
+}
+// Cria a chave da pasta (só se ainda não existir). A senha nunca é guardada; sem ela ninguém publica nem troca a confiança.
+function createChannelKey(dir, password, now = new Date()) {
+  if (readKeyFile(dir)) throw fail('KEY_EXISTS', 'A pasta de publicação já tem uma chave de publicação.', 409);
+  if (String(password ?? '').length < MIN_PASSWORD) throw fail('KEY_PASSWORD_WEAK', `A senha da chave de publicação precisa ter pelo menos ${MIN_PASSWORD} caracteres.`);
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const pubPem = publicKey.export({ type: 'spki', format: 'pem' });
+  const salt = crypto.randomBytes(16); const iv = crypto.randomBytes(12);
+  const k = { format: KEY_FORMAT, v: 1, keyId: keyIdOf(pubPem), publicKey: pubPem, createdAt: now.toISOString(),
+    kdf: { name: 'scrypt', N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p, salt: salt.toString('base64') }, cipher: 'aes-256-gcm', iv: iv.toString('base64') };
+  const key = scryptKey(password, salt, SCRYPT);
+  const c = crypto.createCipheriv('aes-256-gcm', key, iv);
+  c.setAAD(keyAad(k));
+  const data = Buffer.concat([c.update(privateKey.export({ type: 'pkcs8', format: 'pem' })), c.final()]);
+  key.fill(0);
+  writeAtomic(path.join(dir, KEY_FILE), JSON.stringify({ ...k, tag: c.getAuthTag().toString('base64'), data: data.toString('base64') }, null, 2));
+  return { pubPem, keyId: k.keyId, privateKey };
+}
+// Abre a chave da pasta com a senha (senha errada ou arquivo adulterado → recusa).
+function unlockChannelKey(dir, password) {
+  const k = readKeyFile(dir);
+  if (!k) throw fail('KEY_MISSING', 'A pasta de publicação ainda não tem chave de publicação.', 409);
+  let privateKey;
+  try {
+    const key = scryptKey(password, Buffer.from(k.kdf.salt, 'base64'), k.kdf);
+    const d = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(k.iv, 'base64'));
+    d.setAAD(keyAad(k));
+    d.setAuthTag(Buffer.from(k.tag, 'base64'));
+    privateKey = crypto.createPrivateKey(Buffer.concat([d.update(Buffer.from(k.data, 'base64')), d.final()]).toString('utf8'));
+    key.fill(0);
+  } catch (e) {
+    if (e.code === 'KEY_INVALID') throw e;
+    throw fail('KEY_PASSWORD', 'Senha da chave de publicação incorreta.');
   }
-  const pubPem = fs.readFileSync(pubFile, 'utf8');
-  const privateKey = crypto.createPrivateKey(await unprotect(fs.readFileSync(privFile, 'utf8').trim()));
-  return { pubPem, keyId: keyIdOf(pubPem), privateKey };
+  if (crypto.createPublicKey(privateKey).export({ type: 'spki', format: 'pem' }) !== k.publicKey) throw fail('KEY_INVALID', KEY_BAD);
+  return { pubPem: k.publicKey, keyId: k.keyId, privateKey };
 }
 const sign = (obj, privateKey) => crypto.sign(null, Buffer.from(canonical(obj)), privateKey).toString('base64');
 function verify(obj, signature, pubPem) {
@@ -136,5 +177,5 @@ function verify(obj, signature, pubPem) {
 
 module.exports = {
   CHANNEL_FILE, FORMAT, PUBKEY_FILE, TAR, fail, parseVersion, compareVersions, sha256File, writeAtomic, copyAtomic, channelPath,
-  zipEntries, unzipTo, readChannel, writeChannel, canonical, keyIdOf, keyDir, publishingKeys, sign, verify,
+  zipEntries, unzipTo, readChannel, writeChannel, canonical, keyIdOf, KEY_FILE, readKeyFile, channelKeyInfo, createChannelKey, unlockChannelKey, sign, verify,
 };

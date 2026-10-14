@@ -1,6 +1,6 @@
 'use strict';
 // Configurações → Atualizações: versão instalada, migrações de dados, pasta de publicação (canal), atualizar o aplicativo,
-// sincronizar configurações compartilháveis e publicar (computador principal). Regras no servidor: src/updates.js, src/config-sync.js.
+// sincronizar configurações compartilháveis e publicar (qualquer computador com a pasta e a senha da chave). Regras no servidor: src/updates.js, src/config-sync.js.
 
 const UPD = { status: null, check: null, sync: null };
 const UPD_KIND = { new: ['Novo', 'pill'], updated: ['Atualizado na origem', 'pill'], conflict: ['Alterado aqui e na origem — vale a origem', 'pill soon'],
@@ -52,7 +52,20 @@ function updAppCard(s) {
           }, 'Preparando…');
         };
         actions.push(go);
-      } else lines.push(h('p', { class: 'small' }, `⚠ ${c.blocked}`), c.installPackage && c.fullInstallRequired ? h('p', { class: 'small mono' }, c.installPackage) : null);
+      } else {
+        lines.push(h('p', { class: 'small' }, `⚠ ${c.blocked}`), c.installPackage && c.fullInstallRequired ? h('p', { class: 'small mono' }, c.installPackage) : null);
+        // Versão assinada com a chave da pasta (nova para esta instalação): a senha da chave autoriza passar a confiar nela.
+        if (c.canTrust) {
+          const pw = h('input', { type: 'password', autocomplete: 'off', placeholder: 'Senha da chave de publicação' });
+          const trust = h('button', { class: 'btn primary' }, 'Confiar na nova chave');
+          trust.onclick = () => busy(trust, async () => {
+            await api('POST', '/api/updates/trust-key', { password: pw.value });
+            UPD.check = await api('POST', '/api/updates/check'); await updLoad(); updRedraw();
+            toast('Chave de publicação confiada. Agora é possível atualizar.');
+          }, 'Conferindo…');
+          lines.push(h('div', { class: 'cfg-actions' }, pw, trust));
+        }
+      }
     }
   }
   actions.push(checkBtn);
@@ -105,17 +118,23 @@ function updSyncCard(s) {
 
 function updPublishCard(s) {
   const notes = h('textarea', { maxlength: 2000, placeholder: 'O que mudou nesta versão (aparece para quem for atualizar)' });
-  const pubApp = h('button', { class: 'btn' }, `Publicar esta versão (${s.appVersion})`);
+  // Chave de publicação fica na pasta do canal, cifrada com senha: qualquer computador com a pasta publica informando a senha.
+  const newKey = !!s.channel && !s.channelKey;
+  const pw = h('input', { type: 'password', autocomplete: 'off', placeholder: newKey ? 'Senha nova (mínimo 8 caracteres)' : 'Senha da chave de publicação' });
+  const pw2 = newKey ? h('input', { type: 'password', autocomplete: 'off', placeholder: 'Repita a senha' }) : null;
+  const pubApp = h('button', { class: 'btn' }, newKey ? `Criar chave e publicar (${s.appVersion})` : `Publicar esta versão (${s.appVersion})`);
   pubApp.onclick = () => busy(pubApp, async () => {
-    const r = await api('POST', '/api/updates/publish', { notes: notes.value });
+    if (newKey && pw.value !== pw2.value) return toast('As senhas não conferem.', 'error');
+    const r = await api('POST', '/api/updates/publish', { notes: notes.value, password: pw.value, createKey: newKey });
     toast(`Versão ${r.version} publicada (atualização ${fmtSize(r.update.size)}; instalação ${fmtSize(r.install.size)}).`);
-    UPD.check = null; updRedraw();
+    UPD.check = null; await updLoad(); updRedraw();
   }, 'Publicando… (pode levar alguns minutos)');
   const pubCfg = h('button', { class: 'btn' }, 'Publicar configurações');
   pubCfg.onclick = () => busy(pubCfg, async () => { const r = await api('POST', '/api/config-sync/publish'); toast(`Configurações publicadas (revisão ${r.revision}).`); await updLoad(); updRedraw(); }, 'Publicando…');
-  return cfgCard('Publicar (computador principal)',
-    h('p', { class: 'cfg-intro' }, 'Versão nova do aplicativo: aumente a versão (npm version patch), gere o aplicativo (npm run build:desktop) e abra-o; depois publique aqui — ou use npm run publicar. Gera o pacote de atualização e o pacote de instalação para máquinas novas, assinados com a chave deste computador.'),
-    field('Notas da versão', notes), h('div', { class: 'cfg-actions' }, pubApp, pubCfg));
+  return cfgCard('Publicar',
+    h('p', { class: 'cfg-intro' }, 'Versão nova do aplicativo: aumente a versão (npm version patch), gere o aplicativo (npm run build:desktop) e abra-o; depois publique aqui — ou use npm run publicar. Gera o pacote de atualização e o pacote de instalação para máquinas novas, assinados com a chave de publicação que fica na pasta do canal (protegida pela sua senha): funciona em qualquer computador com acesso à pasta.'),
+    newKey ? h('p', { class: 'small' }, '⚠ Esta pasta ainda não tem chave de publicação. Ela será criada com a senha abaixo (guarde-a: sem ela ninguém publica). Instalações que confiavam em outra chave pedem a mesma senha uma vez, em “Confiar na nova chave”.') : null,
+    field('Notas da versão', notes), h('div', { class: 'cfg-actions' }, pw, pw2, pubApp, pubCfg));
 }
 
 // Ao abrir: confere o canal uma vez (sem baixar nada) e só avisa.

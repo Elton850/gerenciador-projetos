@@ -1,7 +1,7 @@
 'use strict';
 // Biblioteca de Documentos e Modelos: arquivos locais ou links, organizados por etapa do ciclo de migração.
 
-const docFilter = { q: '', kind: '', stage: '' };
+const docFilter = { q: '', kind: '', stage: '', tab: 'lib' }; // tab: lib = biblioteca · gen = gerar documentos (public/docgen.js)
 const KIND_LABEL = { modelo: 'Modelo', documento: 'Documento' };
 const norm = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 const fileName = (p) => String(p || '').split(/[\\/]/).pop();
@@ -56,6 +56,14 @@ function docForm(d) {
 }
 
 function renderDocs(main) {
+  const tabs = h('nav', { class: 'tabs', role: 'tablist' }, [['lib', 'Biblioteca'], ['gen', 'Gerar documentos']].map(([k, l]) =>
+    h('button', { class: `tab${docFilter.tab === k ? ' active' : ''}`, role: 'tab', onclick: () => { docFilter.tab = k; render(); } }, l)));
+  if (docFilter.tab === 'gen') {
+    return main.append(h('div', { class: 'page' },
+      h('div', { class: 'page-head' }, h('div', { class: 'grow' }, h('h1', null, 'Documentos e Modelos'),
+        h('div', { class: 'muted' }, 'Gere a documentação do projeto (Word) a partir de modelos, com os dados do projeto e prévia antes de baixar.'))),
+      tabs, dgTab()));
+  }
   const q = norm(docFilter.q);
   const match = (d) => (!docFilter.kind || d.kind === docFilter.kind)
     && (docFilter.stage === '' || (docFilter.stage === 'none' ? !d.stageId : d.stageId === docFilter.stage))
@@ -81,6 +89,7 @@ function renderDocs(main) {
     h('div', { class: 'page-head' }, h('div', { class: 'grow' }, h('h1', null, 'Documentos e Modelos'),
       h('div', { class: 'muted' }, 'A documentação de cada etapa do ciclo de migração, sempre à mão. Aparece também dentro de cada projeto, na etapa correspondente.')),
     h('button', { class: 'btn primary', onclick: () => docForm() }, '+ Documento / modelo')),
+    tabs,
     h('div', { class: 'card' }, h('div', { class: 'card-body' }, h('div', { class: 'inline' }, search, kindSel, stageSel),
       h('div', { class: 'hint' }, `${plural(docs.length, 'item', 'itens')}${docs.length !== state.documents.length ? ` de ${state.documents.length}` : ''}`))),
     !state.documents.length ? h('div', { class: 'card' }, h('div', { class: 'card-body' }, h('h2', null, 'Biblioteca vazia'),

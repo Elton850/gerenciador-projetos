@@ -187,3 +187,48 @@ test('modelos: criar, duplicar, desativar; excluir só o nunca usado', async () 
   assert.ok(!ok(await api('GET', `/api/projects/${S.p.id}/doc-templates`)).templates.some((x) => x.id === t.id));
   assert.equal((await api('POST', `/api/projects/${S.p.id}/doc-templates/${t.id}/form`)).status, 400);
 });
+
+test('formatação do original: título/parágrafo/quadro/tabela copiam estilo, cores, bordas e espaçamento do papel timbrado', async () => {
+  const { buildDocx } = require('../src/docx');
+  const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+  const F = '<w:rFonts w:ascii="Verdana" w:hAnsi="Verdana"/>';
+  const r = (t, extra = '') => `<w:r><w:rPr>${F}${extra}</w:rPr><w:t xml:space="preserve">${t}</w:t></w:r>`;
+  const tc = (inner, fill = '') => `<w:tc><w:tcPr><w:tcW w:w="4000" w:type="dxa"/>${fill ? `<w:shd w:val="clear" w:fill="${fill}"/>` : ''}</w:tcPr><w:p><w:pPr><w:rPr>${F}<w:b/><w:i/><w:color w:val="FF0000"/></w:rPr></w:pPr>${inner}</w:p></w:tc>`;
+  const tbl = (rows) => `<w:tbl><w:tblPr><w:tblW w:w="8000" w:type="dxa"/><w:tblBorders><w:top w:val="single" w:sz="4" w:color="A44DFF"/></w:tblBorders></w:tblPr><w:tblGrid><w:gridCol w:w="4000"/><w:gridCol w:w="4000"/></w:tblGrid>${rows}</w:tbl>`;
+  const body = `<w:p><w:pPr><w:pStyle w:val="Ttulo1"/></w:pPr>${r('Termo de Entrega / Marco', '<w:color w:val="00C9EB"/>')}</w:p><w:p/>`
+    + `<w:p><w:pPr><w:jc w:val="both"/></w:pPr>${r('Concluído o marco ')}${r('1ª Migração', '<w:b/><w:i/>')}${r(', de acordo.')}</w:p>`
+    + tbl(`<w:tr>${tc('', 'EEEEEE')}${tc('', 'EEEEEE')}</w:tr><w:tr>${tc(r('Nome do cliente: ', '<w:b/>'))}${tc(r('Código:', '<w:b/>'))}</w:tr>`) + '<w:p/>'
+    + tbl(`<w:tr><w:trPr><w:tblHeader/></w:trPr>${tc(r('Processo', '<w:b/>'), 'D0D0D0')}${tc(r('Data', '<w:b/>'), 'D0D0D0')}</w:tr><w:tr><w:trPr><w:trHeight w:val="800"/></w:trPr>${tc(r('Carga A', '<w:b/><w:color w:val="666666"/>'))}${tc('')}</w:tr>`)
+    + '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:left="1000" w:right="1000"/></w:sectPr>';
+  const z = new JSZip();
+  z.file('_rels/.rels', '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
+  z.file('word/document.xml', `<?xml version="1.0"?><w:document xmlns:w="${W}"><w:body>${body}</w:body></w:document>`);
+  const baseBuf = await z.generateAsync({ type: 'nodebuffer' });
+  const t = G.cleanTemplate({ name: 'T', fields: [{ key: 'marco', label: 'Marco' }, { key: 'entrega', label: 'Entrega' }, { key: 'cliente', label: 'Cliente' }],
+    blocks: [{ type: 'title', text: 'Termo de Entrega / {{doc.entrega}}' }, { type: 'paragraph', text: 'Concluído o marco {{doc.marco}}, de acordo.' },
+      { type: 'info', rows: [[{ label: 'Nome do cliente:', value: '{{doc.cliente}}' }, { label: 'Código:', value: 'X1' }]] },
+      { type: 'table', columns: ['Processo', 'Data'], rows: [['Carga A', '01/10/2026'], ['Carga B', '02/10/2026']] },
+      { type: 'table', columns: ['Sem molde', 'Coluna'], rows: [['a', 'b']] }] }, applyDefaults({ projects: [] }));
+  t.id = 't1';
+  const doc = G.render(t, { data: applyDefaults({ projects: [] }), project: { id: 'p', name: 'P' } }, G.cleanInput(t, { fields: { marco: 'Produção', entrega: 'Carga', cliente: 'Cliente Alfa' } }));
+  const out = await JSZip.loadAsync(await buildDocx(doc, { base: baseBuf }));
+  const xml = await out.file('word/document.xml').async('string');
+  // Título: estilo e cor do original; a variável no fim herda a cor do trecho que ocupa.
+  assert.match(xml, /<w:pStyle w:val="Ttulo1"\/><\/w:pPr><w:r><w:rPr>[^]*?00C9EB[^]*?Termo de Entrega \/ <\/w:t><\/w:r><w:r><w:rPr>[^]*?00C9EB[^]*?>Carga</);
+  assert.ok(xml.includes('<w:pStyle w:val="Ttulo1"/></w:pPr>') && /Carga<\/w:t><\/w:r><\/w:p><w:p\/>/.test(xml), 'parágrafo vazio de espaçamento copiado');
+  // Parágrafo: o valor do marco fica em negrito itálico, como o trecho do original.
+  assert.match(xml, /<w:b\/><w:i\/><\/w:rPr><w:t xml:space="preserve">Produção<\/w:t>/);
+  // Quadro: bordas do original, faixa decorativa, valor sem negrito explícito.
+  assert.ok(xml.includes('w:color="A44DFF"'));
+  assert.ok(xml.includes('w:fill="EEEEEE"'), 'faixa decorativa copiada');
+  assert.match(xml, /<w:b w:val="0"\/><w:bCs w:val="0"\/><\/w:rPr><w:t xml:space="preserve"> Cliente Alfa<\/w:t>/);
+  // Tabela: cabeçalho cinza, altura da linha original; célula vazia do original segue o texto da linha (não o vermelho da marca).
+  assert.ok(xml.includes('w:fill="D0D0D0"') && xml.includes('<w:trHeight w:val="800"/>'));
+  assert.match(xml, /666666"\/><\/w:rPr><w:t xml:space="preserve">01\/10\/2026</);
+  const dateRun = xml.match(/<w:r><w:rPr>((?:(?!<\/w:rPr>).)*)<\/w:rPr><w:t xml:space="preserve">01\/10\/2026/)[1];
+  assert.ok(!dateRun.includes('FF0000'), 'marca vermelha da célula vazia não vai para o texto');
+  assert.ok(xml.includes('>Carga B<'), 'linha além do original repete a última linha do original');
+  // Sem correspondente: formatação neutra com a fonte predominante do original.
+  assert.match(xml, /<w:rFonts w:ascii="Verdana" w:hAnsi="Verdana"\/><w:b\/><w:bCs\/><\/w:rPr><w:t xml:space="preserve">Sem molde</);
+  assert.ok(xml.includes('<w:sectPr><w:pgSz'), 'seção final preservada');
+});

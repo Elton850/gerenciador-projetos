@@ -22,6 +22,7 @@ const ICONS = {
   home: ['M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z'],
   clock: ['M12 7v5l3 2', [12, 12, 9]],
   bell: ['M6 9a6 6 0 0 1 12 0c0 6.5 2.5 8 2.5 8h-17S6 15.5 6 9', 'M10.3 20.5a2 2 0 0 0 3.4 0'],
+  calendar: ['M4 6a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z', 'M4 10h16', 'M8 3v4', 'M16 3v4', 'M8 14h5'],
   workspace: ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z', 'M8 13h8'],
   docs: ['M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z', 'M14 3v5h5', 'M9 13h6', 'M9 17h4'],
   scripts: ['M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3z', 'M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6', 'M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6'],
@@ -246,7 +247,7 @@ function replaceProject(p) {
   render();
 }
 const route = () => {
-  const m = location.hash.match(/^#\/(project|audit|settings|docs|scripts|workspace|hours|reminders)(?:\/(\w+))?/);
+  const m = location.hash.match(/^#\/(project|audit|settings|docs|scripts|workspace|hours|reminders|schedule)(?:\/(\w+))?/);
   return m ? { name: m[1], id: m[2] } : { name: 'home' };
 };
 window.addEventListener('hashchange', render);
@@ -269,6 +270,7 @@ function render() {
   if (r.name === 'workspace') return renderWorkspace(main);
   if (r.name === 'hours') return renderHours(main);
   if (r.name === 'reminders') return renderReminders(main);
+  if (r.name === 'schedule') return renderSchedule(main);
   if (r.name === 'project') {
     const p = state.projects.find((x) => x.id === r.id);
     if (p) return renderProject(main, p);
@@ -310,6 +312,7 @@ function renderNav(r) {
 }
 const NAV_MENU = [
   { hash: '#/hours', name: 'hours', icon: 'clock', label: 'Controle de Horas' },
+  { hash: '#/schedule', name: 'schedule', icon: 'calendar', label: 'Cronogramas' },
   { hash: '#/reminders', name: 'reminders', icon: 'bell', label: 'Lembretes' },
   { hash: '#/workspace', name: 'workspace', icon: 'workspace', label: 'Workspace (arquivos e Git)' },
   { hash: '#/docs', name: 'docs', icon: 'docs', label: 'Documentos e Modelos' },
@@ -380,7 +383,8 @@ function homeKpis() {
   return [
     kpi('Projetos ativos', String(active.length), `${plural(live.length - active.length, 'concluído', 'concluídos')}${cancelled.length ? ` · ${plural(cancelled.length, 'cancelado', 'cancelados')}` : ''}`),
     kpi('Pendências obrigatórias', String(pend), pend ? `em ${plural(pendProj, 'projeto', 'projetos')}` : 'nenhuma até a etapa atual', pend ? 'warn' : 'ok', pend ? goAttention : null, 'Itens obrigatórios ainda não concluídos (inclui pendências herdadas)'),
-    kpi('Prazos', overdue ? `${overdue} atrasado${overdue > 1 ? 's' : ''}` : soon ? `${soon} perto` : 'em dia', overdue && soon ? `${soon} perto do prazo` : 'marcos do cronograma', overdue ? 'bad' : soon ? 'warn' : '', overdue || soon ? goAttention : null),
+    kpi('Prazos', overdue ? `${overdue} atrasado${overdue > 1 ? 's' : ''}` : soon ? `${soon} perto` : 'em dia', state.scheduleSummary ? `${state.scheduleSummary.week} esta semana · ${state.scheduleSummary.next30} em 30 dias` : overdue && soon ? `${soon} perto do prazo` : 'marcos do cronograma',
+      overdue ? 'bad' : soon ? 'warn' : '', () => (location.hash = '#/schedule'), 'Abrir a Central de Cronogramas'),
     st ? kpi('Horas hoje', `${hm(st.day.confirmed)} / ${hm(st.day.target)}`, t ? `em andamento: ${t.projectName || t.activity || 'atividade'}` : st.pending.length ? `${plural(st.pending.length, 'dia pendente', 'dias pendentes')}` : 'nenhum dia pendente',
       st.pending.length ? 'warn' : '', () => (location.hash = '#/hours'), 'Abrir Controle de Horas')
       : kpi('Horas hoje', '…', 'carregando'),
@@ -393,11 +397,9 @@ function renderHome(main) {
   const open = (p) => () => (location.hash = `#/project/${p.id}`);
   for (const p of state.projects) {
     if (p.cancelled) continue; // cancelado não gera alerta
-    for (const m of p.milestones) {
-      if (m.done || m.reminder) continue; // com lembrete: aparece no card Lembretes (sem duplicar aqui)
-      const days = Math.round((Date.parse(m.dueDate) - Date.parse(state.today)) / 86400000);
-      const limit = Number.isInteger(m.alertDays) ? m.alertDays : state.settings.warnDays;
-      if (days <= limit) attention.push({ order: days, kind: 'Prazo', tone: days < 0 ? 'bad' : 'warn', p, title: m.title, sub: `${p.name} · ${fmtDate(m.dueDate)}`, badge: pill(days < 0 ? 'overdue' : 'soon', daysText(days)), action: ['Abrir', open(p)] });
+    for (const x of p.scheduleItems || []) { // status calculado no servidor (src/schedule.js)
+      if (x.done || x.reminder) continue; // com lembrete: aparece no card Lembretes (sem duplicar aqui)
+      if (['overdue', 'today', 'soon'].includes(x.status)) attention.push({ order: x.days, kind: 'Prazo', tone: x.status === 'overdue' ? 'bad' : 'warn', p, title: x.title, sub: `${p.name} · ${x.kind === 'period' ? `${fmtDate(x.start)} → ` : ''}${fmtDate(x.end)}`, badge: pill(x.status === 'overdue' ? 'overdue' : 'soon', daysText(x.days)), action: ['Abrir', open(p)] });
     }
     const ck = p.stepId ? p.checklist?.[p.stepId] : null;
     const st = stageOf(p);
@@ -620,6 +622,7 @@ function workspaceCard(p) {
 function milestoneForm(p, m) {
   const title = h('input', { type: 'text', value: m?.title || '', maxlength: 160, placeholder: 'Ex.: Entrega da homologação' });
   const due = h('input', { type: 'date', value: m?.dueDate || '' });
+  const start = h('input', { type: 'date', value: m?.startDate || '' });
   const alert = h('input', { type: 'number', min: 0, max: 365, value: m?.alertDays ?? '', placeholder: `padrão (${state.settings.warnDays})` });
   const note = h('input', { type: 'text', value: m?.note || '', maxlength: 500 });
   const remOn = h('input', { type: 'checkbox', checked: !!m?.reminder });
@@ -631,14 +634,17 @@ function milestoneForm(p, m) {
   remOn.addEventListener('change', syncRem); syncRem();
   const md = openModal({
     title: m ? 'Editar prazo' : 'Novo prazo / entrega',
-    body: [field('O que precisa ser entregue', title), h('div', { class: 'cols2' }, field('Data', due), field('Avisar com quantos dias?', alert, 'Vazio = usa o padrão. Vale também como antecedência do lembrete.')), field('Observação', note), remBox],
+    body: [field('O que precisa ser entregue', title), h('div', { class: 'cols2' }, field('Início (opcional)', start, 'Preencha para um período (início → prazo). Vazio = prazo de um dia (◆).'), field('Prazo (data final)', due)),
+      field('Avisar com quantos dias?', alert, 'Vazio = usa o padrão. Vale também como antecedência do lembrete.'), field('Observação', note), remBox],
     footer: [h('button', { class: 'btn', onclick: () => md.close() }, 'Cancelar'),
       h('button', { class: 'btn primary', onclick: (e) => busy(e.target, async () => {
-        const body = { title: title.value, dueDate: due.value, alertDays: alert.value, note: note.value, done: m?.done || false, reminder: remOn.checked ? { on: true, time: remTime.value } : null };
-        replaceProject(m ? await api('PUT', `/api/projects/${p.id}/milestones/${m.id}`, body) : await api('POST', `/api/projects/${p.id}/milestones`, body));
+        const body = { title: title.value, startDate: start.value || null, dueDate: due.value, alertDays: alert.value, note: note.value, done: m?.done || false, reminder: remOn.checked ? { on: true, time: remTime.value } : null };
+        const saved = m ? await api('PUT', `/api/projects/${p.id}/milestones/${m.id}`, body) : await api('POST', `/api/projects/${p.id}/milestones`, body);
+        replaceProject(saved);
         md.close();
         if (remOn.checked) remAskPermission();
         remRefresh();
+        if (!m && !remOn.checked) schSuggestReminder(saved, saved.milestones[saved.milestones.length - 1]); // só sugere; nada é criado sem escolher
       }) }, 'Salvar')],
   });
   title.focus();
@@ -646,19 +652,24 @@ function milestoneForm(p, m) {
 
 function scheduleCard(p) {
   const list = [...p.milestones].sort((a, b) => Number(a.done) - Number(b.done) || a.dueDate.localeCompare(b.dueDate));
+  // Status de cada prazo: calculado no servidor (src/schedule.js → p.scheduleItems), o mesmo da Central de Cronogramas.
+  const PILL = { done: 'done', overdue: 'overdue', today: 'soon', soon: 'soon', running: 'ok', ok: 'ok' };
   const toState = (m) => {
-    if (m.done) return { st: 'done', text: 'Concluído' };
-    const days = Math.round((Date.parse(m.dueDate) - Date.parse(state.today)) / 86400000);
-    const limit = Number.isInteger(m.alertDays) ? m.alertDays : state.settings.warnDays;
-    return { st: days < 0 ? 'overdue' : days <= limit ? 'soon' : 'ok', text: days < 0 || days <= limit ? daysText(days) : `${daysText(days)}` };
+    const x = (p.scheduleItems || []).find((y) => y.milestoneId === m.id);
+    if (!x || m.done) return { st: 'done', text: 'Concluído' };
+    return { st: PILL[x.status], text: daysText(x.days) };
   };
-  return card('Cronograma', h('button', { class: 'btn sm', onclick: () => milestoneForm(p) }, '+ Prazo'),
-    list.length ? list.map((m) => { const t = toState(m); return h('div', { class: 'row' },
+  const id = p.scheduleIdentity;
+  const listEl = list.length ? list.map((m) => { const t = toState(m); return h('div', { class: 'row' },
       h('input', { type: 'checkbox', checked: m.done, title: 'Marcar como concluído', onchange: async (e) => { try { replaceProject(await api('PUT', `/api/projects/${p.id}/milestones/${m.id}`, { ...m, done: e.target.checked })); remRefresh(); } catch (er) { fail(er); } } }),
-      h('div', { class: 'grow' }, h('strong', { style: m.done ? 'text-decoration:line-through;opacity:.6' : '' }, m.title), h('div', { class: 'muted small' }, `${fmtDate(m.dueDate)}${m.note ? ' · ' + m.note : ''}${m.reminder ? ` · 🔔 lembrete às ${m.reminder.time}` : ''}`)),
+      h('div', { class: 'grow' }, h('strong', { style: m.done ? 'text-decoration:line-through;opacity:.6' : '' }, m.title), h('div', { class: 'muted small' }, `${m.startDate ? `${fmtDate(m.startDate)} → ` : ''}${fmtDate(m.dueDate)}${m.note ? ' · ' + m.note : ''}${m.reminder ? ` · 🔔 lembrete às ${m.reminder.time}` : ''}`)),
       pill(t.st, t.text), h('div', { class: 'actions' }, h('button', { class: 'btn sm ghost', onclick: () => milestoneForm(p, m) }, 'Editar'),
-        h('button', { class: 'btn sm ghost', onclick: async () => { if (await confirmDialog({ title: 'Remover prazo', message: `Remover “${m.title}”?`, okText: 'Remover', danger: true })) { try { replaceProject(await api('DELETE', `/api/projects/${p.id}/milestones/${m.id}`)); remRefresh(); } catch (e) { fail(e); } } } }, 'Remover'))); })
-      : h('div', { class: 'empty' }, 'Este projeto não tem cronograma — e tudo bem. Adicione prazos apenas se precisar; sem eles, nenhum alerta é gerado.'));
+        h('button', { class: 'btn sm ghost', onclick: async () => { if (await confirmDialog({ title: 'Remover prazo', message: `Remover “${m.title}”?${m.reminder ? '\nO lembrete deste prazo é removido junto (ele faz parte do prazo).' : ''}`, okText: 'Remover', danger: true })) { try { replaceProject(await api('DELETE', `/api/projects/${p.id}/milestones/${m.id}`)); remRefresh(); } catch (e) { fail(e); } } } }, 'Remover'))); })
+    : h('div', { class: 'empty' }, 'Este projeto não tem cronograma — e tudo bem. Adicione prazos apenas se precisar; sem eles, nenhum alerta é gerado.');
+  return card('Cronograma', h('div', { class: 'actions inline' },
+    id ? h('button', { class: 'btn sm ghost sch-color-btn', title: 'Cor do projeto nos cronogramas', onclick: () => schColorPicker(p, () => render()) }, h('span', { class: `sch-badge pc-${id.color}`, 'aria-hidden': 'true' }, id.initials), 'Cor') : null,
+    h('button', { class: 'btn sm', onclick: () => milestoneForm(p) }, '+ Prazo')),
+  scheduleViews(p, h('div', { class: 'stack' }, listEl)));
 }
 
 // ---------- Bases ----------

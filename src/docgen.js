@@ -144,7 +144,11 @@ function render(t, ctx, input) {
   const R = (text) => { const r = M.renderText(text, values); r.missing.forEach((k) => missing.add(k)); r.unknown.forEach((k) => unknown.add(k)); return r.text; };
   const blocks = t.blocks.map((b, i) => {
     if (b.type === 'pagebreak') return { type: b.type };
-    if (b.type === 'title' || b.type === 'paragraph') return { type: b.type, text: R(b.text) };
+    // parts: trechos fixos e variáveis separados — o .docx com papel timbrado alinha cada trecho à formatação do original (src/docx.js).
+    if (b.type === 'title' || b.type === 'paragraph') {
+      const parts = String(b.text || '').split(/(\{\{\s*[a-z0-9_.]+\s*\}\})/i).filter((s) => s !== '').map((raw) => ({ raw, isVar: /^\{\{/.test(raw), text: R(raw) }));
+      return { type: b.type, text: parts.map((p) => p.text).join(''), parts };
+    }
     if (b.type === 'info') return { type: b.type, rows: b.rows.map((r) => r.map((c) => ({ label: R(c.label), value: R(c.value) }))) };
     const rows = input.tables[i] || b.rows;
     return { type: b.type, columns: b.columns.map(R), rows: rows.map((r) => r.map(R)) };

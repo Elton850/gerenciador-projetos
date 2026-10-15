@@ -84,6 +84,20 @@ async function dgForm(t, onSaved) {
   const base = h('select', null, h('option', { value: '' }, 'Layout padrão (sem papel timbrado)'),
     meta.docxDocuments.map((d) => h('option', { value: d.id, selected: t?.baseDocumentId === d.id }, d.title)),
     t?.baseDocumentId && !meta.docxDocuments.some((d) => d.id === t.baseDocumentId) ? h('option', { value: '', selected: true }, '(papel timbrado removido — escolha outro)') : null);
+  // Atalho: cadastra o .docx original na biblioteca (mesmo cadastro de Documentos) e já o escolhe como papel timbrado.
+  const addBase = h('button', { class: 'btn sm', type: 'button', onclick: () => {
+    const file = pathField({ kind: 'file', filter: 'docs', title: 'Selecione o modelo original (.docx)', placeholder: 'C:\\...\\MODELO.docx' });
+    const title = h('input', { type: 'text', maxlength: 160, placeholder: 'Ex.: MODELO - Termo de Validação MIT010' });
+    const sm = openModal({ title: 'Cadastrar papel timbrado', size: 'md', body: [field('Arquivo Word (.docx)', file.el, 'O arquivo continua onde está; ele também aparece na Biblioteca.'), field('Título na biblioteca', title)],
+      footer: [h('button', { class: 'btn', onclick: () => sm.close() }, 'Cancelar'), h('button', { class: 'btn primary', onclick: (e) => busy(e.target, async () => {
+        const p = file.get();
+        if (!/\.docx$/i.test(p)) throw new Error('Escolha um arquivo Word .docx.');
+        const d = await api('POST', '/api/documents', { title: title.value.trim() || p.split(/[\\/]/).pop().replace(/\.docx$/i, ''), kind: 'modelo', stageId: stage.value || null, description: 'Papel timbrado de documentos gerados.', source: { type: 'file', path: p } });
+        state.documents.push(d); meta.docxDocuments.push({ id: d.id, title: d.title, stageId: d.stageId });
+        base.append(h('option', { value: d.id }, d.title)); base.value = d.id;
+        sm.close(); toast('Papel timbrado cadastrado e escolhido. Salve o modelo.');
+      }) }, 'Cadastrar')] });
+  } }, 'Cadastrar .docx…');
   const fileName = track(h('input', { type: 'text', value: t?.fileName || '', maxlength: 200, placeholder: 'Ex.: Termo - {{project.name}} - {{doc.data}}' }));
   const active = h('input', { type: 'checkbox', checked: t ? t.active : true });
 
@@ -151,7 +165,7 @@ async function dgForm(t, onSaved) {
     title: t ? `Editar modelo — ${t.name}` : 'Novo modelo de documento', size: 'xl',
     body: [h('div', { class: 'em-editor' }, h('div', { class: 'stack' },
       field('Nome', name), field('Descrição', desc),
-      h('div', { class: 'cols2' }, field('Etapa em que é usado', stage), field('Papel timbrado (.docx da biblioteca)', base, 'Mantém cabeçalho, rodapé, logo e fontes desse arquivo; o corpo é trocado pelo conteúdo gerado.')),
+      h('div', { class: 'cols2' }, field('Etapa em que é usado', stage), field('Papel timbrado (.docx da biblioteca)', h('div', { class: 'inline' }, h('div', { class: 'grow' }, base), addBase), 'Use o MODELO original: mantém cabeçalho, rodapé, logo e fontes, e o conteúdo gerado copia a formatação de títulos, quadros e tabelas equivalentes.')),
       field('Nome do arquivo gerado', fileName, 'Sem extensão; pode usar variáveis. Datas dd/mm/aaaa viram dd-mm-aaaa.'),
       h('label', { class: 'inline small' }, active, 'Modelo ativo (aparece nos projetos)'),
       h('h3', null, 'Campos do documento'), h('div', { class: 'hint' }, 'Preenchidos na geração. Use {{doc.chave}} no conteúdo. O valor inicial pode trazer dados do projeto (ex.: {{project.coordinator}}).'), fieldsBox,
@@ -218,7 +232,8 @@ async function dgGenerate(projectId, tid, onDone) {
     body: [h('div', { class: 'dg-gen' },
       h('div', { class: 'stack dg-gen-form' },
         d.last ? h('div', { class: 'hint' }, `Valores da última geração (${new Date(d.last.at).toLocaleString('pt-BR')}${d.last.by ? `, ${d.last.by}` : ''}). Ajuste o que mudou.`) : h('div', { class: 'hint' }, 'Campos com dados do projeto já vêm preenchidos. O restante é preenchido aqui.'),
-        d.template.base ? h('div', { class: 'small muted' }, `Papel timbrado: ${d.template.base.title}`) : null,
+        d.template.base ? h('div', { class: 'small muted' }, `Papel timbrado: ${d.template.base.title}`)
+          : h('div', { class: 'box warn small' }, h('strong', null, 'Sem papel timbrado'), ' — o Word sai com o layout padrão, sem o cabeçalho, o rodapé e a formatação do modelo original. Escolha o .docx original em Documentos e Modelos → Gerar documentos → Editar.'),
         people, fieldEls,
         tableEls.length ? h('div', { class: 'hint' }, 'Tabelas: {{doc.chave}} numa célula repete o campo correspondente (ex.: a data).') : null, tableEls),
       h('div', { class: 'stack dg-gen-preview' }, h('strong', { class: 'small' }, 'Prévia'), warnBox, page, fileLine))],

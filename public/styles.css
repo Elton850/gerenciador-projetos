@@ -109,7 +109,7 @@ main { overflow: auto; padding: 26px 32px 60px; min-width: 0; } /* min-width: co
 .btn.sm { padding: 4px 10px; font-size: 12px; }
 .btn.block { width: 100%; }
 
-.field { display: grid; gap: 4px; }
+.field { display: grid; gap: 4px; align-content: start; } /* campo esticado pelo vizinho (ex.: o outro tem dica) não estica o próprio input */
 .field > label, .lbl { font-weight: 700; font-size: 12px; }
 input[type=text], input[type=number], input[type=date], input[type=password], select, textarea {
   font: inherit; color: var(--text); background: var(--s0); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; width: 100%; min-width: 0;
@@ -787,8 +787,8 @@ main.ws-mode { background: none; }
 .side-toggle.icon-only { width: 26px; height: 24px; padding: 0; justify-content: center; flex: none; }
 .navfoot-list { display: grid; gap: 1px; }
 .navfoot-list .nav-item { padding: 7px 9px; font-size: 12.5px; }
-.navfoot-list.icons { display: flex; justify-content: space-between; gap: 2px; }
-.navfoot-list.icons .nav-item { width: 36px; height: 34px; padding: 0; justify-content: center; border-left: 0; border-bottom: 2px solid transparent; border-radius: 8px; }
+.navfoot-list.icons { display: grid; grid-template-columns: repeat(auto-fit, minmax(26px, 1fr)); gap: 2px; } /* cabe qualquer quantidade de itens do menu */
+.navfoot-list.icons .nav-item { width: 100%; min-width: 0; height: 34px; padding: 0; justify-content: center; border-left: 0; border-bottom: 2px solid transparent; border-radius: 8px; }
 .navfoot-list.icons .nav-item.active { border-bottom-color: var(--accent); }
 .foot-row { display: flex; align-items: center; gap: 8px; } .foot-row .grow { flex: 1; min-width: 0; }
 .theme-toggle { flex: none; border-radius: 9px; }
@@ -1108,6 +1108,10 @@ main.settings-mode { padding-top: 0; } main.settings-mode .page-head { padding-t
 .sch-item.is-period.cont-l { border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: 0; box-shadow: none; }
 .sch-item.is-period.cont-r { border-top-right-radius: 0; border-bottom-right-radius: 0; margin-right: 0; }
 .sch-item.is-deadline { background: none; padding-left: 4px; }
+/* Célula estreita (marco de um dia, janela menor): o título ganha espaço — sem o ◆ (o marco já se distingue por não ter barra) e com
+   espaços menores; iniciais e símbolo de status continuam (projeto/estado nunca só pela cor). */
+.sch-cal .sch-item { container-type: inline-size; }
+@container (max-width: 130px) { .sch-cal .sch-item .sch-diamond { display: none; } .sch-cal .sch-item .sch-ini { padding: 0 3px; } .sch-cal .sch-item .sch-glyph { font-size: 10px; } }
 .sch-item.is-deadline:hover, .sch-item.is-period:hover { filter: brightness(1.08); outline: 1px solid color-mix(in srgb, var(--pc) 60%, transparent); }
 .sch-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .sch-diamond { color: var(--pc); font-size: 12px; line-height: 1; }

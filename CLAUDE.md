@@ -8,6 +8,7 @@ Vault Obsidian: `<raiz do Vault>\Gerenciador de Projetos\Apps\GerenciadorProjeto
 4. Ler só as notas do Obsidian indicadas pela rota; o wiki/relatório do graphify não substitui o Vault.
 5. Abrir só os arquivos de código necessários.
 6. Depois de mudar código: `graphify update .` e o checklist "Ao fechar uma tarefa" de `99-Claude/vault-maintenance.md` (atualizar só os docs afetados).
+7. Entrega completa sem esperar pedido (PR → versão → `build:desktop` + autoteste → publicação pronta → Vault): `99-Claude/rules.md` §Entrega. Merge e publicação (senha da chave) ficam com o usuário.
 
 Nunca carregar o grafo inteiro, `GRAPH_REPORT.md` ou documentos extensos sem necessidade.
 

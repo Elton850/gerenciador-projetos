@@ -1054,3 +1054,135 @@ main.settings-mode { padding-top: 0; } main.settings-mode .page-head { padding-t
 .rem-do { padding-top: 0; margin-top: 0; }
 .rem-times input[type=time] { width: 120px; }
 .hr-process { padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--s0); }
+
+/* ---------- Cronogramas (Central #/schedule e visões do projeto) ----------
+   Cor do projeto = chave da paleta (src/schedule.js) → --pc / --pc-ink aqui. Status nunca só por cor: glifo + texto/dica. */
+.pc-ciano { --pc: #00C2E0; --pc-ink: #002233; } .pc-roxo { --pc: #A44DFF; --pc-ink: #fff; } .pc-verde { --pc: #00C9A7; --pc-ink: #002233; }
+.pc-laranja { --pc: #FF8900; --pc-ink: #002233; } .pc-rosa { --pc: #FF009E; --pc-ink: #fff; } .pc-lima { --pc: #B5DB2E; --pc-ink: #002233; }
+.pc-azul { --pc: #3D7BFF; --pc-ink: #fff; } .pc-coral { --pc: #FF6B5C; --pc-ink: #002233; }
+:root { --sch-lane: 22px; }
+.sch-badge { display: inline-grid; place-items: center; min-width: 22px; height: 18px; padding: 0 4px; border-radius: 5px; background: var(--pc); color: var(--pc-ink); font-size: 10px; font-weight: 700; letter-spacing: .3px; flex: none; }
+.sch-color-btn { gap: 6px; }
+.sch-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.sch-toolbar .grow { flex: 1; }
+.sch-nav { display: flex; align-items: center; gap: 4px; }
+.sch-period { font-size: 15px; margin-left: 8px; white-space: nowrap; }
+.sch-seg { display: inline-flex; padding: 2px; gap: 2px; border: 1px solid var(--border); border-radius: 9px; background: var(--s0); }
+.sch-seg button { border: 0; background: none; color: var(--muted); font: inherit; font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 7px; cursor: pointer; }
+.sch-seg button:hover { color: var(--text); } .sch-seg button.active { background: var(--s2); color: var(--text); box-shadow: inset 0 0 0 1px var(--border); }
+.sch-filters { display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap; margin: 12px 0 14px; }
+.sch-filter { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.sch-filter select { width: auto; min-width: 120px; max-width: 220px; padding: 4px 8px; font-size: 12.5px; }
+.sch-quick { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.chip-btn { border: 1px solid var(--border); background: none; color: var(--muted); font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 999px; cursor: pointer; }
+.chip-btn:hover { color: var(--text); } .chip-btn.active { background: var(--selection); color: var(--text); border-color: var(--accent); }
+.sch-layout { display: grid; grid-template-columns: minmax(0, 1fr) 270px; gap: 18px; align-items: start; }
+@media (max-width: 1100px) { .sch-layout { grid-template-columns: minmax(0, 1fr); } .sch-side { position: static; } }
+.sch-main { min-width: 0; display: grid; gap: 10px; }
+
+/* Calendário (mês/semana): cada semana = dias ao fundo + faixas com barras por cima */
+.sch-cal { border: 1px solid var(--border); border-radius: var(--radius, 12px); overflow: hidden; background: var(--s1); }
+.sch-head { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); background: var(--s2); border-bottom: 1px solid var(--border); }
+.sch-head span { padding: 6px 8px; font-size: 10.5px; font-weight: 700; letter-spacing: .08em; color: var(--muted); }
+.sch-head span.weekend { opacity: .7; }
+.sch-week { position: relative; min-height: 112px; border-bottom: 1px solid var(--border); }
+.sch-week:last-child { border-bottom: 0; }
+.sch-cal-week .sch-week { min-height: 320px; }
+.sch-week-bg { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.sch-day { border: 0; border-right: 1px solid color-mix(in srgb, var(--border) 55%, transparent); background: none; padding: 4px 7px; color: var(--text); font: inherit; cursor: pointer; display: flex; justify-content: flex-end; align-items: flex-start; }
+.sch-day:last-child { border-right: 0; }
+.sch-day:hover { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+.sch-day.weekend { background: color-mix(in srgb, var(--s2) 45%, transparent); }
+.sch-day.other .sch-dnum { opacity: .4; }
+.sch-dnum { font-size: 12px; font-variant-numeric: tabular-nums; display: inline-flex; align-items: center; gap: 6px; }
+.sch-day.today .sch-dnum { color: var(--accent); font-weight: 700; }
+.sch-today-tag { font-size: 10px; font-weight: 700; padding: 0 6px; border-radius: 999px; background: var(--accent); color: var(--accent-text); }
+.sch-week-fg { position: relative; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); row-gap: 3px; padding: 26px 0 6px; pointer-events: none; }
+.sch-week-fg > * { pointer-events: auto; }
+.sch-more { justify-self: start; margin: 0 6px; border: 0; background: none; color: var(--muted); font: inherit; font-size: 11px; font-weight: 700; padding: 0 4px; cursor: pointer; border-radius: 4px; }
+.sch-more:hover { color: var(--text); background: var(--s2); }
+
+/* Item: período = barra com borda da cor do projeto; prazo = ◆ + título */
+.sch-item { display: flex; align-items: center; gap: 5px; min-width: 0; height: var(--sch-lane); margin: 0 3px; padding: 0 7px; border: 0; border-radius: 6px; font: inherit; font-size: 11.5px; color: var(--text); text-align: left; cursor: pointer; overflow: hidden; }
+.sch-item.is-period { background: color-mix(in srgb, var(--pc) 20%, var(--s1)); box-shadow: inset 3px 0 0 var(--pc); }
+.sch-item.is-period.cont-l { border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: 0; box-shadow: none; }
+.sch-item.is-period.cont-r { border-top-right-radius: 0; border-bottom-right-radius: 0; margin-right: 0; }
+.sch-item.is-deadline { background: none; padding-left: 4px; }
+.sch-item.is-deadline:hover, .sch-item.is-period:hover { filter: brightness(1.08); outline: 1px solid color-mix(in srgb, var(--pc) 60%, transparent); }
+.sch-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.sch-diamond { color: var(--pc); font-size: 12px; line-height: 1; }
+.sch-ini { font-size: 9.5px; font-weight: 700; color: var(--pc-ink); background: var(--pc); border-radius: 4px; padding: 0 4px; line-height: 15px; flex: none; }
+.sch-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.sch-glyph { flex: none; font-size: 11px; }
+.sch-bell { flex: none; font-size: 10.5px; opacity: .85; }
+.sch-item.st-overdue .sch-glyph, .sch-st.st-overdue { color: var(--bad-text); }
+.sch-item.st-overdue.is-period { box-shadow: inset 3px 0 0 var(--pc), inset 0 0 0 1px var(--bad-text); }
+.sch-item.st-today .sch-glyph, .sch-item.st-soon .sch-glyph, .sch-st.st-today, .sch-st.st-soon { color: var(--warn-text); }
+.sch-item.st-done { opacity: .5; } .sch-item.st-done .sch-title { text-decoration: line-through; }
+.sch-st { font-size: 11.5px; white-space: nowrap; color: var(--muted); }
+.sch-st.st-done { color: var(--ok-text); } .sch-st.st-running { color: var(--text); }
+
+/* Linhas compactas (agenda, dia, próximos prazos) */
+.sch-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border: 0; border-radius: 8px; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.sch-row:hover { background: var(--s2); }
+.sch-row.st-done { opacity: .6; }
+.sch-kind { color: var(--muted); font-size: 11px; width: 12px; text-align: center; flex: none; }
+.sch-row-main { display: grid; min-width: 0; flex: 1; }
+.sch-row-title { font-weight: 700; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sch-row.st-done .sch-row-title { text-decoration: line-through; }
+.sch-row-sub { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sch-list { display: grid; gap: 2px; }
+.sch-agenda { display: grid; gap: 4px; border: 1px solid var(--border); border-radius: var(--radius, 12px); background: var(--s1); padding: 8px; }
+.sch-ag-day { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 8px; padding: 6px 4px; border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent); }
+.sch-ag-day:last-child { border-bottom: 0; }
+.sch-ag-date { display: grid; align-content: start; } .sch-ag-date strong { font-size: 18px; line-height: 1.2; } .sch-ag-date span { font-size: 10.5px; color: var(--muted); letter-spacing: .05em; }
+.sch-ag-day.today .sch-ag-date strong { color: var(--accent); }
+
+/* Próximos prazos */
+.sch-side { display: grid; gap: 8px; align-content: start; position: sticky; top: 8px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius, 12px); background: var(--s1); }
+.sch-side h2 { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.sch-sum { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.sch-sum strong { color: var(--text); font-size: 15px; } .sch-sum .bad strong { color: var(--bad-text); }
+.sch-up-group { display: grid; gap: 1px; }
+.sch-up-label { font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); padding: 6px 8px 2px; }
+.sch-up-group.bad .sch-up-label { color: var(--bad-text); }
+.sch-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 11.5px; color: var(--muted); }
+.sch-leg { display: inline-flex; align-items: center; gap: 5px; }
+.sch-leg-bar { width: 18px; height: 8px; border-radius: 3px; background: color-mix(in srgb, var(--accent) 25%, var(--s1)); box-shadow: inset 2px 0 0 var(--accent); }
+
+/* Linha do tempo */
+.sch-tl { border: 1px solid var(--border); border-radius: var(--radius, 12px); background: var(--s1); overflow: hidden; }
+.sch-tl-row { display: grid; grid-template-columns: 180px minmax(0, 1fr); border-bottom: 1px solid var(--border); }
+.sch-tl-row:last-child { border-bottom: 0; }
+.sch-tl-head { background: var(--s2); }
+.sch-tl-label { display: flex; align-items: center; gap: 8px; padding: 8px 10px; min-width: 0; border-right: 1px solid var(--border); }
+.sch-tl-name { font-weight: 700; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sch-tl-scale { min-width: 0; }
+.sch-tl-months, .sch-tl-days, .sch-tl-bg, .sch-tl-items { display: grid; }
+.sch-tl-months span { font-size: 11px; font-weight: 700; padding: 4px 6px 0; overflow: hidden; white-space: nowrap; }
+.sch-tl-days span { font-size: 10px; color: var(--muted); text-align: center; padding: 2px 0 4px; font-variant-numeric: tabular-nums; overflow: hidden; }
+.sch-tl-days span.weekend { opacity: .6; } .sch-tl-days span.today { color: var(--accent); font-weight: 700; }
+.sch-tl-track { position: relative; min-width: 0; padding: 6px 0; }
+.sch-tl-bg { position: absolute; inset: 0; }
+.sch-tl-bg span.weekend { background: color-mix(in srgb, var(--s2) 50%, transparent); }
+.sch-tl-now { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--accent); opacity: .55; z-index: 1; pointer-events: none; }
+.sch-tl-items { position: relative; z-index: 2; row-gap: 3px; }
+.sch-tl .sch-item { margin: 0 1px; }
+.sch-tl .sch-ini { display: none; } /* a linha já identifica o projeto */
+.sch-tl .sch-item.is-deadline { padding-left: max(0px, calc(100% / var(--tl-lab) / 2 - 6px)); } /* ◆ no centro do dia */
+@media (max-width: 760px) { .sch-tl-row { grid-template-columns: 110px minmax(0, 1fr); } .sch-item .sch-ini { display: none; } }
+
+/* Detalhes, lembrete e cor */
+.sch-detail { display: grid; gap: 12px; }
+.sch-det-proj { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sch-det-proj .sch-st { margin-left: auto; font-weight: 700; }
+.sch-det-note { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); }
+.sch-det-grid { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 6px 12px; margin: 0; font-size: 13px; }
+.sch-det-grid dt { color: var(--muted); } .sch-det-grid dd { margin: 0; }
+.sch-rem { display: grid; gap: 8px; padding: 10px 12px; border-radius: 10px; background: var(--s0); border: 1px solid var(--border); }
+.sch-rem.on { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.sch-rem .chips { gap: 6px; }
+.sch-swatches { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.sch-swatch { width: 40px; height: 32px; border-radius: 8px; border: 2px solid transparent; background: var(--pc); color: var(--pc-ink); font: inherit; font-size: 11px; font-weight: 700; cursor: pointer; }
+.sch-swatch.active, .sch-swatch:focus-visible { border-color: var(--text); }
+.sch-proj { display: grid; gap: 10px; }

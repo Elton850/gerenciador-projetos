@@ -58,6 +58,9 @@ function applyDefaults(data) {
     if (p.projectTypeId === undefined) p.projectTypeId = null;
     if (p.originSystemId === undefined) p.originSystemId = null;
     if (!Array.isArray(p.stageHistory)) p.stageHistory = [];
+    // Cronograma: cor do projeto nas visões (null = automática) e início opcional do prazo (null = marco; preenchido = período).
+    if (p.scheduleColor === undefined) p.scheduleColor = null;
+    for (const m of Array.isArray(p.milestones) ? p.milestones : []) if (m && m.startDate === undefined) m.startDate = null;
     if (!Array.isArray(p.corrections)) p.corrections = [];
     if (!Array.isArray(p.checklists)) p.checklists = [];
     // Pasta raiz: local (padrão, compatível com o que já existia) ou link de uma pasta do Google Drive.

@@ -16,7 +16,7 @@ const configApi = require('./src/config-api');
 const { readWorkbook } = require('./src/xlsx');
 const plans = require('./src/sqlplan');
 const db = require('./src/db');
-const { projectSchedule, todayStr, DEFAULT_WARN_DAYS } = require('./src/schedule');
+const { projectSchedule, todayStr, DEFAULT_WARN_DAYS, validDate, scheduleItems, scheduleIdentity, scheduleSummary } = require('./src/schedule');
 const { uid, httpError, str, sanitizeFileName } = require('./src/util');
 const checklist = require('./src/checklist');
 const cycles = require('./src/cycles');
@@ -119,6 +119,8 @@ function publicProject(p) {
     // Pasta local: existe/não existe. Link do Drive: não dá para checar sem login no Google, então fica null (n/a).
     rootDirExists: p.rootDirKind === 'drive' ? null : dirOk(p.rootDir),
     schedule: p.cancelled ? { state: 'cancelled', next: null, counts: { overdue: 0, soon: 0, pending: 0, done: 0 } } : projectSchedule(p, todayStr(), warn), // cancelado não gera alerta de prazo
+    scheduleIdentity: scheduleIdentity(p), // cor (chave da paleta) + iniciais do projeto nas visões de cronograma
+    scheduleItems: scheduleItems(p, todayStr(), warn), // prazos/períodos com status calculado (regra única em src/schedule.js)
     bases: p.bases.map((b) => ({ ...b, directoryExists: dirOk(b.directory), prod: publicConn(b.prod), local: publicConn(b.local) })),
     deparas: p.deparas.map((d) => ({ ...d, targetDirExists: dirOk(d.targetDir), fileExists: !!d.lastDownload && fs.existsSync(d.lastDownload.path), sourceDirExists: d.importMode === 'dir' ? dirOk(d.sourceDir) : null })),
   };
@@ -182,6 +184,8 @@ require('./src/script-export-api').mount(app, { store, audit, db, connPassword, 
 require('./src/hours-api').mount(app, { store, audit, dataDir: DATA_DIR, SYS });
 // Lembretes: avulsos (data.reminders) + prazos do cronograma com lembrete (marco.reminder) numa lista só (src/reminders-api.js).
 require('./src/reminders-api').mount(app, { store });
+// Central de Cronogramas: visão consolidada (calendário, linha do tempo, próximos prazos) sobre os mesmos prazos (src/schedule-api.js).
+require('./src/schedule-api').mount(app, { store, getProject, publicProject });
 // Backup e Restauração: exportar tudo para um arquivo .gpbackup e importar em outra máquina (src/backup.js)
 require('./src/backup-api').mount(app, { store, audit, dataDir: DATA_DIR, protect, unprotect, backupsDir: process.env.GP_BACKUP_DIR, appVersion: require('./package.json').version });
 // Atualizações do aplicativo e sincronização de configurações pelo canal de publicação (src/updates.js, src/config-sync.js)
@@ -209,7 +213,9 @@ const cleanOriginSystemId = cleanTagRef('originSystems', 'Sistema de origem');
 
 // ---------- Estado / Projetos ----------
 app.get('/api/state', (req, res) => {
-  res.json({ settings: store.data.settings, today: todayStr(), ...cfg.extras(), connections: store.data.connections.map(connectionsMod.publicSaved), projects: store.data.projects.map(publicProject) });
+  const projects = store.data.projects.map(publicProject);
+  const live = projects.filter((p) => !p.cancelled).flatMap((p) => p.scheduleItems); // cancelado não entra nas contagens de prazos
+  res.json({ settings: store.data.settings, today: todayStr(), ...cfg.extras(), connections: store.data.connections.map(connectionsMod.publicSaved), projects, scheduleSummary: scheduleSummary(live, todayStr()) });
 });
 
 app.put('/api/settings', (req, res) => {
@@ -292,7 +298,15 @@ function cleanMilestone(b) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(b.dueDate || '') || Number.isNaN(Date.parse(b.dueDate))) throw httpError(400, 'Data inválida.');
   const alert = b.alertDays === '' || b.alertDays === null || b.alertDays === undefined ? null : Number(b.alertDays);
   if (alert !== null && (!Number.isInteger(alert) || alert < 0 || alert > 365)) throw httpError(400, 'Dias de alerta inválido.');
-  return { title, dueDate: b.dueDate, alertDays: alert, done: !!b.done, note: str(b.note, 500) };
+  const out = { title, dueDate: b.dueDate, alertDays: alert, done: !!b.done, note: str(b.note, 500) };
+  // Início opcional (período início → prazo). Ausente no corpo = mantém o que já existe (telas/versões que não conhecem o campo).
+  if (Object.prototype.hasOwnProperty.call(b, 'startDate')) {
+    const sd = b.startDate || null;
+    if (sd && !validDate(sd)) throw httpError(400, 'Data de início inválida.');
+    if (sd && sd > b.dueDate) throw httpError(400, 'A data de início precisa ser igual ou anterior ao prazo.');
+    out.startDate = sd && sd < b.dueDate ? sd : null; // início = prazo → é só um marco
+  }
+  return out;
 }
 // Lembrete do prazo (src/reminders.js): só a hora do aviso + estado (adiado/dispensado/avisado). Data = dueDate e antecedência =
 // alertDays do próprio prazo (nada duplicado). No corpo: ausente = mantém; null/{on:false} = desliga; {on, time} = liga/ajusta.
@@ -305,7 +319,7 @@ function cleanMilestoneReminder(b, prev) {
 
 app.post('/api/projects/:id/milestones', (req, res) => {
   const p = getProject(req.params.id);
-  p.milestones.push({ id: uid(), ...cleanMilestone(req.body), reminder: cleanMilestoneReminder(req.body, null) });
+  p.milestones.push({ id: uid(), startDate: null, ...cleanMilestone(req.body), reminder: cleanMilestoneReminder(req.body, null) });
   store.save();
   res.json(publicProject(p));
 });

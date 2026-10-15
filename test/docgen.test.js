@@ -302,3 +302,43 @@ test('formulário: o usado na última geração só volta enquanto o modelo e o 
   const r2 = G.references(rot, M.contextFor(data, p, { now: new Date('2026-10-16T20:00:00') }));
   assert.deepEqual(r1, r2);
 });
+
+test('item do checklist: ação "Gerar documento" (modelo → cópia do projeto → geração registrada no item, sem concluir)', async () => {
+  const stage = ok(await api('POST', '/api/stages', { name: 'Documentação D', color: '#112233' }));
+  const cyc = ok(await api('POST', '/api/cycles', { name: 'Ciclo Doc', steps: [{ stageId: stage.id }] }));
+  const ck = ok(await api('POST', '/api/checklists', { name: 'Checklist Doc' }));
+  ok(await api('PUT', `/api/cycles/${cyc.id}/steps/${cyc.steps[0].id}/checklists`, { checklistIds: [ck.id] }));
+  assert.equal((await api('POST', `/api/checklists/${ck.id}/items`, { title: 'X', docTemplateId: 'nao-existe' })).status, 400);
+  const item = ok(await api('POST', `/api/checklists/${ck.id}/items`, { title: 'Enviar termo MIT010', required: true, docTemplateId: MIT }));
+  const plain = ok(await api('POST', `/api/checklists/${ck.id}/items`, { title: 'Sem documento', required: false }));
+  assert.equal(item.docTemplateId, MIT);
+  assert.equal(plain.docTemplateId, undefined, 'campo só existe quando há modelo');
+  const p = ok(await api('POST', '/api/projects', { name: 'Cliente Beta', cycleId: cyc.id, analystId: S.anal.id }));
+  ok(await api('PUT', `/api/projects/${p.id}/step`, { stepId: cyc.steps[0].id }));
+  const inst = (await api('POST', `/api/projects/${p.id}/checklists/${cyc.steps[0].id}/open`, {})).json.instance;
+  const it = inst.items.find((i) => i.title === 'Enviar termo MIT010');
+  assert.deepEqual([it.doc.templateId, it.doc.templateName, it.doc.active, it.doc.generations], [MIT, 'Termo de Validação MIT010', true, 0]);
+  assert.equal(inst.items.find((i) => i.title === 'Sem documento').doc, null);
+
+  // Gerar pelo item: o item precisa ser do projeto e ter este modelo.
+  const f = ok(await api('POST', `/api/projects/${p.id}/doc-templates/${MIT}/form`));
+  const body = { fields: Object.fromEntries(f.fields.map((x) => [x.key, x.value])), tables: f.tables };
+  const other = inst.items.find((i) => i.title === 'Sem documento');
+  const bad = await fetch(`${base}/api/projects/${p.id}/doc-templates/${MIT}/generate`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ ...body, checklist: { stepId: inst.stepId, itemId: other.id } }) });
+  assert.equal(bad.status, 400);
+  await download(`/api/projects/${p.id}/doc-templates/${MIT}/generate`, { ...body, checklist: { stepId: inst.stepId, itemId: it.id } });
+  const after = (await api('POST', `/api/projects/${p.id}/checklists/${cyc.steps[0].id}/open`, {})).json.instance.items.find((i) => i.id === it.id);
+  assert.equal(after.doc.generations, 1);
+  assert.match(after.doc.lastGeneration.fileName, /^Termo de Validação - MIT010 - Cliente Beta/);
+  assert.equal(after.done, false, 'gerar não conclui o item');
+
+  // Modelo usado em item não é excluído; tirar o modelo do item remove o campo.
+  const t = ok(await api('POST', '/api/doc-templates', { name: 'Modelo do item', blocks: [{ type: 'title', text: 'Oi' }] }));
+  ok(await api('PUT', `/api/checklist-items/${plain.id}`, { ...plain, docTemplateId: t.id }));
+  const del = await api('DELETE', `/api/doc-templates/${t.id}`);
+  assert.equal(del.status, 409);
+  assert.equal(del.json.code, 'DOC_TEMPLATE_IN_USE');
+  const cleared = ok(await api('PUT', `/api/checklist-items/${plain.id}`, { ...plain, docTemplateId: null }));
+  assert.equal('docTemplateId' in cleared, false);
+  ok(await api('DELETE', `/api/doc-templates/${t.id}`));
+});

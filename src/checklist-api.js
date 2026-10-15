@@ -111,6 +111,7 @@ function mount(app, { store, audit, getProject, getIn, dataDir, SYS, publicProje
     }
     const clean = C.cleanDefinition(req.body, data(), item.id);
     if (!clean.emailTemplateId) delete item.emailTemplateId; // campo opcional: tirar o modelo de e-mail remove o campo
+    if (!clean.docTemplateId) delete item.docTemplateId; // idem para o modelo de documento
     Object.assign(item, clean, { checklistId });
     if (checklistId !== before) data().checklistItems = [...data().checklistItems.filter((d) => d.id !== item.id), item]; // vai para o fim do destino
     store.save();
@@ -158,7 +159,7 @@ function mount(app, { store, audit, getProject, getIn, dataDir, SYS, publicProje
       carriedTo: it.carriedTo || null, carriedToStage: it.carriedTo && p ? C.stageNameOf(data(), p, it.carriedTo) : null, carriedAt: it.carriedAt || null,
       carryHistory: (it.carryHistory || []).map((x) => ({ fromStage: x.fromStage, toStage: x.toStage, at: x.at, by: x.by, restored: !!x.restored })),
       evidence: { ...it.evidence, typeLabel: E.TYPE_LABEL[it.evidence.mode === 'none' ? 'none' : it.evidence.type], extensions: ext },
-      links: it.links, scripts: it.scriptIds.map(scriptRef), checklistId: it.checklistId, email: emailRef(it, p),
+      links: it.links, scripts: it.scriptIds.map(scriptRef), checklistId: it.checklistId, email: emailRef(it, p), doc: docRef(it, p),
       runs: (it.runs || []).slice(-10).reverse(),
       done: it.done, doneAt: it.doneAt, doneBy: it.doneBy, completedAt: it.completedAt, completedBy: it.completedBy, status: C.itemStatus(it), archived: !!it.archived,
       evidences: it.evidences.map((v) => EH.evidencePublic(files, v)),
@@ -172,6 +173,15 @@ function mount(app, { store, audit, getProject, getIn, dataDir, SYS, publicProje
     return { templateId: it.emailTemplateId, templateName: t ? t.name : null, active: !!t?.active, missing: !t,
       generations: p ? (data().emailGenerations || []).filter((s) => s.projectId === p.id && s.checklist?.itemId === it.id).length : 0,
       lastGeneration: last ? { id: last.id, at: last.at, copiedAt: last.copiedAt, subject: last.subject } : null };
+  }
+  // Ação "Gerar documento" do item: modelo de Documentos e Modelos (da cópia do item) + última geração feita a partir dele.
+  function docRef(it, p) {
+    if (!it.docTemplateId) return null;
+    const t = (data().docTemplates || []).find((x) => x.id === it.docTemplateId);
+    const gens = p ? (data().docGenerations || []).filter((g) => g.projectId === p.id && g.checklist?.itemId === it.id) : [];
+    const last = gens.at(-1);
+    return { templateId: it.docTemplateId, templateName: t ? t.name : null, active: !!t?.active, missing: !t, generations: gens.length,
+      lastGeneration: last ? { id: last.id, at: last.at, by: last.by, fileName: last.fileName } : null };
   }
   const itemPending = (it) => C.itemStatus(it) !== 'done';
   function instanceView(p, inst) {

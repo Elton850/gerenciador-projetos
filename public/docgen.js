@@ -182,7 +182,8 @@ async function dgForm(t, onSaved) {
 }
 
 // ---------- Janela Gerar (formulário + prévia) ----------
-async function dgGenerate(projectId, tid, onDone) {
+// opts.checklist = { stepId, itemId } quando aberto pela ação do item do checklist (registrado na geração; não conclui o item).
+async function dgGenerate(projectId, tid, onDone, opts = {}) {
   let d;
   try { d = await api('POST', `/api/projects/${projectId}/doc-templates/${tid}/form`); } catch (e) { return fail(e); }
   const values = Object.fromEntries(d.fields.map((f) => [f.key, f.value]));
@@ -248,6 +249,7 @@ async function dgGenerate(projectId, tid, onDone) {
     title: `${d.template.name}`, size: 'xl',
     body: [h('div', { class: 'dg-gen' },
       h('div', { class: 'stack dg-gen-form' },
+        opts.itemTitle ? h('div', { class: 'small muted' }, `Pelo item do checklist “${opts.itemTitle}” — gerar não conclui o item.`) : null,
         d.last ? h('div', { class: 'hint' }, `Valores da última geração (${new Date(d.last.at).toLocaleString('pt-BR')}${d.last.by ? `, ${d.last.by}` : ''}). Ajuste o que mudou.`) : h('div', { class: 'hint' }, 'Campos com dados do projeto já vêm preenchidos. O restante é preenchido aqui.'),
         d.template.base ? h('div', { class: 'small muted' }, `Papel timbrado: ${d.template.base.title}`)
           : h('div', { class: 'box warn small' }, h('strong', null, 'Sem papel timbrado'), ' — o Word sai com o layout padrão, sem o cabeçalho, o rodapé e a formatação do modelo original. Escolha o .docx original em Documentos e Modelos → Gerar documentos → Editar.'),
@@ -256,7 +258,7 @@ async function dgGenerate(projectId, tid, onDone) {
       h('div', { class: 'stack dg-gen-preview' }, h('strong', { class: 'small' }, 'Prévia'), warnBox, page, fileLine))],
     footer: [h('button', { class: 'btn', onclick: () => md.close() }, 'Fechar'),
       h('button', { class: 'btn primary', onclick: (e) => busy(e.target, async () => {
-        const name = await dgDownload(`/api/projects/${projectId}/doc-templates/${tid}/generate`, { fields: values, tables }, `${d.template.name}.docx`);
+        const name = await dgDownload(`/api/projects/${projectId}/doc-templates/${tid}/generate`, { fields: values, tables, ...(opts.checklist ? { checklist: opts.checklist } : {}) }, `${d.template.name}.docx`);
         toast(`Documento gerado: ${name}`);
         onDone && onDone();
       }, 'Gerando documento…') }, 'Baixar Word (.docx)')],

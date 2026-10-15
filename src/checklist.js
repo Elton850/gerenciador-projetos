@@ -75,8 +75,12 @@ function cleanDefinition(b, data, selfId = null) {
     if (!t) throw httpError(400, 'O modelo de e-mail escolhido não existe mais.');
     if (t.scope !== 'global') throw httpError(400, `O modelo “${t.name}” é específico de um projeto; itens de checklist só usam modelos globais.`);
   }
+  // Ação "Gerar documento": modelo de Documentos e Modelos (data.docTemplates, sempre global). Mesma regra do e-mail: campo só gravado
+  // quando há modelo; gerar não conclui o item.
+  const docTemplateId = str(b.docTemplateId, 64) || null;
+  if (docTemplateId && !(data.docTemplates || []).some((x) => x.id === docTemplateId)) throw httpError(400, 'O modelo de documento escolhido não existe mais.');
   // Transferir só faz sentido para obrigatório (opcional já não bloqueia); guardado como false nos opcionais.
-  return { title, description: str(b.description, 1000), required: !!b.required, carryForward: !!b.required && !!b.carryForward, dependsOn, evidence: { mode, type, min, max }, links, scriptIds, ...(emailTemplateId ? { emailTemplateId } : {}), condition: null };
+  return { title, description: str(b.description, 1000), required: !!b.required, carryForward: !!b.required && !!b.carryForward, dependsOn, evidence: { mode, type, min, max }, links, scriptIds, ...(emailTemplateId ? { emailTemplateId } : {}), ...(docTemplateId ? { docTemplateId } : {}), condition: null };
 }
 
 // ---------- Dependências (modelo) ----------
@@ -130,7 +134,7 @@ const defsForStep = (data, step) => defsFor(data, listIds(step));
 const checklistsForStep = (data, step) => checklistsFor(data, listIds(step));
 
 // ---------- Execução ----------
-const CRITERIA = ['title', 'description', 'required', 'carryForward', 'dependsOn', 'evidence', 'links', 'scriptIds', 'emailTemplateId', 'checklistId'];
+const CRITERIA = ['title', 'description', 'required', 'carryForward', 'dependsOn', 'evidence', 'links', 'scriptIds', 'emailTemplateId', 'docTemplateId', 'checklistId'];
 const copy = (x) => (x === undefined ? undefined : JSON.parse(JSON.stringify(x))); // campo ausente no modelo antigo continua ausente
 
 function snapshotItem(def) {

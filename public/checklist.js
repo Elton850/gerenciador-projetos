@@ -187,6 +187,7 @@ function ckItem(p, inst, it) {
             : h('span', { class: 'muted' }, s.missing ? '(removido)' : '(arquivo não encontrado)'))),
           it.runs && it.runs[0] ? h('span', { class: `small ${it.runs[0].ok ? 'muted' : 'ck-bad'}`, title: 'Última execução de script neste item' }, `${it.runs[0].ok ? '✓' : '✕'} executado ${ckWhen(it.runs[0].at)}`) : null,
           ckEmailLine(p, inst, it),
+          ckDocLine(p, inst, it),
           it.evidences.length ? h('span', { class: 'small' }, `📎 ${plural(it.evidences.length, 'evidência', 'evidências')}`) : null)),
       h('button', { class: 'btn sm ghost', 'aria-expanded': open ? 'true' : 'false', onclick: toggleOpen }, open ? 'Detalhes ▴' : 'Detalhes ▾')),
     open ? ckDetails(p, inst, it) : null);
@@ -204,6 +205,19 @@ function ckEmailLine(p, inst, it) {
       onclick: async () => { await emGenerate(p, { stepId: inst.stepId, itemId: it.id }); ckLoad(p, inst.viewStepId || inst.stepId); } }, 'Gerar e-mail') : null,
     last ? h('span', { class: 'muted', title: `${e.generations} geração(ões) a partir deste item` }, `gerado em ${ckWhen(last.at)}${last.copiedAt ? ' · copiado' : ''}`) : null,
     last ? h('button', { class: 'btn xs ghost', onclick: () => emGenerationDialog(last.id) }, 'Ver') : null);
+}
+
+// Ação "Gerar documento" do item: modelo de Documentos e Modelos, "Gerar documento" (mesma janela de Documentos: campos, prévia, Word)
+// e a última geração a partir do item. Gerar não conclui o item.
+function ckDocLine(p, inst, it) {
+  const d = it.doc;
+  if (!d) return null;
+  const last = d.lastGeneration;
+  return h('span', { class: 'small inline ck-email', style: 'gap:4px' }, '📄 ', h('span', null, d.templateName || '(modelo removido)'),
+    !d.missing && !d.active ? h('span', { class: 'pill overdue' }, 'modelo desativado') : null,
+    d.active && !it.archived ? h('button', { class: 'btn xs primary', title: 'Monta o documento (Word) com os dados do projeto, com prévia antes de baixar',
+      onclick: () => dgGenerate(p.id, d.templateId, () => ckLoad(p, inst.viewStepId || inst.stepId), { checklist: { stepId: inst.stepId, itemId: it.id }, itemTitle: it.title }) }, 'Gerar documento') : null,
+    last ? h('span', { class: 'muted', title: `${d.generations} geração(ões) a partir deste item · ${last.fileName}` }, `gerado em ${ckWhen(last.at)}`) : null);
 }
 
 function ckDetails(p, inst, it) {
@@ -498,7 +512,7 @@ async function ckSyncDialog(p, inst) {
   let plan;
   try { plan = (await api('POST', `/api/projects/${p.id}/checklists/${inst.stepId}/sync`, { dryRun: true })).plan; } catch (e) { return fail(e); }
   if (!plan.changed) { toast('O checklist já está igual ao modelo.'); return ckLoad(p, inst.stepId); }
-  const FIELD = { title: 'título', description: 'descrição', required: 'obrigatório/opcional', carryForward: 'permite transferir para a próxima etapa', dependsOn: 'dependências', evidence: 'regra de evidência', links: 'links', scriptIds: 'scripts', emailTemplateId: 'modelo de e-mail', checklistId: 'checklist' };
+  const FIELD = { title: 'título', description: 'descrição', required: 'obrigatório/opcional', carryForward: 'permite transferir para a próxima etapa', dependsOn: 'dependências', evidence: 'regra de evidência', links: 'links', scriptIds: 'scripts', emailTemplateId: 'modelo de e-mail', docTemplateId: 'modelo de documento', checklistId: 'checklist' };
   const m = openModal({ title: 'Sincronizar com o modelo',
     body: [h('p', { style: 'margin:0' }, 'Compare o que vai mudar neste projeto. As marcações e as evidências que já existem são mantidas.'),
       plan.added.length ? h('div', { class: 'stack' }, h('strong', null, `Itens novos (${plan.added.length})`), plan.added.map((a) => h('div', { class: 'small' }, `+ ${a.title} `, h('span', { class: `ck-badge ${a.required ? 'req' : 'opt'}` }, a.required ? 'Obrigatório' : 'Opcional')))) : null,
@@ -587,7 +601,7 @@ function checklistEditor(cl0) {
           it.dependsOn?.length ? h('span', { class: 'ck-badge dep', title: `Só pode ser concluído depois de: ${it.dependsOn.map((id) => { const d = state.checklistItems.find((x) => x.id === id); return d ? ckDepLabel(d) : '(removido)'; }).join('; ')}` }, `🔗 ${plural(it.dependsOn.length, 'dependência', 'dependências')}`) : null,
           ckEvidenceLabel(it.evidence.mode, it.evidence.type) ? h('span', { class: 'ck-badge ev' }, ckEvidenceLabel(it.evidence.mode, it.evidence.type)) : null),
         it.description ? h('span', { class: 'small muted' }, it.description.slice(0, 140)) : null,
-        h('span', { class: 'small muted' }, [it.scriptIds.length ? plural(it.scriptIds.length, 'script', 'scripts') : null, it.links.length ? plural(it.links.length, 'link', 'links') : null, it.emailTemplateId ? '📧 e-mail' : null].filter(Boolean).join(' · '))),
+        h('span', { class: 'small muted' }, [it.scriptIds.length ? plural(it.scriptIds.length, 'script', 'scripts') : null, it.links.length ? plural(it.links.length, 'link', 'links') : null, it.emailTemplateId ? '📧 e-mail' : null, it.docTemplateId ? '📄 documento' : null].filter(Boolean).join(' · '))),
       h('div', { class: 'actions' },
         h('button', { class: 'btn sm ghost', disabled: i === 0, title: 'Subir', 'aria-label': 'Subir', onclick: () => { const ids = items.map((x) => x.id); [ids[i], ids[i - 1]] = [ids[i - 1], ids[i]]; orderItems(ids); } }, '↑'),
         h('button', { class: 'btn sm ghost', disabled: i === items.length - 1, title: 'Descer', 'aria-label': 'Descer', onclick: () => { const ids = items.map((x) => x.id); [ids[i], ids[i + 1]] = [ids[i + 1], ids[i]]; orderItems(ids); } }, '↓'),
@@ -614,6 +628,11 @@ async function ckItemForm(it, onSaved, checklistId) {
   const emTpls = (emCat?.templates || []).filter((t) => t.scope === 'global' && (t.active || t.id === it?.emailTemplateId));
   const emailSel = h('select', null, h('option', { value: '' }, 'Nenhuma'),
     emTpls.map((t) => h('option', { value: t.id, selected: it?.emailTemplateId === t.id }, `Gerar e-mail — ${t.name}${t.active ? '' : ' (desativado)'}`)));
+  // Ação "Gerar documento": modelos de Documentos e Modelos (desativado só aparece se já estiver escolhido).
+  const dgCat = await dgLoad().catch(() => null);
+  const docTpls = (dgCat?.templates || []).filter((t) => t.active || t.id === it?.docTemplateId);
+  const docSel = h('select', null, h('option', { value: '' }, 'Nenhuma'),
+    docTpls.map((t) => h('option', { value: t.id, selected: it?.docTemplateId === t.id }, `Gerar documento — ${t.name}${t.active ? '' : ' (desativado)'}`)));
   const title = h('input', { type: 'text', value: it?.title || '', maxlength: 160, placeholder: 'Ex.: Validar funcionários migrados' });
   const lists = state.checklists;
   const listSel = h('select', null, lists.map((c) => h('option', { value: c.id, selected: (it?.checklistId || checklistId) === c.id }, ckLabel(c))));
@@ -677,12 +696,13 @@ async function ckItemForm(it, onSaved, checklistId) {
   const m = openModal({ title: it ? 'Editar item do checklist' : 'Novo item do checklist', wide: true,
     body: [lists.length > 1 ? field('Checklist', listSel, it ? 'Mover o item para outro checklist só chega aos projetos em andamento ao “Sincronizar com o modelo”.' : null) : null, field('Título', title), field('Descrição', desc, 'Dica: use {{greeting}} para a saudação — no projeto aparece como “Bom dia”, “Boa tarde” ou “Boa noite” conforme o horário em que o item é aberto (o modelo continua com a variável).'), h('div', { class: 'cols2' }, field('Tipo', req), field('Evidência', mode)), carryField, depField, evBox,
       field('Links úteis', linksBox, 'Abrem em uma nova aba. Não bloqueiam a conclusão.'), field('Scripts relacionados', scriptsBox, 'Referência aos scripts da lista de Scripts SQL (o arquivo não é copiado). Não bloqueiam a conclusão.'),
-      field('Ação: gerar e-mail', emailSel, emTpls.length ? 'No projeto, o item mostra “Gerar e-mail”: monta o e-mail com os dados do projeto para você copiar e colar no Gmail/Outlook. A aplicação não envia nada e gerar não conclui o item.' : 'Nenhum modelo global ativo. Crie em Configurações → Comunicações.')],
+      field('Ação: gerar e-mail', emailSel, emTpls.length ? 'No projeto, o item mostra “Gerar e-mail”: monta o e-mail com os dados do projeto para você copiar e colar no Gmail/Outlook. A aplicação não envia nada e gerar não conclui o item.' : 'Nenhum modelo global ativo. Crie em Configurações → Comunicações.'),
+      field('Ação: gerar documento', docSel, docTpls.length ? 'No projeto, o item mostra “Gerar documento”: abre a geração do Word (campos com os dados do projeto, prévia e papel timbrado). Gerar não conclui o item.' : 'Nenhum modelo de documento ativo. Crie em Documentos e Modelos → Gerar documentos.')],
     footer: [h('button', { class: 'btn', onclick: () => m.close() }, 'Cancelar'),
       h('button', { class: 'btn primary', onclick: (e) => busy(e.target, async () => {
         const body = { checklistId: listSel.value || checklistId || null, title: title.value, description: desc.value, required: req.value === '1', carryForward: req.value === '1' && carryBox.checked, dependsOn: deps,
           evidence: { mode: mode.value, type: typeSel.value, min: Number(min.value), max: Number(max.value) },
-          links: links.filter((l) => l.title.trim() || l.url.trim()), scriptIds: [...chosen], emailTemplateId: emailSel.value || null };
+          links: links.filter((l) => l.title.trim() || l.url.trim()), scriptIds: [...chosen], emailTemplateId: emailSel.value || null, docTemplateId: docSel.value || null };
         if (!body.checklistId) throw new Error('Escolha o checklist do item.');
         await (it ? api('PUT', `/api/checklist-items/${it.id}`, body) : api('POST', `/api/checklists/${body.checklistId}/items`, body));
         await refresh(); m.close(); onSaved && onSaved(); toast('Item salvo no modelo.');

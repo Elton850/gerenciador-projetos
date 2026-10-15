@@ -210,8 +210,9 @@ function previewHtml(doc) {
 
 // Fotografia da geração (histórico): o que foi usado, não o arquivo.
 // refs = references(template, ctx) do momento da geração (decide, na próxima, se o usado volta ou se vale o modelo/projeto atual).
-function generationRecord({ project, template, input, fileName, by, refs = null, at = new Date().toISOString() }) {
-  return { id: uid(), at, by, projectId: project.id, projectName: project.name, templateId: template.id, templateName: template.name, fileName, fields: input.fields, tables: input.tables, refs };
+// checklist = { stepId, itemId, itemTitle, stageName } quando gerado pela ação do item do checklist (só registro; não conclui o item).
+function generationRecord({ project, template, input, fileName, by, refs = null, checklist = null, at = new Date().toISOString() }) {
+  return { id: uid(), at, by, projectId: project.id, projectName: project.name, templateId: template.id, templateName: template.name, fileName, fields: input.fields, tables: input.tables, refs, ...(checklist ? { checklist } : {}) };
 }
 function pushGeneration(data, rec) {
   if (!Array.isArray(data.docGenerations)) data.docGenerations = [];

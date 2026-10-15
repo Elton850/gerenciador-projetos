@@ -3,7 +3,7 @@
 // Nada é gravado em pastas do usuário: o arquivo vai como download. O papel timbrado é só LIDO da biblioteca de documentos.
 const fs = require('fs');
 const path = require('path');
-const { httpError, uid } = require('./util');
+const { httpError, uid, str } = require('./util');
 const EH = require('./evidence-http');
 const M = require('./email');
 const G = require('./docgen');
@@ -25,7 +25,7 @@ function mount(app, { store, audit, getProject }) {
     const d = libDoc(t.baseDocumentId);
     return d ? { id: d.id, title: d.title, fileExists: d.source.type === 'file' && fs.existsSync(d.source.path) } : { id: t.baseDocumentId, title: '(removido da biblioteca)', missing: true };
   };
-  const publicTemplate = (t) => ({ ...t, base: baseInfo(t), usage: G.templateUsage(data(), t.id) });
+  const publicTemplate = (t) => ({ ...t, base: baseInfo(t), usage: G.templateUsage(data(), t.id), checklistItems: data().checklistItems.filter((i) => i.docTemplateId === t.id).length });
   const clean = (body) => {
     const c = G.cleanTemplate(body || {}, data());
     if (c.baseDocumentId) { const d = libDoc(c.baseDocumentId); if (d.source.type !== 'file' || !isDocx(d.source.path)) throw httpError(400, 'O papel timbrado precisa ser um arquivo Word (.docx) cadastrado na biblioteca.'); }
@@ -65,11 +65,15 @@ function mount(app, { store, audit, getProject }) {
     res.json(publicTemplate(t));
   });
 
-  // Excluir só modelo nunca usado (o histórico aponta para ele); usado → desativar.
+  // Excluir só modelo nunca usado (o histórico aponta para ele) e fora dos itens de checklist; usado → desativar.
+  const inChecklists = (id) => data().checklistItems.filter((i) => i.docTemplateId === id).length
+    + data().projects.reduce((n, p) => n + (p.checklists || []).reduce((m, c) => m + c.items.filter((i) => i.docTemplateId === id).length, 0), 0);
   app.delete('/api/doc-templates/:tid', (req, res) => {
     const t = tpl(req.params.tid);
     const n = G.templateUsage(data(), t.id);
     if (n) throw httpError(409, `O modelo “${t.name}” já gerou ${n} documento(s) e fica no histórico. Desative-o para não aparecer mais nos projetos.`, { code: 'DOC_TEMPLATE_IN_USE' });
+    const k = inChecklists(t.id);
+    if (k) throw httpError(409, `O modelo “${t.name}” é a ação “Gerar documento” de ${k} item(ns) de checklist. Tire-o desses itens ou desative o modelo.`, { code: 'DOC_TEMPLATE_IN_USE' });
     data().docTemplates = list().filter((x) => x.id !== t.id);
     store.save();
     log('documento-modelo-excluido', null, { detalhe: t.name });
@@ -91,6 +95,15 @@ function mount(app, { store, audit, getProject }) {
       return { base: fs.readFileSync(d.source.path), title: d.title };
     } catch { return { base: null, warning: `Papel timbrado “${d.title}” não encontrado no caminho cadastrado: o documento sai com o layout padrão.` }; }
   };
+
+  // Geração pela ação do item do checklist: o item precisa ser deste projeto e ter este modelo (cópia do item). Só registro.
+  function checklistOf(p, t, c) {
+    if (!c || (!c.stepId && !c.itemId)) return null;
+    const inst = (p.checklists || []).find((x) => x.stepId === str(c.stepId, 40)) || (() => { throw httpError(404, 'Checklist deste passo ainda não foi iniciado.'); })();
+    const item = inst.items.find((i) => i.id === str(c.itemId, 40)) || (() => { throw httpError(404, 'Item não encontrado.'); })();
+    if (item.docTemplateId !== t.id) throw httpError(400, 'Este item do checklist não tem este modelo de documento associado.');
+    return { stepId: inst.stepId, itemId: item.id, itemTitle: item.title, stageName: inst.stageName || '' };
+  }
 
   app.get('/api/projects/:id/doc-templates', (req, res) => {
     const p = getProject(req.params.id);
@@ -120,15 +133,16 @@ function mount(app, { store, audit, getProject }) {
   app.post('/api/projects/:id/doc-templates/:tid/generate', async (req, res) => {
     const p = getProject(req.params.id);
     const t = activeTpl(req.params.tid);
+    const origin = checklistOf(p, t, req.body?.checklist); // valida a origem antes de montar o Word
     const input = G.cleanInput(t, req.body);
     const doc = G.render(t, ctxFor(p), input);
     const b = readBase(t);
     let buf;
     try { buf = await buildDocx(doc, { base: b.base, title: t.name }); } catch (e) { throw httpError(400, `Não foi possível montar o Word com o papel timbrado: ${e.message}`); }
-    const rec = G.generationRecord({ project: p, template: t, input, fileName: doc.fileName, by: EH.whoAmI(), refs: G.references(t, ctxFor(p)) });
+    const rec = G.generationRecord({ project: p, template: t, input, fileName: doc.fileName, by: EH.whoAmI(), refs: G.references(t, ctxFor(p)), checklist: origin });
     G.pushGeneration(data(), rec);
     store.save();
-    log('documento-gerado', p, { detalhe: t.name, arquivo: doc.fileName });
+    log('documento-gerado', p, { detalhe: rec.checklist ? `${t.name} (item “${rec.checklist.itemTitle}”)` : t.name, arquivo: doc.fileName });
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     res.setHeader('Content-Disposition', `attachment; filename="${doc.fileName.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '')}"; filename*=UTF-8''${encodeURIComponent(doc.fileName)}`);
     res.setHeader('X-Generation-Id', rec.id);

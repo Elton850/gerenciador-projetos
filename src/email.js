@@ -363,7 +363,7 @@ function cleanContact(b) {
 }
 
 module.exports = {
-  publicVariables, unknownVariables, variableValues, renderText, greetingFor, publicRoles, CONTACT_KINDS,
+  publicVariables, unknownVariables, variableValues, renderText, missingMessage, greetingFor, publicRoles, CONTACT_KINDS,
   bodyToHtml, bodyToText, renderBody, renderOut, cleanAttachments, cleanTemplate, availableFor, usableIn, templateUsage, contextFor, generate, generationRecord, lastGenerationFor, applyCopy, buildGmailComposeUrl, cleanContact,
   MAX_GENERATIONS,
 };

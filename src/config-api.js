@@ -146,6 +146,7 @@ function mount(app, { store, audit, getProject, getIn, publicProject, SYS }) {
     data().stages = data().stages.filter((x) => x.id !== s.id);
     for (const c of data().checklists) if (c.stageId === s.id) c.stageId = null; // os checklists são cadastro à parte: ficam, sem estágio
     for (const d of data().documents) if (d.stageId === s.id) d.stageId = null;
+    for (const t of data().docTemplates || []) if (t.stageId === s.id) t.stageId = null;
     store.save();
     res.json({ ok: true });
   });

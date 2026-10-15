@@ -22,10 +22,10 @@ const { ScriptFiles } = require('./scriptstore');
 const { decodeSqlBuffer } = require('./sqlscan');
 
 const FORMAT = 'GerenciadorProjetosConfiguracoes';
-const SECTIONS = ['stages', 'projectTypes', 'originSystems', 'cycles', 'checklists', 'checklistItems', 'scripts', 'emailTemplates', 'emailImages', 'documents'];
+const SECTIONS = ['stages', 'projectTypes', 'originSystems', 'cycles', 'checklists', 'checklistItems', 'scripts', 'emailTemplates', 'emailImages', 'documents', 'docTemplates'];
 const LABELS = { stages: 'Estágios', projectTypes: 'Tipos de projeto', originSystems: 'Sistemas de origem', cycles: 'Ciclos', checklists: 'Checklists',
   checklistItems: 'Itens de checklist', scripts: 'Scripts SQL', emailTemplates: 'Modelos de e-mail', emailImages: 'Imagens dos modelos',
-  documents: 'Documentos e modelos', settings: 'Ajustes gerais' };
+  documents: 'Documentos e modelos', docTemplates: 'Modelos de documentos gerados', settings: 'Ajustes gerais' };
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
 const clone = (x) => JSON.parse(JSON.stringify(x));

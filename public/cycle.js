@@ -181,5 +181,6 @@ function stageDocsCard(p) {
   return card(['Documentos e modelos desta etapa ', st ? stageTag(st) : null], h('a', { class: 'link-quiet', href: '#/docs' }, 'Abrir biblioteca'),
     !st ? h('div', { class: 'empty' }, 'Defina a etapa do projeto no ciclo acima para ver os documentos e modelos dela.')
       : docs.length ? docs.map((d) => docRow(d, { compact: true }))
-        : h('div', { class: 'empty' }, 'Nenhum documento ou modelo cadastrado para esta etapa. Cadastre na biblioteca de Documentos e Modelos.'));
+        : h('div', { class: 'empty' }, 'Nenhum documento ou modelo cadastrado para esta etapa. Cadastre na biblioteca de Documentos e Modelos.'),
+    dgProjectSection(p)); // gerar documentos (Word) a partir dos modelos — public/docgen.js
 }

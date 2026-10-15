@@ -22,6 +22,7 @@ const DEFAULT_CYCLE = [
 const clone = (x) => JSON.parse(JSON.stringify(x));
 const { ensureHours } = require('./hours');
 const { ensureCycles } = require('./cycles');
+const { defaultTemplates } = require('./docgen');
 
 // Completa dados antigos com os campos novos, sem alterar nada do que já existe (idempotente).
 function applyDefaults(data) {
@@ -49,6 +50,10 @@ function applyDefaults(data) {
   if (!Array.isArray(data.emailTemplates)) data.emailTemplates = [];
   if (!Array.isArray(data.emailGenerations)) data.emailGenerations = [];
   if (!Array.isArray(data.emailImages)) data.emailImages = []; // imagens do corpo dos modelos (arquivos em data/evidencias/comunicacoes/imagens)
+  // Documentos gerados (Roteiro Pós-Importação, Termo MIT010…): modelos e histórico. Os modelos padrão só entram quando a lista não existe
+  // (excluídos não voltam); ids fixos. Ver src/docgen.js.
+  if (!Array.isArray(data.docTemplates)) data.docTemplates = defaultTemplates(data);
+  if (!Array.isArray(data.docGenerations)) data.docGenerations = [];
   for (const p of data.projects || []) {
     if (p.coordinatorId === undefined) p.coordinatorId = null;
     // Contatos externos do projeto (stakeholders/cliente) e modelos de e-mail habilitados (null = todos os globais ativos).

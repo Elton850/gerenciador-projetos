@@ -661,6 +661,7 @@ require('./src/workspace-api').mount(app, { store, audit, SYS });
 require('./src/notes-api').mount(app, { store, audit, getProject, publicProject, SYS }); // observações do projeto (texto + links/arquivos/pastas referenciados)
 require('./src/rm-env-api').mount(app, { store, audit, getProject, publicProject }); // ambientes RM (HMG/PRD): link, diretório, abrir RM.exe -Multi=True
 require('./src/email-api').mount(app, { store, audit, getProject, getIn, publicProject, dataDir: DATA_DIR }); // Comunicações: gerador de e-mails (modelos, prévia, copiar) — não envia nada
+require('./src/docgen-api').mount(app, { store, audit, getProject }); // Documentos gerados: modelos → prévia → Word (.docx) baixado pela tela
 
 app.get('/api/jobs/:id', (req, res) => {
   const j = jobs.get(req.params.id);

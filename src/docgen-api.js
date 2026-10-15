@@ -106,7 +106,7 @@ function mount(app, { store, audit, getProject }) {
     const f = G.buildForm(t, ctxFor(p), data());
     const tables = t.blocks.map((b, index) => (b.type === 'table' ? { index, columns: b.columns, allowRows: b.allowRows, modelRows: b.rows.length } : null)).filter(Boolean);
     const people = [...(p.contacts || []).map((c) => c.name), ...['coordinatorId', 'analystId'].map((k) => data().coordinators.find((c) => c.id === p[k])?.name)].filter(Boolean);
-    res.json({ template: { id: t.id, name: t.name, description: t.description, tables, base: baseInfo(t) }, fields: f.fields, tables: f.tables, last: f.last, people: [...new Set(people)] });
+    res.json({ template: { id: t.id, name: t.name, description: t.description, tables, base: baseInfo(t) }, fields: f.fields, tables: f.tables, tableAlts: f.tableAlts, last: f.last, people: [...new Set(people)] });
   });
 
   app.post('/api/projects/:id/doc-templates/:tid/preview', (req, res) => {
@@ -125,7 +125,7 @@ function mount(app, { store, audit, getProject }) {
     const b = readBase(t);
     let buf;
     try { buf = await buildDocx(doc, { base: b.base, title: t.name }); } catch (e) { throw httpError(400, `Não foi possível montar o Word com o papel timbrado: ${e.message}`); }
-    const rec = G.generationRecord({ project: p, template: t, input, fileName: doc.fileName, by: EH.whoAmI() });
+    const rec = G.generationRecord({ project: p, template: t, input, fileName: doc.fileName, by: EH.whoAmI(), refs: G.references(t, ctxFor(p)) });
     G.pushGeneration(data(), rec);
     store.save();
     log('documento-gerado', p, { detalhe: t.name, arquivo: doc.fileName });

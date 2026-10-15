@@ -232,3 +232,73 @@ test('formatação do original: título/parágrafo/quadro/tabela copiam estilo, 
   assert.match(xml, /<w:rFonts w:ascii="Verdana" w:hAnsi="Verdana"\/><w:b\/><w:bCs\/><\/w:rPr><w:t xml:space="preserve">Sem molde</);
   assert.ok(xml.includes('<w:sectPr><w:pgSz'), 'seção final preservada');
 });
+
+test('formulário: o usado na última geração só volta enquanto o modelo e o projeto não mudaram (campos, outro modelo, tabelas, ordem, hoje)', () => {
+  const M = require('../src/email');
+  const data = applyDefaults({ projects: [], coordinators: [{ id: 'a1', name: 'Ana Analista' }, { id: 'a2', name: 'Bia Analista' }] });
+  const p = { id: 'p1', name: 'Cliente Alfa', analystId: 'a1', contacts: [], stageHistory: [] };
+  data.projects.push(p);
+  const ctx = () => M.contextFor(data, p, {});
+  const rot = data.docTemplates.find((t) => t.id === ROT);
+  const mit = data.docTemplates.find((t) => t.id === MIT);
+  const field = (form, key) => form.fields.find((f) => f.key === key);
+  const gen = (t, fields, tables = {}, refs = G.references(t, ctx())) => data.docGenerations.push({ id: `g${data.docGenerations.length}`, at: new Date().toISOString(), projectId: p.id, templateId: t.id, templateName: t.name, fileName: 'x.docx', fields, tables, ...(refs ? { refs } : {}) });
+
+  // 1) Geração antiga (sem referência) + valor inicial do campo editado no modelo depois: vale o do modelo; o resto digitado volta.
+  gen(rot, { analistas: 'Ana Analista', cliente: 'Cliente Alfa SA', data_final: '30/09/2026' }, {}, null);
+  rot.fields.find((f) => f.key === 'analistas').default = 'Analista Fictício';
+  let f = G.buildForm(rot, ctx(), data);
+  assert.equal(field(f, 'analistas').value, 'Analista Fictício');
+  assert.equal(field(f, 'analistas').changed, true);
+  assert.deepEqual(field(f, 'analistas').alt, { label: 'Usar o da última geração', value: 'Ana Analista' });
+  assert.equal(field(f, 'cliente').value, 'Cliente Alfa SA');
+  assert.equal(field(f, 'data_final').value, '30/09/2026', 'data digitada não vira "hoje" (variável que muda sozinha)');
+
+  // 2) Com referência e modelo igual: o digitado volta, com a opção de usar o do modelo.
+  gen(rot, { analistas: 'Outro Nome', cliente: 'Cliente Alfa SA' });
+  f = G.buildForm(rot, ctx(), data);
+  assert.equal(field(f, 'analistas').value, 'Outro Nome');
+  assert.equal(field(f, 'analistas').from, 'last');
+  assert.deepEqual(field(f, 'analistas').alt, { label: 'Usar o do modelo', value: 'Analista Fictício' });
+
+  // 3) Dado do projeto alterado (analista): campo que vem do projeto acompanha.
+  gen(mit, { analista: 'Ana Analista', projeto: 'Migração de Dados (Folha de Pagamento)', cliente: 'Cliente Alfa SA' });
+  p.analystId = 'a2';
+  f = G.buildForm(mit, ctx(), data);
+  assert.equal(field(f, 'analista').value, 'Bia Analista');
+  assert.equal(field(f, 'cliente').value, 'Cliente Alfa SA');
+
+  // 4) Chave igual vinda de OUTRO modelo: valor inicial diferente neste modelo → vale o deste; igual (vazio) → reaproveita o digitado.
+  data.docGenerations = data.docGenerations.filter((g) => g.templateId === MIT);
+  f = G.buildForm(rot, ctx(), data);
+  assert.equal(field(f, 'projeto').value, 'Migração de Dados');
+  assert.equal(field(f, 'cliente').value, 'Cliente Alfa SA');
+
+  // 5) Tabelas: linhas da última geração voltam; modelo editado (processo novo) → linhas do modelo, com a opção de voltar.
+  const procIdx = mit.blocks.findIndex((b) => b.type === 'table' && b.columns[0] === 'Nome do Processo');
+  const before = G.buildForm(mit, ctx(), data).tables[procIdx];
+  const typed = before.map((r) => [r[0], '01/10/2026', 'Usuário Chave', r[3]]);
+  gen(mit, { analista: 'Bia Analista' }, { [procIdx]: typed });
+  f = G.buildForm(mit, ctx(), data);
+  assert.deepEqual(f.tables[procIdx], typed);
+  assert.equal(f.tableAlts[procIdx].label, 'Restaurar as linhas do modelo');
+  mit.blocks[procIdx].rows.push(['Carga de dados nova', '{{doc.data}}', '', '{{doc.analista}}']);
+  f = G.buildForm(mit, ctx(), data);
+  assert.equal(f.tables[procIdx].length, 16);
+  assert.equal(f.tableAlts[procIdx].changed, true);
+  assert.deepEqual(f.tableAlts[procIdx].rows, typed);
+
+  // 6) Blocos reordenados: a tabela que passou a ocupar a posição não recebe as linhas da outra.
+  const t2 = G.cleanTemplate({ name: 'Duas', blocks: [{ type: 'table', columns: ['A', 'B'], rows: [['a1', '']] }, { type: 'table', columns: ['C', 'D'], rows: [['c1', '']] }] }, data);
+  t2.id = 'duas';
+  gen(t2, {}, { 0: [['a1', 'digitado A']], 1: [['c1', 'digitado C']] });
+  t2.blocks.reverse();
+  f = G.buildForm(t2, ctx(), data);
+  assert.deepEqual(f.tables[0], [['c1', '']]);
+  assert.deepEqual(f.tables[1], [['a1', '']]);
+
+  // Referência não depende do dia (today/greeting ficam como marcador).
+  const r1 = G.references(rot, M.contextFor(data, p, { now: new Date('2026-10-15T10:00:00') }));
+  const r2 = G.references(rot, M.contextFor(data, p, { now: new Date('2026-10-16T20:00:00') }));
+  assert.deepEqual(r1, r2);
+});

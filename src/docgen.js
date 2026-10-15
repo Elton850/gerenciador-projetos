@@ -98,25 +98,53 @@ function lastGeneration(data, projectId, templateId) {
   return { same: list.filter((g) => g.templateId === templateId).at(-1) || null, any: list.at(-1) || null };
 }
 
-// Formulário da geração: campos com o valor inicial (última geração → default com variáveis do projeto) e tabelas (linhas do modelo,
-// variáveis do projeto já resolvidas; {{doc.x}} continua como marcador para acompanhar o campo).
+// REFERÊNCIA de uma geração: o valor inicial de cada campo e as linhas do modelo de cada tabela, já com os dados do projeto daquele
+// momento. Na próxima geração, o que o usuário usou só volta se a referência continua igual; se o modelo foi editado (valor inicial,
+// linhas, ordem dos blocos) ou o dado do projeto mudou (ex.: analista), vale o atual. Variáveis que mudam sozinhas (data/horário da
+// geração) ficam como marcador na referência — uma data digitada não é trocada por "hoje" a cada dia.
+const VOLATILE = new Set(['today', 'greeting']);
+function references(t, ctx) {
+  const sv = Object.fromEntries(Object.entries(projectValues(ctx)).filter(([k]) => !VOLATILE.has(k)));
+  const tables = {};
+  t.blocks.forEach((b, i) => { if (b.type === 'table') tables[i] = JSON.stringify([b.columns, b.rows.map((r) => r.map((c) => resolveProjectOnly(c, sv)))]); });
+  return { defaults: Object.fromEntries(t.fields.map((f) => [f.key, M.renderText(f.default, sv).text])), tables };
+}
+// Geração anterior à referência (versão 1.7.0/1.7.1): compara com o modelo padrão de mesmo id; outro modelo → sem referência (mantém).
+function refsOf(g, ctx, data) {
+  if (g.refs) return g.refs;
+  const seed = defaultTemplates(data).find((x) => x.id === g.templateId);
+  return seed ? references(seed, ctx) : null;
+}
+
+// Formulário da geração: cada campo vem da última geração do projeto (deste modelo ou, pela chave, de outro) enquanto a referência dele
+// não mudou; senão, do valor inicial com os dados atuais do projeto. Tabelas: linhas da última geração deste modelo, com a mesma regra
+// (variáveis do projeto já resolvidas; {{doc.x}} continua marcador para acompanhar o campo). alt = a outra opção, para a tela oferecer.
 function buildForm(t, ctx, data) {
   const values = projectValues(ctx);
+  const now = references(t, ctx);
   const { same, any } = lastGeneration(data, ctx.project.id, t.id);
   const fields = t.fields.map((f) => {
-    const prev = same?.fields?.[f.key] ?? (any?.fields && f.key in any.fields ? any.fields[f.key] : undefined);
-    if (prev !== undefined) return { ...f, value: prev, from: 'last' };
     const r = M.renderText(f.default, values);
-    return { ...f, value: r.missing.length ? r.text.replace(VAR_RE, '').replace(/\s{2,}/g, ' ').trim() : r.text, from: 'default', warnings: r.missing.map((k) => missMsg(k, ctx)) };
+    const def = { ...f, value: r.missing.length ? r.text.replace(VAR_RE, '').replace(/\s{2,}/g, ' ').trim() : r.text, from: 'default', warnings: r.missing.map((k) => missMsg(k, ctx)) };
+    const src = same && f.key in (same.fields || {}) ? same : any && f.key in (any.fields || {}) ? any : null;
+    if (!src) return def;
+    const last = src.fields[f.key];
+    const then = refsOf(src, ctx, data)?.defaults?.[f.key];
+    if (then !== undefined && then !== now.defaults[f.key]) return { ...def, changed: true, alt: last !== def.value ? { label: 'Usar o da última geração', value: last } : null };
+    return { ...f, value: last, from: 'last', alt: def.value && def.value !== last ? { label: 'Usar o do modelo', value: def.value } : null };
   });
-  const tables = {};
+  const tables = {}; const tableAlts = {};
   t.blocks.forEach((b, i) => {
     if (b.type !== 'table') return;
+    const model = b.rows.map((r) => r.map((c) => resolveProjectOnly(c, values)));
     const prev = same?.tables?.[i];
-    tables[i] = Array.isArray(prev) && prev.every((r) => Array.isArray(r) && r.length === b.columns.length) ? prev
-      : b.rows.map((r) => r.map((c) => resolveProjectOnly(c, values)));
+    if (!(Array.isArray(prev) && prev.every((r) => Array.isArray(r) && r.length === b.columns.length))) { tables[i] = model; return; }
+    const then = refsOf(same, ctx, data)?.tables?.[i];
+    const differs = JSON.stringify(prev) !== JSON.stringify(model);
+    if (then !== undefined && then !== now.tables[i]) { tables[i] = model; if (differs) tableAlts[i] = { label: 'Usar as linhas da última geração', rows: prev, changed: true }; }
+    else { tables[i] = prev; if (differs) tableAlts[i] = { label: 'Restaurar as linhas do modelo', rows: model }; }
   });
-  return { fields, tables, last: same ? { at: same.at, by: same.by, fileName: same.fileName } : null };
+  return { fields, tables, tableAlts, last: same ? { at: same.at, by: same.by, fileName: same.fileName } : null };
 }
 // Resolve só as variáveis do projeto (as de campo ficam para a prévia/geração).
 const resolveProjectOnly = (text, values) => String(text || '').replace(VAR_RE, (m, k) => (values[k.toLowerCase()] !== undefined ? values[k.toLowerCase()] : m));
@@ -181,8 +209,9 @@ function previewHtml(doc) {
 }
 
 // Fotografia da geração (histórico): o que foi usado, não o arquivo.
-function generationRecord({ project, template, input, fileName, by, at = new Date().toISOString() }) {
-  return { id: uid(), at, by, projectId: project.id, projectName: project.name, templateId: template.id, templateName: template.name, fileName, fields: input.fields, tables: input.tables };
+// refs = references(template, ctx) do momento da geração (decide, na próxima, se o usado volta ou se vale o modelo/projeto atual).
+function generationRecord({ project, template, input, fileName, by, refs = null, at = new Date().toISOString() }) {
+  return { id: uid(), at, by, projectId: project.id, projectName: project.name, templateId: template.id, templateName: template.name, fileName, fields: input.fields, tables: input.tables, refs };
 }
 function pushGeneration(data, rec) {
   if (!Array.isArray(data.docGenerations)) data.docGenerations = [];
@@ -263,5 +292,5 @@ function defaultTemplates(data) {
 
 module.exports = {
   BLOCK_TYPES, FIELD_TYPES, MAX_GENERATIONS, publicVariables, cleanTemplate, templateUsage, buildForm, cleanInput, render, previewHtml, fileNameFor,
-  generationRecord, pushGeneration, defaultTemplates,
+  generationRecord, pushGeneration, defaultTemplates, references,
 };

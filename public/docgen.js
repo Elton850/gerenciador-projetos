@@ -4,6 +4,7 @@
 
 const DG = { meta: null };
 const dgLoad = async () => (DG.meta = await api('GET', '/api/doc-templates'));
+const dgShort = (v) => { const s = String(v ?? '').replace(/\s+/g, ' '); return s.length > 60 ? `${s.slice(0, 57)}…` : s || '(vazio)'; };
 const DG_BLOCK_HINT = {
   info: 'Uma linha por linha do quadro, no formato “Rótulo: valor”. Duas células na mesma linha: separe com “||”.',
   table: 'Colunas e células separadas por “|”. Uma linha por linha da tabela; na geração todas as células podem ser ajustadas.',
@@ -207,21 +208,37 @@ async function dgGenerate(projectId, tid, onDone) {
     const input = f.type === 'textarea'
       ? h('textarea', { rows: 3, oninput: (e) => { values[f.key] = e.target.value; preview(); } }, f.value)
       : h('input', { type: 'text', value: f.value, list: listId, oninput: (e) => { values[f.key] = e.target.value; preview(); } });
+    // Outra opção (valor do modelo/projeto × o usado na última geração): um clique troca, e o botão passa a oferecer o anterior.
+    const altBox = h('div', { class: 'dg-alt' });
+    const drawAlt = (alt, other) => altBox.replaceChildren(...(alt ? [h('button', { class: 'link-quiet small', type: 'button', title: alt.value, onclick: () => {
+      const cur = { label: other, value: input.value };
+      input.value = alt.value; values[f.key] = alt.value; preview();
+      drawAlt(cur.value !== alt.value ? cur : null, alt.label);
+    } }, `${alt.label}: “${dgShort(alt.value)}”`)] : []));
+    drawAlt(f.alt, f.alt?.label === 'Usar o do modelo' ? 'Usar o da última geração' : 'Usar o do modelo');
     return h('div', { class: 'field' }, h('label', null, f.label), input,
       f.options?.length ? h('datalist', { id: listId }, f.options.map((o) => h('option', { value: o }))) : null,
+      f.changed ? h('div', { class: 'hint' }, 'Atualizado: o valor do modelo ou do projeto mudou desde a última geração.') : null,
+      altBox,
       f.hint ? h('div', { class: 'hint' }, f.hint) : null,
       (f.warnings || []).map((w) => h('div', { class: 'hint dg-warn' }, `⚠ ${w}`)));
   });
 
   const tableEls = d.template.tables.map((tb) => {
     const box = h('div', { class: 'stack' });
+    let alt = d.tableAlts?.[tb.index] || null;
+    const changedNote = alt?.changed ? h('div', { class: 'hint' }, 'Atualizada: as linhas do modelo ou os dados do projeto mudaram desde a última geração.') : null;
     const draw = () => {
       const rows = tables[tb.index];
-      box.replaceChildren(h('div', { class: 'dg-grid-wrap' }, h('table', { class: 'dg-grid' },
+      const swap = alt ? h('div', null, h('button', { class: 'link-quiet small', type: 'button', onclick: () => {
+        const cur = { label: alt.label === 'Usar as linhas da última geração' ? 'Restaurar as linhas do modelo' : 'Usar as linhas da última geração', rows: JSON.parse(JSON.stringify(tables[tb.index])) };
+        tables[tb.index] = JSON.parse(JSON.stringify(alt.rows)); alt = cur; draw(); preview();
+      } }, alt.label)) : null;
+      box.replaceChildren(...[changedNote, swap, h('div', { class: 'dg-grid-wrap' }, h('table', { class: 'dg-grid' },
         h('thead', null, h('tr', null, tb.columns.map((c) => h('th', null, c)), tb.allowRows ? h('th', null, '') : null)),
         h('tbody', null, rows.map((r, i) => h('tr', null, r.map((c, k) => h('td', null, h('input', { type: 'text', value: c, oninput: (e) => { rows[i][k] = e.target.value; preview(); } }))),
           tb.allowRows ? h('td', null, h('button', { class: 'btn sm ghost', title: 'Remover linha', onclick: () => { rows.splice(i, 1); draw(); preview(); } }, '✕')) : null))))),
-      tb.allowRows ? h('div', null, h('button', { class: 'btn sm', onclick: () => { rows.push(tb.columns.map(() => '')); draw(); } }, '+ Linha')) : null);
+      tb.allowRows ? h('div', null, h('button', { class: 'btn sm', onclick: () => { rows.push(tb.columns.map(() => '')); draw(); } }, '+ Linha')) : null].filter(Boolean));
     };
     draw();
     return h('div', { class: 'stack' }, h('strong', { class: 'small' }, tb.columns.join(' · ')), box);

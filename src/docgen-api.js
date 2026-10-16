@@ -7,6 +7,7 @@ const { httpError, uid, str } = require('./util');
 const EH = require('./evidence-http');
 const M = require('./email');
 const G = require('./docgen');
+const { MIGRATION_ANALYST } = require('./team');
 const { buildDocx } = require('./docx');
 const PDF = require('./pdf');
 const WORDPDF = require('./word-pdf');
@@ -120,7 +121,7 @@ function mount(app, { store, audit, getProject }) {
     const t = activeTpl(req.params.tid);
     const f = G.buildForm(t, ctxFor(p), data());
     const tables = t.blocks.map((b, index) => (b.type === 'table' ? { index, columns: b.columns, allowRows: b.allowRows, modelRows: b.rows.length } : null)).filter(Boolean);
-    const people = [...(p.contacts || []).map((c) => c.name), ...['coordinatorId', 'analystId'].map((k) => data().coordinators.find((c) => c.id === p[k])?.name)].filter(Boolean);
+    const people = [MIGRATION_ANALYST.name, ...(p.contacts || []).map((c) => c.name), ...['coordinatorId', 'analystId'].map((k) => data().coordinators.find((c) => c.id === p[k])?.name)].filter(Boolean);
     res.json({ template: { id: t.id, name: t.name, description: t.description, tables, base: baseInfo(t) }, fields: f.fields, tables: f.tables, tableAlts: f.tableAlts, last: f.last, people: [...new Set(people)] });
   });
 

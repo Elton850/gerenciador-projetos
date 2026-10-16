@@ -484,7 +484,7 @@ function projectForm(p) {
   const personSelect = (current, none) => h('select', null, h('option', { value: '' }, none),
     state.coordinators.map((c) => h('option', { value: c.id, selected: current === c.id }, c.role ? `${c.name} — ${c.role}` : c.name)));
   const coord = personSelect(p?.coordinatorId, '— Sem coordenador —');
-  const analyst = personSelect(p?.analystId, '— Sem analista —');
+  const analyst = personSelect(p?.analystId, '— Sem analista de implantação —');
   const tagSelect = (items, current, none) => h('select', null, h('option', { value: '' }, none), items.map((t) => h('option', { value: t.id, selected: current === t.id }, t.name)));
   const ptype = tagSelect(state.projectTypes, p?.projectTypeId, '— Sem tipo —');
   // Ciclo: segue o tipo escolhido (ciclo padrão do tipo) até a pessoa escolher outro à mão.
@@ -504,8 +504,8 @@ function projectForm(p) {
         field('Sistema de origem', origin, !state.originSystems.length ? 'Cadastre os sistemas em Configurações.' : null)),
       field('Ciclo de migração', cycleSel, p ? 'Trocar o ciclo de um projeto em andamento pede confirmação; o histórico e os checklists já feitos ficam guardados.' : 'Vem do tipo do projeto (Configurações → Ciclos). O projeto recebe uma cópia das etapas e dos checklists.'),
       state.connections.length ? field('Conexão padrão do projeto', defConn, 'Pré-selecionada ao executar scripts pelo checklist deste projeto.') : null,
-      h('div', { class: 'cols2' }, field('Coordenador', coord), field('Analista', analyst)),
-      h('div', { class: 'hint', style: 'margin-top:-8px' }, state.coordinators.length ? 'Coordenador e analista vêm do mesmo cadastro de responsáveis (Configurações → Geral).' : 'Nenhum responsável cadastrado ainda. Cadastre em Configurações → Geral.'),
+      h('div', { class: 'cols2' }, field('Coordenador', coord), field('Analista de implantação', analyst)),
+      h('div', { class: 'hint', style: 'margin-top:-8px' }, state.coordinators.length ? `Coordenador e analista de implantação vêm do mesmo cadastro de responsáveis (Configurações → Geral).${state.migrationAnalyst ? ` Analista de migração: ${state.migrationAnalyst.name} (fixo).` : ''}` : 'Nenhum responsável cadastrado ainda. Cadastre em Configurações → Geral.'),
       field('Pasta raiz — onde fica', rootKind, 'O diretório oficial do projeto. Pode ser local (ex.: o repositório) ou uma pasta compartilhada no Drive.'),
       rootLocalField, rootDriveField,
       field('Grupo do WhatsApp do projeto', waGroup, 'Opcional. Cole o link de convite do grupo (chat.whatsapp.com/…); aparece como botão no topo do projeto.'),

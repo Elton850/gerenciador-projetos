@@ -195,7 +195,8 @@ const cleanCoordinatorId = (id) => {
   if (!store.data.coordinators.some((c) => c.id === id)) throw httpError(400, 'Coordenador inexistente.');
   return id;
 };
-// Analista responsável: vem do mesmo cadastro de pessoas (Configurações → Responsáveis), sem estrutura duplicada.
+// Analista de Implantação (analystId): vem do mesmo cadastro de pessoas (Configurações → Responsáveis), sem estrutura duplicada.
+// O Analista de Migração é fixo (src/team.js), só informativo.
 const cleanAnalystId = (id) => {
   if (!id) return null;
   if (!store.data.coordinators.some((c) => c.id === id)) throw httpError(400, 'Analista inexistente.');
@@ -212,10 +213,11 @@ const cleanConnectionRef = cleanTagRef('connections', 'Conexão');
 const cleanOriginSystemId = cleanTagRef('originSystems', 'Sistema de origem');
 
 // ---------- Estado / Projetos ----------
+const { MIGRATION_ANALYST } = require('./src/team');
 app.get('/api/state', (req, res) => {
   const projects = store.data.projects.map(publicProject);
   const live = projects.filter((p) => !p.cancelled).flatMap((p) => p.scheduleItems); // cancelado não entra nas contagens de prazos
-  res.json({ settings: store.data.settings, today: todayStr(), ...cfg.extras(), connections: store.data.connections.map(connectionsMod.publicSaved), projects, scheduleSummary: scheduleSummary(live, todayStr()) });
+  res.json({ settings: store.data.settings, today: todayStr(), migrationAnalyst: MIGRATION_ANALYST, ...cfg.extras(), connections: store.data.connections.map(connectionsMod.publicSaved), projects, scheduleSummary: scheduleSummary(live, todayStr()) });
 });
 
 app.put('/api/settings', (req, res) => {

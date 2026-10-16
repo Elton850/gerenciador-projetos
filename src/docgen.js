@@ -294,7 +294,7 @@ function defaultTemplates(data) {
       fileName: 'Relatório Pós-Importação {{project.name}} - {{doc.ambiente}}',
       fields: [F('cliente', 'Nome do cliente'), F('projeto', 'Nome do projeto', 'Migração de Dados'), F('data_inicial', 'Data inicial', '{{project.start_date}}'),
         F('data_final', 'Data final', '{{today}}'), F('coordenador_totvs', 'Gerente/Coordenador TOTVS', '{{project.coordinator}}'),
-        F('coordenador_cliente', 'Gerente/Coordenador cliente', '', { people: true }), F('analistas', 'Analistas', '{{project.analyst}}', { people: true }),
+        F('coordenador_cliente', 'Gerente/Coordenador cliente', '', { people: true }), F('analistas', 'Analistas', '{{project.migration_analyst}}', { people: true }),
         F('ambiente', 'Ambiente', '', { options: AMBIENTES }), F('sistema_origem', 'Sistema origem', '{{project.origin_system}}'), F('sistema_destino', 'Sistema destino', 'TOTVS RM'),
         F('erros_carga', 'Erros de carga', '', { type: 'textarea', hint: 'Opcional. Prints e detalhes podem ser colados depois no Word.' })],
       blocks: [
@@ -324,7 +324,7 @@ function defaultTemplates(data) {
         F('coordenador_cliente', 'Gerente/Coordenador cliente', '', { people: true }),
         F('entrega', 'Tipo de entrega (título)', 'Marco', { options: ['Marco', 'Carga Complementar'] }),
         F('marco', 'Marco', '1ª Migração das tabelas em ambiente de HOMOLOGAÇÃO', { options: ['1ª Migração das tabelas em ambiente de HOMOLOGAÇÃO', 'Migração das tabelas em ambiente de PRODUÇÃO /1ª Carga Complementar'] }),
-        F('analista', 'Analista de Serviços TOTVS', '{{project.analyst}}', { people: true }), F('aprovado_por', 'Aprovado por', '', { people: true, hint: 'Em geral, o coordenador do cliente.' })],
+        F('analista', 'Analista de Serviços TOTVS', '{{project.migration_analyst}}', { people: true }), F('aprovado_por', 'Aprovado por', '', { people: true, hint: 'Em geral, o coordenador do cliente.' })],
       blocks: [
         { type: 'title', text: 'Ambientação' },
         { type: 'info', rows: [[{ label: 'Nome do cliente:', value: '{{doc.cliente}}' }, { label: 'Código de cliente:', value: '{{doc.codigo_cliente}}' }],

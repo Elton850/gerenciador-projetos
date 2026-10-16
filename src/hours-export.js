@@ -1,5 +1,6 @@
 // Exportação mensal dos apontamentos para .xlsx (ExcelJS, já usado na leitura das planilhas). É só LEITURA: nada é alterado.
-// Durações vão como fração de dia com formato [h]:mm (passa de 24 h sem reiniciar), datas como datas e percentuais como percentuais.
+// 1ª aba = o mês no formato da planilha PSA (mesmas colunas e visual); depois as abas de apoio (detalhado, resumos, observações) no mesmo visual.
+// Durações vão como fração de dia (passa de 24 h sem reiniciar), datas como datas e percentuais como percentuais.
 const ExcelJS = require('exceljs');
 const H = require('./hours');
 
@@ -11,20 +12,107 @@ const excelDate = (s) => { const [y, m, d] = s.split('-').map(Number); return ne
 const signed = (min) => (min === 0 ? '00:00' : `${min > 0 ? '+' : '-'}${H.fmtHM(Math.abs(min))}`);
 const DUR = '[h]:mm';
 
-const HEAD_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF002233' } };
+// Visual da planilha de horas (PSA): cabeçalho azul com texto branco em negrito, Calibri 11, bordas finas e conteúdo centralizado.
+const PSA_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF00B0F0' } };
+const YELLOW = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFF00' } };
+const THIN = { style: 'thin' };
+const BOX = { top: THIN, left: THIN, bottom: THIN, right: THIN };
+const CENTER = { horizontal: 'center', vertical: 'middle' };
+const BODY_FONT = { name: 'Calibri', size: 11 };
+const BOLD_FONT = { ...BODY_FONT, bold: true };
+const HEAD_FONT = { ...BOLD_FONT, color: { argb: 'FFFFFFFF' } };
 function styleHeader(ws, widths) {
   const row = ws.getRow(1);
   row.height = 30;
   row.eachCell((c) => {
-    c.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-    c.fill = HEAD_FILL;
-    c.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
-    c.border = { bottom: { style: 'thin', color: { argb: 'FF00DBFF' } } };
+    c.font = HEAD_FONT;
+    c.fill = PSA_FILL;
+    c.alignment = { ...CENTER, wrapText: true };
+    c.border = BOX;
   });
   widths.forEach((w, i) => { ws.getColumn(i + 1).width = w; });
   ws.views = [{ state: 'frozen', ySplit: 1 }];
 }
-const boldRow = (row) => row.eachCell((c) => { c.font = { bold: true }; c.border = { top: { style: 'thin' } }; });
+// Abas de apoio no mesmo visual da aba do mês: bordas finas nas linhas preenchidas.
+function gridRows(ws, cols) {
+  ws.eachRow((row, n) => {
+    if (n === 1 || !row.values.some((v) => v !== null && v !== undefined && v !== '')) return;
+    for (let c = 1; c <= cols; c++) {
+      const cell = row.getCell(c);
+      cell.border = BOX;
+      cell.alignment = { vertical: 'middle', ...(cell.alignment || {}) };
+    }
+  });
+}
+const boldRow = (row) => row.eachCell((c) => { c.font = BOLD_FONT; });
+
+// ---- Aba do mês no formato da planilha PSA (uma aba por mês, nome em maiúsculas: SETEMBRO) ----
+// MÊS DA COMPETÊNCIA · DATA · DIA · HORA INICIO · HORA FIM · CARGA HORÁRIA (=fim − início − pausas) · CLIENTE (projeto) · ATIVIDADES · COORDENAÇÃO.
+// Dia de folga cadastrado (exceção com meta 0 em dia útil, sem horas) entra como linha amarela com o motivo; fim de semana destaca o DIA;
+// linha TOTAL (A:E mesclado) e, ao lado (L:O), as horas por cliente e coordenação (como a tabela dinâmica da planilha).
+const PSA_COLS = ['MÊS DA COMPETÊNCIA', 'DATA', 'DIA', 'HORA INICIO', 'HORA FIM', 'CARGA HORÁRIA', 'CLIENTE', 'ATIVIDADES', 'COORDENAÇÃO'];
+const PSA_WIDTHS = [21.71, 10.71, 13.86, 12.29, 10, 16, 14, 68.43, 15.14, 9.14, 9.14, 19.29, 24.29, 17.43, 24.29];
+const PSA_DAY = WEEKDAYS.map((w) => w.replace('-feira', '-Feira')); // igual ao =PRÓPRIO(TEXTO(DIA.DA.SEMANA(…);"DDDD")) da planilha
+const SUM_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4472C4' } };
+function psaSheet(wb, data, entries, days, year, month) {
+  const ws = wb.addWorksheet(MONTHS[month - 1].toUpperCase());
+  const label = `${MONTHS[month - 1]}/${year}`;
+  PSA_WIDTHS.forEach((w, i) => { ws.getColumn(i + 1).width = w; });
+  const head = ws.getRow(1);
+  PSA_COLS.forEach((t, i) => { const c = head.getCell(i + 1); c.value = t; c.font = HEAD_FONT; c.fill = PSA_FILL; c.border = BOX; c.alignment = CENTER; });
+
+  const off = days.filter((d) => d.override && d.target === 0 && d.confirmed === 0 && d.dow >= 1 && d.dow <= 5)
+    .map((d) => ({ date: d.date, startMin: 0, off: (d.reason || 'Sem expediente').toUpperCase() }));
+  const lines = [...entries, ...off].sort((a, b) => a.date.localeCompare(b.date) || a.startMin - b.startMin);
+  let r = 1;
+  for (const e of lines) {
+    r++;
+    const row = ws.getRow(r);
+    const proj = e.off ? null : data.projects.find((p) => p.id === e.projectId);
+    const pause = e.off ? 0 : e.pausedMin || 0;
+    row.values = [label, excelDate(e.date), PSA_DAY[H.dowOf(e.date)], e.off ? 0 : frac(e.startMin), e.off ? 0 : frac(e.endMin),
+      { formula: `E${r}-D${r}${pause ? `-TIME(0,${pause},0)` : ''}`, result: e.off ? 0 : frac(H.netMin(e)) },
+      e.off || (proj ? proj.name : e.projectName), e.off || e.activity, e.off || e.coordinatorName || '-'];
+    for (let c = 1; c <= 9; c++) { const cell = row.getCell(c); cell.border = BOX; cell.alignment = c >= 3 && c <= 6 ? { ...CENTER, wrapText: true } : CENTER; }
+    row.getCell(2).numFmt = 'mm-dd-yy'; // formato 14 = data abreviada do Windows (dd/mm/aaaa no pt-BR), igual à planilha
+    [4, 5, 6].forEach((c) => { row.getCell(c).numFmt = 'h:mm:ss'; });
+    [1, 6, 7, 9].forEach((c) => { row.getCell(c).font = BOLD_FONT; });
+    if (e.off) [7, 8, 9].forEach((c) => { const cell = row.getCell(c); cell.fill = YELLOW; cell.font = BODY_FONT; });
+  }
+  const last = r;
+  if (last > 1) {
+    ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: last, column: 9 } };
+    ws.addConditionalFormatting({ ref: `C2:C${last}`, rules: [{ type: 'expression', priority: 1, formulae: ['OR(WEEKDAY(B2)=7,WEEKDAY(B2)=1)'], style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: 'FFFFFF00' } } } }] });
+  }
+  const totalMin = entries.reduce((n, e) => n + H.netMin(e), 0);
+  const t = ws.getRow(last + 1);
+  ws.mergeCells(last + 1, 1, last + 1, 5);
+  for (let c = 1; c <= 6; c++) { t.getCell(c).border = BOX; t.getCell(c).alignment = CENTER; }
+  t.getCell(1).value = 'TOTAL'; t.getCell(1).font = HEAD_FONT; t.getCell(1).fill = PSA_FILL;
+  t.getCell(6).value = last > 1 ? { formula: `SUM(F2:F${last})`, result: frac(totalMin) } : 0;
+  t.getCell(6).numFmt = '[h]:mm:ss'; t.getCell(6).font = BOLD_FONT;
+
+  const groups = new Map();
+  for (const e of entries) {
+    const proj = data.projects.find((p) => p.id === e.projectId);
+    const client = proj ? proj.name : e.projectName;
+    const coord = e.coordinatorName || '-';
+    const k = JSON.stringify([client, coord]);
+    groups.set(k, { client, coord, min: (groups.get(k)?.min || 0) + H.netMin(e) });
+  }
+  const sums = [...groups.values()].sort((a, b) => a.client.localeCompare(b.client, 'pt-BR') || a.coord.localeCompare(b.coord, 'pt-BR'));
+  ['MÊS DA COMPETÊNCIA', 'CLIENTE', 'COORDENAÇÃO', 'Soma de CARGA HORÁRIA'].forEach((v, i) => { const c = head.getCell(12 + i); c.value = v; c.font = HEAD_FONT; c.fill = SUM_FILL; });
+  sums.forEach((g, i) => {
+    const row = ws.getRow(2 + i);
+    if (i === 0) row.getCell(12).value = label;
+    row.getCell(13).value = g.client; row.getCell(14).value = g.coord;
+    row.getCell(15).value = frac(g.min); row.getCell(15).numFmt = '[h]:mm:ss';
+  });
+  const gt = ws.getRow(2 + sums.length);
+  gt.getCell(12).value = 'Total Geral';
+  gt.getCell(15).value = frac(totalMin); gt.getCell(15).numFmt = '[h]:mm:ss';
+  for (let c = 12; c <= 15; c++) { const cell = gt.getCell(c); cell.font = BOLD_FONT; cell.border = { top: { style: 'thin', color: { argb: 'FF4472C4' } } }; }
+}
 
 async function buildWorkbook(data, year, month, today) {
   const cfg = data.hours;
@@ -38,10 +126,13 @@ async function buildWorkbook(data, year, month, today) {
   wb.creator = 'Gerenciador de Projetos';
   wb.created = new Date();
 
-  // ---- Apontamentos ----
+  const sm = H.monthSummary(data, year, month, today);
+  psaSheet(wb, data, entries, sm.days, year, month);
+
+  // ---- Apontamentos (detalhado: pausas, meta e observação de cada apontamento) ----
   const ws = wb.addWorksheet('Apontamentos');
   ws.columns = [
-    { header: 'Período' }, { header: 'Data' }, { header: 'Dia da semana' }, { header: 'Projeto' }, { header: 'Coordenador' }, { header: 'Analista' }, { header: 'Atividade realizada' },
+    { header: 'Período' }, { header: 'Data' }, { header: 'Dia da semana' }, { header: 'Projeto' }, { header: 'Coordenador' }, { header: 'Analista de Implantação' }, { header: 'Atividade realizada' },
     { header: 'Horário inicial' }, { header: 'Horário final' }, { header: 'Intervalos/Pausas' }, { header: 'Horas trabalhadas' }, { header: 'Meta diária' },
     { header: '% da Meta - Atividade' }, { header: 'Total do dia' }, { header: '% da Meta - Dia' }, { header: 'Horas restantes (dia)' }, { header: 'Horas excedentes (dia)' }, { header: 'Observação' },
   ];
@@ -71,9 +162,9 @@ async function buildWorkbook(data, year, month, today) {
     total.getCell(10).alignment = { horizontal: 'center' }; total.getCell(11).alignment = { horizontal: 'center' };
     boldRow(total);
   }
+  gridRows(ws, 18);
 
   // ---- Resumo Mensal ----
-  const sm = H.monthSummary(data, year, month, today);
   const tracking = H.trackingFrom(data, today);
   const rs = wb.addWorksheet('Resumo Mensal');
   rs.columns = [{ header: 'Data' }, { header: 'Dia da semana' }, { header: 'Meta' }, { header: 'Apontado' }, { header: 'Diferença' }, { header: 'Status' }, { header: 'Observações' }];
@@ -93,6 +184,7 @@ async function buildWorkbook(data, year, month, today) {
     if (d.status === 'excedente') row.getCell(6).font = { color: { argb: 'FF0E7D66' }, bold: true };
   }
   styleHeader(rs, [13, 16, 11, 11, 12, 30, 13]);
+  gridRows(rs, 7);
   rs.addRow([]);
   const lines = [['Meta do mês', frac(sm.targetMonth), null], ['Meta acumulada (até hoje)', frac(sm.targetAccum), null], ['Apontado', frac(sm.confirmed), null], ['Diferença (apontado − acumulada)', null, signed(sm.confirmed - sm.targetAccum)]];
   for (const [label, v, text] of lines) {
@@ -105,7 +197,7 @@ async function buildWorkbook(data, year, month, today) {
 
   // ---- Resumo por Projeto ----
   const rp = wb.addWorksheet('Resumo por Projeto');
-  rp.columns = [{ header: 'Projeto' }, { header: 'Coordenador(es)' }, { header: 'Analista(s)' }, { header: 'Horas' }, { header: '% do total' }, { header: 'Apontamentos' }];
+  rp.columns = [{ header: 'Projeto' }, { header: 'Coordenador(es)' }, { header: 'Analista(s) de Implantação' }, { header: 'Horas' }, { header: '% do total' }, { header: 'Apontamentos' }];
   const groups = new Map();
   for (const e of entries) {
     const g = groups.get(e.projectId) || { name: e.projectName, coords: new Set(), analysts: new Set(), min: 0, n: 0 };
@@ -131,6 +223,7 @@ async function buildWorkbook(data, year, month, today) {
     [4, 5, 6].forEach((c) => { t.getCell(c).alignment = { horizontal: 'center' }; });
     boldRow(t);
   }
+  gridRows(rp, 6);
   // ---- Observações (uma linha por observação; as evidências ficam no app — aqui só a contagem e os nomes dos arquivos) ----
   const notes = (data.timeNotes || []).filter((n) => H.datesOfNote(n).some((d) => d >= from && d <= to)).sort((a, b) => a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt));
   const ro = wb.addWorksheet('Observações');
@@ -146,6 +239,7 @@ async function buildWorkbook(data, year, month, today) {
     [3, 5, 6, 8, 10].forEach((c) => { row.getCell(c).alignment = { wrapText: true, vertical: 'top' }; });
   }
   styleHeader(ro, [12, 15, 24, 17, 32, 70, 11, 34, 17, 26]);
+  gridRows(ro, 10);
   if (ro.rowCount > 1) ro.autoFilter = { from: { row: 1, column: 1 }, to: { row: ro.rowCount, column: 10 } };
   return { buffer: Buffer.from(await wb.xlsx.writeBuffer()), name: `Apontamentos_${year}_${pad2(month)}.xlsx`, label: `${MONTHS[month - 1]}/${year}`, count: entries.length, notes: notes.length };
 }

@@ -462,7 +462,7 @@ function entryRow(en, { showDate = false } = {}) {
   return h('div', { class: 'hr-entry' },
     h('div', { class: 'grow stack' }, h('div', { class: 'inline' }, showDate ? h('strong', null, dayShort(en.date)) : null, h('strong', null, en.projectName), en.projectExists ? null : h('span', { class: 'pill overdue' }, 'projeto removido')),
       h('span', null, en.activity), en.note ? h('span', { class: 'small muted' }, en.note) : null,
-      h('span', { class: 'small muted' }, `${en.coordinatorName ? `Coordenador: ${en.coordinatorName}` : 'Sem coordenador'}${en.analystName ? ` · Analista: ${en.analystName}` : ''}${en.source === 'timer' ? ' · cronômetro' : ' · manual'}`)),
+      h('span', { class: 'small muted' }, `${en.coordinatorName ? `Coordenador: ${en.coordinatorName}` : 'Sem coordenador'}${en.analystName ? ` · Analista de implantação: ${en.analystName}` : ''}${en.source === 'timer' ? ' · cronômetro' : ' · manual'}`)),
     h('div', { class: 'hr-entry-time' }, h('span', { class: 'small muted' }, `${hm(en.startMin)} → ${hm(en.endMin)}${en.pausedMin ? ` · pausas ${hm(en.pausedMin)}` : ''}`), h('strong', { class: 'hr-num' }, hm(en.netMin))),
     h('div', { class: 'actions' }, h('button', { class: 'btn sm', onclick: () => hoursEntryDialog(en) }, 'Editar'), h('button', { class: 'btn sm ghost', onclick: () => hrDeleteEntry(en) }, 'Excluir')));
 }

@@ -85,7 +85,7 @@ function coordinatorsCard() {
       return h('div', { class: 'row' },
         h('div', { class: 'grow stack' }, h('strong', null, c.name), c.role ? h('span', { class: 'small muted' }, c.role) : null,
           h('span', { class: 'small' }, [c.email, c.phone].filter(Boolean).join('  ·  ') || h('span', { class: 'muted' }, 'Sem contato cadastrado')),
-          h('span', { class: 'small muted' }, used ? [asCoord ? `Coordenador em ${plural(asCoord, 'projeto', 'projetos')}` : null, asAnalyst ? `Analista em ${plural(asAnalyst, 'projeto', 'projetos')}` : null].filter(Boolean).join(' · ') : 'Não vinculado a projetos')),
+          h('span', { class: 'small muted' }, used ? [asCoord ? `Coordenador em ${plural(asCoord, 'projeto', 'projetos')}` : null, asAnalyst ? `Analista de implantação em ${plural(asAnalyst, 'projeto', 'projetos')}` : null].filter(Boolean).join(' · ') : 'Não vinculado a projetos')),
         h('div', { class: 'actions' }, contactLinks(c),
           h('button', { class: 'btn sm ghost', onclick: () => coordinatorForm(c) }, 'Editar'),
           h('button', { class: 'btn sm ghost', onclick: async () => {

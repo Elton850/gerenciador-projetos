@@ -438,7 +438,7 @@ function projectCommsCard(p) {
     head.replaceChildren(h('button', { class: 'btn sm primary', disabled: !r.available.length, title: r.available.length ? 'Escolhe um modelo e mostra o e-mail pronto para copiar' : 'Nenhum modelo disponível para este projeto', onclick: () => emNewCommunication(p, r) }, 'Gerar e-mail'));
     const kind = (k) => r.contactKinds[k] || k;
     const contacts = h('div', { class: 'stack' }, h('div', { class: 'inline' }, h('span', { class: 'lbl' }, 'Contatos do projeto'), h('button', { class: 'btn xs', onclick: () => emContactForm(p, null, redraw) }, '+ Contato'),
-      h('span', { class: 'small muted' }, 'Coordenador e analista vêm do cadastro de Responsáveis.')),
+      h('span', { class: 'small muted' }, 'Coordenador e analista de implantação vêm do cadastro de Responsáveis.')),
     r.contacts.length ? r.contacts.map((c) => h('div', { class: 'inline small' }, h('strong', null, c.name), h('span', { class: 'pill' }, kind(c.kind)), c.role ? h('span', { class: 'muted' }, c.role) : null,
       c.email ? h('span', { class: 'mono' }, c.email) : h('span', { class: 'ck-wait' }, 'sem e-mail'),
       h('button', { class: 'btn xs ghost', onclick: () => emContactForm(p, c, redraw) }, 'Editar'),

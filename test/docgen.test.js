@@ -80,7 +80,8 @@ test('formulário: dados do projeto preenchem os campos; o que o projeto não te
   const f = ok(await api('POST', `/api/projects/${S.p.id}/doc-templates/${MIT}/form`));
   const v = Object.fromEntries(f.fields.map((x) => [x.key, x.value]));
   assert.equal(v.coordenador_totvs, 'Carla Coord');
-  assert.equal(v.analista, 'Ana Analista');
+  assert.equal(v.analista, require('../src/team').MIGRATION_ANALYST.name, 'analista do termo = analista de migração (fixo), não o de implantação');
+  assert.ok(f.people.includes(require('../src/team').MIGRATION_ANALYST.name) && f.people.includes('Ana Analista'));
   assert.equal(v.cliente, '');
   assert.equal(v.unidade, 'TOTVS Nordeste');
   assert.equal(f.last, null);
@@ -264,7 +265,8 @@ test('formulário: o usado na última geração só volta enquanto o modelo e o 
   assert.equal(field(f, 'analistas').from, 'last');
   assert.deepEqual(field(f, 'analistas').alt, { label: 'Usar o do modelo', value: 'Analista Fictício' });
 
-  // 3) Dado do projeto alterado (analista): campo que vem do projeto acompanha.
+  // 3) Dado do projeto alterado (analista de implantação, num campo do modelo que usa {{project.analyst}}): campo que vem do projeto acompanha.
+  mit.fields.find((x) => x.key === 'analista').default = '{{project.analyst}}';
   gen(mit, { analista: 'Ana Analista', projeto: 'Migração de Dados (Folha de Pagamento)', cliente: 'Cliente Alfa SA' });
   p.analystId = 'a2';
   f = G.buildForm(mit, ctx(), data);

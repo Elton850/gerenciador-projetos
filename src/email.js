@@ -38,6 +38,7 @@ const startedAt = (ctx) => fmtDate((ctx.project?.stageHistory || []).find((x) =>
 // Saudação pelo horário LOCAL do momento da geração (ctx.now); a regra (faixas) mora em src/greeting.js, compartilhada com o checklist.
 const { greetingFor } = require('./greeting');
 const nowOf = (c) => c.now || new Date();
+const { MIGRATION_ANALYST } = require('./team');
 const HOURS_MISS = 'Variável do Controle de Horas usada fora do Controle de Horas.';
 const VARIABLES = [
   { key: 'project.name', group: 'Projeto', label: 'Nome do projeto', miss: 'Projeto sem nome.', get: (c) => c.project?.name },
@@ -50,8 +51,9 @@ const VARIABLES = [
   { key: 'project.created_at', group: 'Projeto', label: 'Data de cadastro do projeto', miss: 'Projeto sem data de cadastro.', get: (c) => fmtDate(c.project?.createdAt) },
   { key: 'project.coordinator', group: 'Pessoas', label: 'Nome do coordenador', miss: 'Coordenador não cadastrado no projeto.', get: (c) => person(c, c.project?.coordinatorId)?.name },
   { key: 'project.coordinator_email', group: 'Pessoas', label: 'E-mail do coordenador', miss: 'Coordenador sem e-mail cadastrado.', get: (c) => person(c, c.project?.coordinatorId)?.email },
-  { key: 'project.analyst', group: 'Pessoas', label: 'Nome do analista', miss: 'Analista não cadastrado no projeto.', get: (c) => person(c, c.project?.analystId)?.name },
-  { key: 'project.analyst_email', group: 'Pessoas', label: 'E-mail do analista', miss: 'Analista sem e-mail cadastrado.', get: (c) => person(c, c.project?.analystId)?.email },
+  { key: 'project.migration_analyst', group: 'Pessoas', label: 'Nome do analista de migração (sempre o mesmo, fixo no app)', miss: '', get: () => MIGRATION_ANALYST.name },
+  { key: 'project.analyst', group: 'Pessoas', label: 'Nome do analista de implantação', miss: 'Analista de implantação não cadastrado no projeto.', get: (c) => person(c, c.project?.analystId)?.name },
+  { key: 'project.analyst_email', group: 'Pessoas', label: 'E-mail do analista de implantação', miss: 'Analista de implantação sem e-mail cadastrado.', get: (c) => person(c, c.project?.analystId)?.email },
   { key: 'project.stakeholders', group: 'Pessoas', label: 'Nomes dos stakeholders do projeto', miss: 'Projeto sem stakeholder definido.', get: (c) => contactsOf(c, 'stakeholder').map((x) => x.name).join(', ') },
   { key: 'checklist.item', group: 'Checklist', label: 'Item do checklist (quando gerado a partir de um item)', miss: 'Variável de checklist usada fora de um item do checklist.', get: (c) => c.item?.title },
   { key: 'checklist.stage', group: 'Checklist', label: 'Etapa do item do checklist', miss: 'Variável de checklist usada fora de um item do checklist.', get: (c) => c.stageName },
@@ -92,7 +94,7 @@ const missingMessage = (key, ctx = {}) => (!ctx.project && /^(project|checklist)
 // Cada entrada é um e-mail fixo ou um papel "role:<x>" resolvido no projeto atual.
 const ROLES = {
   'role:coordinator': { label: 'Coordenador do projeto' },
-  'role:analyst': { label: 'Analista do projeto' },
+  'role:analyst': { label: 'Analista de implantação do projeto' },
   'role:stakeholders': { label: 'Stakeholders do projeto' },
   'role:clients': { label: 'Contatos do cliente' },
   'role:contacts': { label: 'Todos os contatos do projeto' },
@@ -134,7 +136,7 @@ function resolveRecipients(list, ctx) {
   };
   for (const v of list || []) {
     if (v === 'role:coordinator') { if (ctx.project) people(ctx.project.coordinatorId, 'Coordenador'); else warnings.push('“Coordenador do projeto” não se aplica fora de um projeto (use “Coordenadores dos projetos do contexto”).'); }
-    else if (v === 'role:analyst') { if (ctx.project) people(ctx.project.analystId, 'Analista'); else warnings.push('“Analista do projeto” não se aplica fora de um projeto.'); }
+    else if (v === 'role:analyst') { if (ctx.project) people(ctx.project.analystId, 'Analista de implantação'); else warnings.push('“Analista de implantação do projeto” não se aplica fora de um projeto.'); }
     else if (v === 'role:stakeholders') contacts('stakeholder', 'Projeto sem stakeholder com e-mail definido.');
     else if (v === 'role:clients') contacts('client', 'Projeto sem contato do cliente com e-mail definido.');
     else if (v === 'role:contacts') contacts(null, 'Projeto sem contatos com e-mail definidos.');

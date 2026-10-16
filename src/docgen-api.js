@@ -9,6 +9,7 @@ const M = require('./email');
 const G = require('./docgen');
 const { buildDocx } = require('./docx');
 const PDF = require('./pdf');
+const WORDPDF = require('./word-pdf');
 
 const BASE_MAX_BYTES = 30 * 1024 * 1024;
 const isDocx = (p) => path.extname(String(p || '')).toLowerCase() === '.docx';
@@ -137,19 +138,26 @@ function mount(app, { store, audit, getProject }) {
     const origin = checklistOf(p, t, req.body?.checklist); // valida a origem antes de montar o Word
     const input = G.cleanInput(t, req.body);
     const doc = G.render(t, ctxFor(p), input);
-    // format: 'pdf' → o Chromium do app imprime o conteúdo (layout da prévia, sem papel timbrado; src/pdf.js). Senão, Word.
+    // format: 'pdf' → o MESMO Word (papel timbrado + formatação do original) convertido pelo Word instalado (src/word-pdf.js, ADR-017);
+    // sem Word ou falha → PDF do próprio app (layout da prévia, sem papel timbrado; src/pdf.js) e aviso no cabeçalho X-Doc-Warning.
     const pdf = req.body?.format === 'pdf';
     const fileName = pdf ? G.pdfFileName(doc.fileName) : doc.fileName;
+    const b = readBase(t);
     let buf;
-    if (pdf) buf = await PDF.htmlToPdf(G.pdfHtml(doc, t.name));
-    else {
-      const b = readBase(t);
-      try { buf = await buildDocx(doc, { base: b.base, title: t.name }); } catch (e) { throw httpError(400, `Não foi possível montar o Word com o papel timbrado: ${e.message}`); }
+    try { buf = await buildDocx(doc, { base: b.base, title: t.name }); } catch (e) { throw httpError(400, `Não foi possível montar o Word com o papel timbrado: ${e.message}`); }
+    let via = 'word'; let warning = null;
+    if (pdf) {
+      try { buf = await WORDPDF.docxToPdf(buf); } catch (e) {
+        via = 'app';
+        warning = `${e.code === WORDPDF.NO_WORD ? 'Word não encontrado neste computador' : 'O Word não conseguiu converter'}: o PDF saiu no layout da prévia, sem o papel timbrado.`;
+        buf = await PDF.htmlToPdf(G.pdfHtml(doc, t.name));
+      }
     }
     const rec = G.generationRecord({ project: p, template: t, input, fileName, by: EH.whoAmI(), refs: G.references(t, ctxFor(p)), checklist: origin, format: pdf ? 'pdf' : 'docx' });
     G.pushGeneration(data(), rec);
     store.save();
-    log('documento-gerado', p, { detalhe: `${t.name}${pdf ? ' (PDF)' : ''}${rec.checklist ? ` (item “${rec.checklist.itemTitle}”)` : ''}`, arquivo: fileName });
+    log('documento-gerado', p, { detalhe: `${t.name}${pdf ? ` (PDF ${via === 'word' ? 'pelo Word' : 'pelo app'})` : ''}${rec.checklist ? ` (item “${rec.checklist.itemTitle}”)` : ''}`, arquivo: fileName });
+    if (warning) res.setHeader('X-Doc-Warning', encodeURIComponent(warning));
     res.setHeader('Content-Type', pdf ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     res.setHeader('Content-Disposition', `attachment; filename="${fileName.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '')}"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
     res.setHeader('X-Generation-Id', rec.id);

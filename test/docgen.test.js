@@ -380,34 +380,63 @@ test('campos automáticos: {{doc.x}} do conteúdo sem campo declarado vira campo
   assert.equal((await api('PUT', `/api/doc-templates/${t.id}`, { blocks: [{ type: 'paragraph', text: '{{project.inventada}}' }] })).json.code, 'DOC_UNKNOWN_VARIABLE');
 });
 
-test('PDF: mesmo conteúdo impresso pelo app (layout da prévia), registrado como PDF; fora do aplicativo, aviso amigável', async () => {
+test('PDF: o mesmo Word (com papel timbrado) convertido pelo Word; sem Word, PDF do app com aviso; fora do aplicativo e sem Word, 501', async () => {
   const PDF = require('../src/pdf');
+  const WORDPDF = require('../src/word-pdf');
+  const rot = () => data().docTemplates.find((t) => t.id === ROT);
   const f = ok(await api('POST', `/api/projects/${S.p.id}/doc-templates/${ROT}/form`));
   const fields = { ...Object.fromEntries(f.fields.map((x) => [x.key, x.value])), cliente: 'Cliente <Alfa>', ambiente: 'PRODUÇÃO' };
-  // HTML de impressão: A4, conteúdo escapado, quebra de página real, cabeçalho de tabela que se repete.
-  const html = G.pdfHtml(G.render(data().docTemplates.find((t) => t.id === ROT), { data: data(), project: data().projects.find((p) => p.id === S.p.id) }, G.cleanInput(data().docTemplates.find((t) => t.id === ROT), { fields, tables: f.tables })), 'Roteiro');
+  const gen = (extra = {}) => fetch(`${base}/api/projects/${S.p.id}/doc-templates/${ROT}/generate`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ fields, tables: f.tables, format: 'pdf', ...extra }) });
+  // HTML de impressão do fallback: A4, conteúdo escapado, quebra de página real, cabeçalho de tabela que se repete.
+  const html = G.pdfHtml(G.render(rot(), { data: data(), project: data().projects.find((p) => p.id === S.p.id) }, G.cleanInput(rot(), { fields, tables: f.tables })), 'Roteiro');
   assert.ok(html.startsWith('<!doctype html>') && html.includes('@page{size:A4}') && html.includes('Cliente &lt;Alfa&gt;') && !html.includes('<Alfa>'));
   assert.ok(html.includes('class="dg-break"') && html.includes('.dg-break{break-after:page') && html.includes('thead{display:table-header-group}'));
-  let got = null;
-  PDF.setRenderer(async (h) => { got = h; return Buffer.from('%PDF-1.7 teste'); });
+  let docxIn = null; let htmlIn = null;
+  PDF.setRenderer(async (h) => { htmlIn = h; return Buffer.from('%PDF-1.7 app'); });
   try {
-    const r = await fetch(`${base}/api/projects/${S.p.id}/doc-templates/${ROT}/generate`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ fields, tables: f.tables, format: 'pdf' }) });
+    // 1) Com Word: recebe o .docx gerado (o mesmo do "Baixar Word") e devolve o PDF dele, sem aviso.
+    WORDPDF.setRunner(async (buf) => { docxIn = buf; return Buffer.from('%PDF-1.7 word'); });
+    let r = await gen();
     assert.equal(r.status, 200);
     assert.equal(r.headers.get('content-type'), 'application/pdf');
     assert.match(r.headers.get('content-disposition'), /PRODU%C3%87%C3%83O\.pdf$/);
-    assert.equal(Buffer.from(await r.arrayBuffer()).toString(), '%PDF-1.7 teste');
-    assert.ok(got.includes('Cliente &lt;Alfa&gt;'), 'o PDF recebe o conteúdo resolvido');
-    const g = ok(await api('GET', `/api/projects/${S.p.id}/doc-templates`)).generations[0];
-    assert.match(g.fileName, /\.pdf$/);
+    assert.equal(r.headers.get('x-doc-warning'), null);
+    assert.equal(Buffer.from(await r.arrayBuffer()).toString(), '%PDF-1.7 word');
+    const z = await JSZip.loadAsync(docxIn);
+    assert.ok(docText(await z.file('word/document.xml').async('string')).includes('Cliente &lt;Alfa&gt;'), 'o Word convertido é o documento gerado');
+    assert.equal(htmlIn, null, 'com Word, o PDF do app não é usado');
     assert.equal(data().docGenerations.at(-1).format, 'pdf');
-    // Word continua igual (sem format no registro).
+    assert.match(ok(await api('GET', `/api/projects/${S.p.id}/doc-templates`)).generations[0].fileName, /\.pdf$/);
+    // 2) Sem Word: PDF do app (layout da prévia) + aviso.
+    WORDPDF.setRunner(async () => { throw Object.assign(new Error('sem Word'), { code: WORDPDF.NO_WORD }); });
+    r = await gen();
+    assert.equal(r.status, 200);
+    assert.equal(Buffer.from(await r.arrayBuffer()).toString(), '%PDF-1.7 app');
+    assert.match(decodeURIComponent(r.headers.get('x-doc-warning')), /Word não encontrado.*sem o papel timbrado/);
+    assert.ok(htmlIn.includes('Cliente &lt;Alfa&gt;'));
+    // Word continua igual (sem format no registro; o conversor não é chamado).
+    docxIn = null;
     await download(`/api/projects/${S.p.id}/doc-templates/${ROT}/generate`, { fields, tables: f.tables });
     assert.equal(data().docGenerations.at(-1).format, undefined);
-  } finally { PDF.setRenderer(null); }
-  // Modo web (sem Electron): 501 com mensagem amigável, nada registrado.
-  const before = data().docGenerations.length;
-  const r = await api('POST', `/api/projects/${S.p.id}/doc-templates/${ROT}/generate`, { fields, tables: f.tables, format: 'pdf' });
-  assert.equal(r.status, 501);
-  assert.match(r.json.error, /aplicativo/);
-  assert.equal(data().docGenerations.length, before);
+    // 3) Sem Word e fora do aplicativo (sem Electron): 501 amigável, nada registrado.
+    PDF.setRenderer(null);
+    const before = data().docGenerations.length;
+    const j = await api('POST', `/api/projects/${S.p.id}/doc-templates/${ROT}/generate`, { fields, tables: f.tables, format: 'pdf' });
+    assert.equal(j.status, 501);
+    assert.match(j.json.error, /aplicativo/);
+    assert.equal(data().docGenerations.length, before);
+  } finally { PDF.setRenderer(null); WORDPDF.setRunner(null); }
+});
+
+test('PDF pelo Word: script fixo, dados só por ambiente, macros desligadas, nunca fecha o Word do usuário; uma conversão por vez', async () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'word-pdf.js'), 'utf8');
+  const script = src.match(/String\.raw`([\s\S]*?)`;/)[1];
+  assert.ok(script.includes('$env:GP_DOCX_IN') && script.includes('$env:GP_PDF_OUT') && !/\$\{/.test(script), 'sem interpolação de dados no script');
+  assert.ok(script.includes('AutomationSecurity = 3') && script.includes('Documents.Open($in, $false, $true, $false)'));
+  assert.ok(/if \(\$own -and \$w\.Documents\.Count -eq 0\) \{\s+\$w\.NormalTemplate\.Saved = \$true[^\n]*\n\s+\$w\.Quit\(\)/.test(script), 'só fecha a instância criada por ele, sem pergunta ao sair');
+  const WORDPDF = require('../src/word-pdf');
+  let running = 0; let max = 0;
+  WORDPDF.setRunner(async () => { running++; max = Math.max(max, running); await new Promise((r) => setTimeout(r, 20)); running--; return Buffer.from('%PDF-x'); });
+  try { await Promise.all([1, 2, 3].map(() => WORDPDF.docxToPdf(Buffer.from('x')))); } finally { WORDPDF.setRunner(null); }
+  assert.equal(max, 1);
 });

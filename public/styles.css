@@ -1214,3 +1214,4 @@ main.settings-mode { padding-top: 0; } main.settings-mode .page-head { padding-t
 @media (max-width: 900px) { .dg-gen, .dg-edit-grid { grid-template-columns: minmax(0, 1fr); } .dg-gen-preview { position: static; } }
 .dg-alt:empty { display: none; }
 .dg-gen-form button.link-quiet { padding: 0; border: 0; background: none; cursor: pointer; text-align: left; font: inherit; font-size: 12px; color: var(--accent); text-decoration: underline; }
+.dg-auto { padding: 4px 8px; border: 1px dashed var(--border); border-radius: 8px; }

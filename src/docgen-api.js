@@ -25,7 +25,7 @@ function mount(app, { store, audit, getProject }) {
     const d = libDoc(t.baseDocumentId);
     return d ? { id: d.id, title: d.title, fileExists: d.source.type === 'file' && fs.existsSync(d.source.path) } : { id: t.baseDocumentId, title: '(removido da biblioteca)', missing: true };
   };
-  const publicTemplate = (t) => ({ ...t, base: baseInfo(t), usage: G.templateUsage(data(), t.id), checklistItems: data().checklistItems.filter((i) => i.docTemplateId === t.id).length });
+  const publicTemplate = (t) => ({ ...t, autoFields: G.autoFields(t), base: baseInfo(t), usage: G.templateUsage(data(), t.id), checklistItems: data().checklistItems.filter((i) => i.docTemplateId === t.id).length });
   const clean = (body) => {
     const c = G.cleanTemplate(body || {}, data());
     if (c.baseDocumentId) { const d = libDoc(c.baseDocumentId); if (d.source.type !== 'file' || !isDocx(d.source.path)) throw httpError(400, 'O papel timbrado precisa ser um arquivo Word (.docx) cadastrado na biblioteca.'); }

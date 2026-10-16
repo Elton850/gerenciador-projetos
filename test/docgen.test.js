@@ -51,7 +51,9 @@ test('modelo: variável desconhecida, chave repetida e {{doc.x}} no valor inicia
   const d = applyDefaults({ projects: [] });
   const t = (extra) => ({ name: 'X', blocks: [{ type: 'paragraph', text: 'oi' }], ...extra });
   assert.throws(() => G.cleanTemplate(t({ blocks: [{ type: 'paragraph', text: '{{project.inventada}}' }] }), d), (e) => e.code === 'DOC_UNKNOWN_VARIABLE');
-  assert.throws(() => G.cleanTemplate(t({ blocks: [{ type: 'paragraph', text: '{{doc.sem_campo}}' }] }), d), (e) => e.code === 'DOC_UNKNOWN_VARIABLE');
+  // {{doc.x}} sem campo declarado agora vira campo automático; só chave inválida é recusada.
+  assert.throws(() => G.cleanTemplate(t({ blocks: [{ type: 'paragraph', text: '{{doc.a.b}}' }] }), d), (e) => e.code === 'DOC_UNKNOWN_VARIABLE' && /Chave de campo inválida/.test(e.message));
+  assert.throws(() => G.cleanTemplate(t({ blocks: [{ type: 'paragraph', text: '{{doc.1abc}}' }] }), d), (e) => e.code === 'DOC_UNKNOWN_VARIABLE');
   assert.throws(() => G.cleanTemplate(t({ blocks: [{ type: 'paragraph', text: '{{hours.period}}' }] }), d), (e) => e.code === 'DOC_UNKNOWN_VARIABLE');
   assert.throws(() => G.cleanTemplate(t({ fields: [{ key: 'a', label: 'A' }, { key: 'a', label: 'B' }] }), d), /repetida/);
   assert.throws(() => G.cleanTemplate(t({ fields: [{ key: 'a', label: 'A' }, { key: 'b', label: 'B', default: '{{doc.a}}' }] }), d), (e) => e.code === 'DOC_UNKNOWN_VARIABLE');
@@ -341,4 +343,38 @@ test('item do checklist: ação "Gerar documento" (modelo → cópia do projeto 
   const cleared = ok(await api('PUT', `/api/checklist-items/${plain.id}`, { ...plain, docTemplateId: null }));
   assert.equal('docTemplateId' in cleared, false);
   ok(await api('DELETE', `/api/doc-templates/${t.id}`));
+});
+
+test('campos automáticos: {{doc.x}} do conteúdo sem campo declarado vira campo na geração (projeto continua fixo)', async () => {
+  const d = applyDefaults({ projects: [] });
+  // Limite conta declarados + automáticos.
+  const many = Array.from({ length: 41 }, (_, i) => `{{doc.c${i}}}`).join(' ');
+  assert.throws(() => G.cleanTemplate({ name: 'X', blocks: [{ type: 'paragraph', text: many }] }, d), /No máximo 40 campos/);
+  const t = ok(await api('POST', '/api/doc-templates', {
+    name: 'Ata automática', fileName: 'Ata {{doc.numero_ata}} - {{project.name}}',
+    fields: [{ key: 'cliente', label: 'Cliente', default: 'Cliente fixo' }],
+    blocks: [{ type: 'title', text: 'Ata {{doc.Numero_ata}} — {{doc.cliente}}' }, { type: 'info', rows: [[{ label: 'Local:', value: '{{doc.local}}' }]] },
+      { type: 'paragraph', text: '{{doc.observacoes}}' }, { type: 'table', columns: ['Item', 'Responsável'], rows: [['Revisar', '{{doc.responsavel}}']] }] }));
+  assert.deepEqual(t.fields.map((f) => f.key), ['cliente'], 'automáticos não são gravados no modelo');
+  assert.deepEqual(t.autoFields.map((f) => [f.key, f.label, f.type]), [['numero_ata', 'Numero ata', 'text'], ['local', 'Local', 'text'], ['observacoes', 'Observacoes', 'textarea'], ['responsavel', 'Responsavel', 'text']]);
+  const f = ok(await api('POST', `/api/projects/${S.p.id}/doc-templates/${t.id}/form`));
+  assert.deepEqual(f.fields.map((x) => [x.key, !!x.auto, x.value]), [['cliente', false, 'Cliente fixo'], ['numero_ata', true, ''], ['local', true, ''], ['observacoes', true, ''], ['responsavel', true, '']]);
+  const fields = { cliente: 'Cliente fixo', numero_ata: '07', local: 'Sala 2', observacoes: 'Linha 1\nLinha 2', responsavel: 'Ana' };
+  const pv = ok(await api('POST', `/api/projects/${S.p.id}/doc-templates/${t.id}/preview`, { fields, tables: f.tables }));
+  assert.ok(pv.html.includes('Ata 07 — Cliente fixo') && pv.html.includes('Sala 2') && pv.html.includes('Ana') && !pv.html.includes('{{doc.'));
+  assert.equal(pv.fileName, 'Ata 07 - Cliente Alfa.docx');
+  const empty = ok(await api('POST', `/api/projects/${S.p.id}/doc-templates/${t.id}/preview`, { fields: { cliente: 'X' }, tables: f.tables }));
+  assert.ok(empty.warnings.some((w) => /Campos em branco: .*Numero ata/.test(w)));
+  const { zip } = await download(`/api/projects/${S.p.id}/doc-templates/${t.id}/generate`, { fields, tables: f.tables });
+  const text = docText(await zip.file('word/document.xml').async('string'));
+  for (const s of ['Ata 07 — Cliente fixo', 'Sala 2', 'Linha 1', 'Linha 2', 'Ana']) assert.ok(text.includes(s), s);
+  // Próxima geração: o digitado volta; declarar depois (“Personalizar”) mantém o valor.
+  let again = ok(await api('POST', `/api/projects/${S.p.id}/doc-templates/${t.id}/form`));
+  assert.equal(again.fields.find((x) => x.key === 'numero_ata').value, '07');
+  ok(await api('PUT', `/api/doc-templates/${t.id}`, { fields: [...t.fields, { key: 'numero_ata', label: 'Número da ata' }] }));
+  again = ok(await api('POST', `/api/projects/${S.p.id}/doc-templates/${t.id}/form`));
+  const na = again.fields.find((x) => x.key === 'numero_ata');
+  assert.deepEqual([na.label, !!na.auto, na.value], ['Número da ata', false, '07']);
+  // Variáveis fixas continuam fixas.
+  assert.equal((await api('PUT', `/api/doc-templates/${t.id}`, { blocks: [{ type: 'paragraph', text: '{{project.inventada}}' }] })).json.code, 'DOC_UNKNOWN_VARIABLE');
 });

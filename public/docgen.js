@@ -39,7 +39,7 @@ function dgTemplateList(redraw) {
       h('div', { class: 'inline' }, h('strong', null, t.name), h('span', { class: 'kind modelo' }, 'Gera Word'),
         t.stageId && stageById(t.stageId) ? stageTag(stageById(t.stageId)) : noStageTag('Uso geral'), t.active ? null : h('span', { class: 'pill cancelled' }, 'desativado')),
       t.description ? h('span', { class: 'small muted' }, t.description) : null,
-      h('span', { class: 'small muted' }, `${t.base ? `Papel timbrado: ${t.base.title}${t.base.missing || t.base.fileExists === false ? ' (não encontrado — usa o layout padrão)' : ''}` : 'Layout padrão (sem papel timbrado)'} · ${plural(t.fields.length, 'campo', 'campos')} · ${t.usage ? `gerado ${plural(t.usage, 'vez', 'vezes')}` : 'nunca gerado'}`)),
+      h('span', { class: 'small muted' }, `${t.base ? `Papel timbrado: ${t.base.title}${t.base.missing || t.base.fileExists === false ? ' (não encontrado — usa o layout padrão)' : ''}` : 'Layout padrão (sem papel timbrado)'} · ${plural(t.fields.length + (t.autoFields?.length || 0), 'campo', 'campos')} · ${t.usage ? `gerado ${plural(t.usage, 'vez', 'vezes')}` : 'nunca gerado'}`)),
     h('div', { class: 'actions' },
       t.active ? h('button', { class: 'btn sm primary', onclick: () => dgPickProject(t) }, 'Gerar…') : null,
       h('button', { class: 'btn sm ghost', onclick: () => dgForm(t, reload) }, 'Editar'),
@@ -73,6 +73,25 @@ const dgInfoParse = (text) => String(text).split('\n').map((ln) => ln.split('||'
   return i < 0 ? { label: '', value: part.trim() } : { label: part.slice(0, i + 1).trim(), value: part.slice(i + 1).trim() };
 }).filter((c) => c.label || c.value)).filter((r) => r.length);
 const dgCells = (ln) => String(ln).split('|').map((c) => c.trim());
+// Campos automáticos: {{doc.x}} no conteúdo/nome do arquivo sem campo declarado (mesma regra do servidor, src/docgen.js autoFields).
+const DG_KEY_RE = /^[a-z][a-z0-9_]{0,39}$/;
+const dgHumanize = (k) => { const x = String(k).replace(/_+/g, ' ').trim(); return x.charAt(0).toUpperCase() + x.slice(1); };
+function dgAutoFields(fields, blocks, fileName) {
+  const declared = new Set(fields.map((f) => f.key)); const found = new Map();
+  const scan = (text, whole = false) => {
+    for (const m of String(text || '').matchAll(/\{\{\s*doc\.([a-z0-9_.]+)\s*\}\}/gi)) {
+      const key = m[1].toLowerCase();
+      if (!declared.has(key) && DG_KEY_RE.test(key)) found.set(key, (found.get(key) || false) || whole);
+    }
+  };
+  for (const b of blocks) {
+    if (b.text !== undefined) scan(b.text, b.type === 'paragraph' && /^\s*\{\{\s*doc\.[a-z0-9_]+\s*\}\}\s*$/i.test(b.text || ''));
+    (b.columns || []).forEach((c) => scan(c));
+    for (const r of b.rows || []) for (const c of r) { if (typeof c === 'string') scan(c); else { scan(c.label); scan(c.value); } }
+  }
+  scan(fileName);
+  return [...found].map(([key, long]) => ({ key, label: dgHumanize(key), type: long ? 'textarea' : 'text' }));
+}
 
 async function dgForm(t, onSaved) {
   if (!DG.meta) await dgLoad().catch(fail);
@@ -153,14 +172,28 @@ async function dgForm(t, onSaved) {
     el.value = el.value.slice(0, s) + tok + el.value.slice(el.selectionEnd ?? s);
     el.dispatchEvent(new Event('input')); el.focus(); el.setSelectionRange(s + tok.length, s + tok.length);
   };
+  const autoBox = h('div', { class: 'stack' });
+  const drawAuto = () => {
+    const auto = dgAutoFields(fields, blocks, fileName.value);
+    autoBox.replaceChildren(...(auto.length ? [h('div', { class: 'hint' }, 'Detectados no conteúdo — viram campos de texto na geração, sem valor inicial. “Personalizar” transforma em campo declarado (rótulo, tipo, valor inicial, sugestões).'),
+      ...auto.map((a) => h('div', { class: 'inline dg-auto' }, h('span', { class: 'mono small' }, `{{doc.${a.key}}}`), h('span', { class: 'small grow' }, `${a.label} · ${a.type === 'textarea' ? 'texto longo' : 'texto curto'}`),
+        h('button', { class: 'btn sm', type: 'button', onclick: () => { fields.push({ key: a.key, label: a.label, type: a.type, default: '', options: [], hint: '', people: false }); drawFields(); refreshAuto(); } }, 'Personalizar')))] : []));
+    return auto;
+  };
+  let autoTimer = null;
+  const refreshAuto = () => { clearTimeout(autoTimer); autoTimer = setTimeout(() => { drawAuto(); drawVars(); }, 250); };
   const drawVars = () => {
     const groups = {};
     for (const v of meta.variables) (groups[v.group] ||= []).push(v);
-    groups['Campos do documento'] = fields.filter((f) => f.key).map((f) => ({ key: `doc.${f.key}`, label: f.label }));
+    groups['Campos do documento'] = [...fields.filter((f) => f.key).map((f) => ({ key: `doc.${f.key}`, label: f.label })),
+      ...dgAutoFields(fields, blocks, fileName.value).map((a) => ({ key: `doc.${a.key}`, label: `${a.label} (automático)` }))];
     varsBox.replaceChildren(h('strong', { class: 'small' }, 'Variáveis'), h('span', { class: 'small muted' }, 'Clique para inserir onde está o cursor.'),
       ...Object.entries(groups).flatMap(([g, vs]) => [h('div', { class: 'em-vgroup' }, g), ...vs.map((v) => h('button', { class: 'em-var', type: 'button', onmousedown: (e) => e.preventDefault(), onclick: () => insert(v.key) }, `{{${v.key}}}`, h('span', null, v.label)))]));
   };
-  drawFields(); drawBlocks(); drawVars();
+  drawFields(); drawBlocks(); drawAuto(); drawVars();
+  // Digitar {{doc.nova}} no conteúdo, no nome do arquivo ou mudar a chave de um campo atualiza os detectados.
+  for (const el of [blocksBox, fieldsBox, fileName]) el.addEventListener('input', refreshAuto);
+  for (const el of [blocksBox, fieldsBox]) el.addEventListener('click', (e) => { if (e.target.closest('button')) refreshAuto(); });
 
   const md = openModal({
     title: t ? `Editar modelo — ${t.name}` : 'Novo modelo de documento', size: 'xl',
@@ -169,7 +202,7 @@ async function dgForm(t, onSaved) {
       h('div', { class: 'cols2' }, field('Etapa em que é usado', stage), field('Papel timbrado (.docx da biblioteca)', h('div', { class: 'inline' }, h('div', { class: 'grow' }, base), addBase), 'Use o MODELO original: mantém cabeçalho, rodapé, logo e fontes, e o conteúdo gerado copia a formatação de títulos, quadros e tabelas equivalentes.')),
       field('Nome do arquivo gerado', fileName, 'Sem extensão; pode usar variáveis. Datas dd/mm/aaaa viram dd-mm-aaaa.'),
       h('label', { class: 'inline small' }, active, 'Modelo ativo (aparece nos projetos)'),
-      h('h3', null, 'Campos do documento'), h('div', { class: 'hint' }, 'Preenchidos na geração. Use {{doc.chave}} no conteúdo. O valor inicial pode trazer dados do projeto (ex.: {{project.coordinator}}).'), fieldsBox,
+      h('h3', null, 'Campos do documento'), h('div', { class: 'hint' }, 'Preenchidos na geração. Basta usar {{doc.chave}} no conteúdo para o campo aparecer na geração; declare aqui só quando quiser valor inicial (pode trazer dados do projeto, ex.: {{project.coordinator}}), sugestões, tipo ou rótulo próprio.'), fieldsBox, autoBox,
       h('h3', null, 'Conteúdo'), blocksBox), varsBox)],
     footer: [h('button', { class: 'btn', onclick: () => md.close() }, 'Cancelar'),
       h('button', { class: 'btn primary', onclick: (e) => busy(e.target, async () => {
@@ -219,6 +252,7 @@ async function dgGenerate(projectId, tid, onDone, opts = {}) {
     drawAlt(f.alt, f.alt?.label === 'Usar o do modelo' ? 'Usar o da última geração' : 'Usar o do modelo');
     return h('div', { class: 'field' }, h('label', null, f.label), input,
       f.options?.length ? h('datalist', { id: listId }, f.options.map((o) => h('option', { value: o }))) : null,
+      f.auto ? h('div', { class: 'hint' }, `Campo do conteúdo: {{doc.${f.key}}}.`) : null,
       f.changed ? h('div', { class: 'hint' }, 'Atualizado: o valor do modelo ou do projeto mudou desde a última geração.') : null,
       altBox,
       f.hint ? h('div', { class: 'hint' }, f.hint) : null,

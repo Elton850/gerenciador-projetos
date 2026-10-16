@@ -136,7 +136,7 @@ test('API: observações do dia — várias por dia, evidências reaproveitando 
   const res = await fetch(`${base}/api/hours/export?year=${y}&month=${m}`);
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(Buffer.from(await res.arrayBuffer()));
-  assert.deepEqual(wb.worksheets.map((w) => w.name), ['Apontamentos', 'Resumo Mensal', 'Resumo por Projeto', 'Observações']);
+  assert.deepEqual(wb.worksheets.map((w) => w.name), [['JANEIRO', 'FEVEREIRO', 'MARÇO', 'ABRIL', 'MAIO', 'JUNHO', 'JULHO', 'AGOSTO', 'SETEMBRO', 'OUTUBRO', 'NOVEMBRO', 'DEZEMBRO'][m - 1], 'Apontamentos', 'Resumo Mensal', 'Resumo por Projeto', 'Observações']);
   const ws = wb.getWorksheet('Observações');
   assert.deepEqual(ws.getRow(1).values.slice(1), ['Data', 'Dia da semana', 'Projeto', 'Categoria', 'Título', 'Observação', 'Qtd. evidências', 'Evidências (arquivos)', 'Registrada em', 'Dias da observação']);
   const rows = []; ws.eachRow((r, n) => { if (n > 1) rows.push(r.values.slice(1)); });

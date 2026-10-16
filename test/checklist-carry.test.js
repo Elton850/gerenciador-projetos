@@ -224,10 +224,10 @@ test('API: analista do projeto — mesmo cadastro de pessoas; criar, editar, vis
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(Buffer.from(await res.arrayBuffer()));
   const ws = wb.getWorksheet('Apontamentos');
-  assert.equal(ws.getRow(1).getCell(6).value, 'Analista');
+  assert.equal(ws.getRow(1).getCell(6).value, 'Analista de Implantação');
   let row = null; ws.eachRow((r2, n) => { if (n > 1 && r2.getCell(7).value === 'Carga') row = r2; });
   assert.equal(row.getCell(6).value, 'Maria Santos');
-  assert.equal(wb.getWorksheet('Resumo por Projeto').getRow(1).getCell(3).value, 'Analista(s)');
+  assert.equal(wb.getWorksheet('Resumo por Projeto').getRow(1).getCell(3).value, 'Analista(s) de Implantação');
 
   // remover a pessoa do cadastro desvincula dos projetos (coordenador e analista)
   const del = (await api('DELETE', `/api/coordinators/${joao.id}`)).json;

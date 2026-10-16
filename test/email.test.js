@@ -96,13 +96,13 @@ test('6–14. variáveis e destinatários resolvidos (coordenador, analista, est
   assert.deepEqual(g.to, ['j@cli.com', 'C@X.COM']);
   assert.deepEqual(g.cc, ['fixo@empresa.com']); // coordenador já está em Para (C@X.COM == c@x.com)
   assert.deepEqual(g.bcc, []); // fixo já em CC
-  assert.ok(g.warnings.includes('Analista (Ana) sem e-mail cadastrado.'));
-  assert.ok(g.warnings.includes('Analista sem e-mail cadastrado.')); // aviso da variável ausente
+  assert.ok(g.warnings.includes('Analista de implantação (Ana) sem e-mail cadastrado.'));
+  assert.ok(g.warnings.includes('Analista de implantação sem e-mail cadastrado.')); // aviso da variável ausente
   assert.deepEqual(g.missingVariables, ['project.analyst_email']);
   assert.ok(g.body.includes('{{project.analyst_email}}'));
   const none = M.generate({ subject: 's', body: 'b', to: ['role:stakeholders'], cc: [], bcc: [] }, M.contextFor(data, { ...project, contacts: [], coordinatorId: null }));
   assert.ok(none.warnings.includes('Projeto sem stakeholder com e-mail definido.')); assert.ok(none.warnings.includes('Nenhum destinatário em “Para” foi resolvido.'));
-  assert.ok(M.generate({ subject: 's', body: '{{project.analyst}}', to: [], cc: [], bcc: [] }, M.contextFor(data, { ...project, analystId: null })).warnings.includes('Analista não cadastrado no projeto.'));
+  assert.ok(M.generate({ subject: 's', body: '{{project.analyst}}', to: [], cc: [], bcc: [] }, M.contextFor(data, { ...project, analystId: null })).warnings.includes('Analista de implantação não cadastrado no projeto.'));
   assert.ok(M.bodyToHtml('<b>x</b> **y**\n- a\nhttp://a.com/?q=1').includes('&lt;b&gt;x&lt;/b&gt; <strong>y</strong>'));
   assert.ok(!M.bodyToHtml('<script>alert(1)</script>').includes('<script>'));
   assert.equal(M.bodyToText('**negrito** e texto'), 'negrito e texto');

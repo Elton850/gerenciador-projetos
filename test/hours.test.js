@@ -279,10 +279,10 @@ test('API: jornada → cronômetro → pausas → confirmação → correção �
     assert.equal(JSON.stringify((await api('GET', `/api/hours/entries?from=${ds(-30)}&to=${D0}`)).json), before, 'exportar não altera nada');
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(Buffer.from(await res.arrayBuffer()));
-    assert.deepEqual(wb.worksheets.map((w) => w.name), ['Apontamentos', 'Resumo Mensal', 'Resumo por Projeto', 'Observações']);
+    assert.deepEqual(wb.worksheets.map((w) => w.name), [['JANEIRO', 'FEVEREIRO', 'MARÇO', 'ABRIL', 'MAIO', 'JUNHO', 'JULHO', 'AGOSTO', 'SETEMBRO', 'OUTUBRO', 'NOVEMBRO', 'DEZEMBRO'][m - 1], 'Apontamentos', 'Resumo Mensal', 'Resumo por Projeto', 'Observações']);
     const ws = wb.getWorksheet('Apontamentos');
     const head = ws.getRow(1).values.slice(1);
-    for (const c of ['Período', 'Data', 'Dia da semana', 'Projeto', 'Coordenador', 'Analista', 'Atividade realizada', 'Horário inicial', 'Horário final', 'Intervalos/Pausas', 'Horas trabalhadas', 'Meta diária', '% da Meta - Atividade', '% da Meta - Dia', 'Horas restantes (dia)', 'Horas excedentes (dia)', 'Observação']) assert.ok(head.includes(c), c);
+    for (const c of ['Período', 'Data', 'Dia da semana', 'Projeto', 'Coordenador', 'Analista de Implantação', 'Atividade realizada', 'Horário inicial', 'Horário final', 'Intervalos/Pausas', 'Horas trabalhadas', 'Meta diária', '% da Meta - Atividade', '% da Meta - Dia', 'Horas restantes (dia)', 'Horas excedentes (dia)', 'Observação']) assert.ok(head.includes(c), c);
     assert.equal(ws.views[0].state, 'frozen');
     assert.ok(ws.autoFilter);
     const frac = (v) => (v instanceof Date ? (v.getTime() - Date.UTC(1899, 11, 30)) / 86400000 : v); // o ExcelJS devolve como Date o que tem formato de hora

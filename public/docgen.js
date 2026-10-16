@@ -291,6 +291,13 @@ async function dgGenerate(projectId, tid, onDone, opts = {}) {
         tableEls.length ? h('div', { class: 'hint' }, 'Tabelas: {{doc.chave}} numa célula repete o campo correspondente (ex.: a data).') : null, tableEls),
       h('div', { class: 'stack dg-gen-preview' }, h('strong', { class: 'small' }, 'Prévia'), warnBox, page, fileLine))],
     footer: [h('button', { class: 'btn', onclick: () => md.close() }, 'Fechar'),
+      // PDF pelo próprio app (layout da prévia): sem papel timbrado — o cabeçalho/rodapé/logo do modelo original só saem no Word.
+      h('button', { class: 'btn', title: d.template.base ? 'PDF no layout da prévia: sem o papel timbrado (cabeçalho, rodapé e logo saem só no Word).' : 'PDF no layout da prévia.',
+        onclick: (e) => busy(e.target, async () => {
+          const name = await dgDownload(`/api/projects/${projectId}/doc-templates/${tid}/generate`, { fields: values, tables, format: 'pdf', ...(opts.checklist ? { checklist: opts.checklist } : {}) }, `${d.template.name}.pdf`);
+          toast(`PDF gerado: ${name}${d.template.base ? ' (sem o papel timbrado)' : ''}`);
+          onDone && onDone();
+        }, 'Gerando PDF…') }, 'Baixar PDF'),
       h('button', { class: 'btn primary', onclick: (e) => busy(e.target, async () => {
         const name = await dgDownload(`/api/projects/${projectId}/doc-templates/${tid}/generate`, { fields: values, tables, ...(opts.checklist ? { checklist: opts.checklist } : {}) }, `${d.template.name}.docx`);
         toast(`Documento gerado: ${name}`);

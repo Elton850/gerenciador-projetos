@@ -247,11 +247,24 @@ function previewHtml(doc) {
   }).join('\n');
 }
 
+// Página para o PDF (src/pdf.js imprime em A4): o mesmo conteúdo da prévia com o visual do Word padrão (Arial 10, títulos 12 em negrito,
+// tabelas com borda cinza e cabeçalho sombreado que se repete, quebra de página real). Sem papel timbrado; todo texto já escapado.
+const PDF_CSS = `@page{size:A4}body{margin:0;font:10pt/1.35 Arial,Helvetica,sans-serif;color:#000}
+.dg-title{font-size:12pt;font-weight:700;margin:12pt 0 6pt;break-after:avoid}.dg-par{margin:0 0 6pt;text-align:justify}
+table{width:100%;border-collapse:collapse;margin:0 0 10pt}td,th{border:.5pt solid #808080;padding:2.5pt 5pt;vertical-align:middle;text-align:left}
+th{background:#D9D9D9;font-weight:700;text-align:center}thead{display:table-header-group}tr{break-inside:avoid}td:empty::after{content:"\\00a0"}
+.dg-break{break-after:page;height:0;margin:0;border:0}`;
+function pdfHtml(doc, title = '') {
+  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>${esc(title)}</title><style>${PDF_CSS}</style></head><body>${previewHtml(doc)}</body></html>`;
+}
+const pdfFileName = (docxName) => String(docxName).replace(/\.docx$/i, '') + '.pdf';
+
 // Fotografia da geração (histórico): o que foi usado, não o arquivo.
 // refs = references(template, ctx) do momento da geração (decide, na próxima, se o usado volta ou se vale o modelo/projeto atual).
 // checklist = { stepId, itemId, itemTitle, stageName } quando gerado pela ação do item do checklist (só registro; não conclui o item).
-function generationRecord({ project, template, input, fileName, by, refs = null, checklist = null, at = new Date().toISOString() }) {
-  return { id: uid(), at, by, projectId: project.id, projectName: project.name, templateId: template.id, templateName: template.name, fileName, fields: input.fields, tables: input.tables, refs, ...(checklist ? { checklist } : {}) };
+// format = 'docx' (padrão; ausente nas gerações antigas) ou 'pdf'.
+function generationRecord({ project, template, input, fileName, by, refs = null, checklist = null, format = 'docx', at = new Date().toISOString() }) {
+  return { id: uid(), at, by, projectId: project.id, projectName: project.name, templateId: template.id, templateName: template.name, fileName, fields: input.fields, tables: input.tables, refs, ...(checklist ? { checklist } : {}), ...(format === 'pdf' ? { format } : {}) };
 }
 function pushGeneration(data, rec) {
   if (!Array.isArray(data.docGenerations)) data.docGenerations = [];
@@ -331,6 +344,6 @@ function defaultTemplates(data) {
 }
 
 module.exports = {
-  BLOCK_TYPES, FIELD_TYPES, MAX_GENERATIONS, publicVariables, cleanTemplate, autoFields, fieldsOf, templateUsage, buildForm, cleanInput, render, previewHtml, fileNameFor,
+  BLOCK_TYPES, FIELD_TYPES, MAX_GENERATIONS, publicVariables, cleanTemplate, autoFields, fieldsOf, pdfHtml, pdfFileName, templateUsage, buildForm, cleanInput, render, previewHtml, fileNameFor,
   generationRecord, pushGeneration, defaultTemplates, references,
 };

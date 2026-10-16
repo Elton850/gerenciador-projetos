@@ -11,7 +11,8 @@ const PORT = 4407;
 process.env.PORT = String(PORT);
 process.env.GP_DATA_DIR = path.join(tmp, 'data');
 
-const { app } = require('../server');
+const { app, store } = require('../server');
+const data = () => store.data;
 const G = require('../src/docgen');
 const { applyDefaults } = require('../src/defaults');
 const { SECTIONS } = require('../src/config-sync');
@@ -377,4 +378,36 @@ test('campos automáticos: {{doc.x}} do conteúdo sem campo declarado vira campo
   assert.deepEqual([na.label, !!na.auto, na.value], ['Número da ata', false, '07']);
   // Variáveis fixas continuam fixas.
   assert.equal((await api('PUT', `/api/doc-templates/${t.id}`, { blocks: [{ type: 'paragraph', text: '{{project.inventada}}' }] })).json.code, 'DOC_UNKNOWN_VARIABLE');
+});
+
+test('PDF: mesmo conteúdo impresso pelo app (layout da prévia), registrado como PDF; fora do aplicativo, aviso amigável', async () => {
+  const PDF = require('../src/pdf');
+  const f = ok(await api('POST', `/api/projects/${S.p.id}/doc-templates/${ROT}/form`));
+  const fields = { ...Object.fromEntries(f.fields.map((x) => [x.key, x.value])), cliente: 'Cliente <Alfa>', ambiente: 'PRODUÇÃO' };
+  // HTML de impressão: A4, conteúdo escapado, quebra de página real, cabeçalho de tabela que se repete.
+  const html = G.pdfHtml(G.render(data().docTemplates.find((t) => t.id === ROT), { data: data(), project: data().projects.find((p) => p.id === S.p.id) }, G.cleanInput(data().docTemplates.find((t) => t.id === ROT), { fields, tables: f.tables })), 'Roteiro');
+  assert.ok(html.startsWith('<!doctype html>') && html.includes('@page{size:A4}') && html.includes('Cliente &lt;Alfa&gt;') && !html.includes('<Alfa>'));
+  assert.ok(html.includes('class="dg-break"') && html.includes('.dg-break{break-after:page') && html.includes('thead{display:table-header-group}'));
+  let got = null;
+  PDF.setRenderer(async (h) => { got = h; return Buffer.from('%PDF-1.7 teste'); });
+  try {
+    const r = await fetch(`${base}/api/projects/${S.p.id}/doc-templates/${ROT}/generate`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ fields, tables: f.tables, format: 'pdf' }) });
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get('content-type'), 'application/pdf');
+    assert.match(r.headers.get('content-disposition'), /PRODU%C3%87%C3%83O\.pdf$/);
+    assert.equal(Buffer.from(await r.arrayBuffer()).toString(), '%PDF-1.7 teste');
+    assert.ok(got.includes('Cliente &lt;Alfa&gt;'), 'o PDF recebe o conteúdo resolvido');
+    const g = ok(await api('GET', `/api/projects/${S.p.id}/doc-templates`)).generations[0];
+    assert.match(g.fileName, /\.pdf$/);
+    assert.equal(data().docGenerations.at(-1).format, 'pdf');
+    // Word continua igual (sem format no registro).
+    await download(`/api/projects/${S.p.id}/doc-templates/${ROT}/generate`, { fields, tables: f.tables });
+    assert.equal(data().docGenerations.at(-1).format, undefined);
+  } finally { PDF.setRenderer(null); }
+  // Modo web (sem Electron): 501 com mensagem amigável, nada registrado.
+  const before = data().docGenerations.length;
+  const r = await api('POST', `/api/projects/${S.p.id}/doc-templates/${ROT}/generate`, { fields, tables: f.tables, format: 'pdf' });
+  assert.equal(r.status, 501);
+  assert.match(r.json.error, /aplicativo/);
+  assert.equal(data().docGenerations.length, before);
 });

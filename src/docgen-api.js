@@ -8,6 +8,7 @@ const EH = require('./evidence-http');
 const M = require('./email');
 const G = require('./docgen');
 const { buildDocx } = require('./docx');
+const PDF = require('./pdf');
 
 const BASE_MAX_BYTES = 30 * 1024 * 1024;
 const isDocx = (p) => path.extname(String(p || '')).toLowerCase() === '.docx';
@@ -136,15 +137,21 @@ function mount(app, { store, audit, getProject }) {
     const origin = checklistOf(p, t, req.body?.checklist); // valida a origem antes de montar o Word
     const input = G.cleanInput(t, req.body);
     const doc = G.render(t, ctxFor(p), input);
-    const b = readBase(t);
+    // format: 'pdf' → o Chromium do app imprime o conteúdo (layout da prévia, sem papel timbrado; src/pdf.js). Senão, Word.
+    const pdf = req.body?.format === 'pdf';
+    const fileName = pdf ? G.pdfFileName(doc.fileName) : doc.fileName;
     let buf;
-    try { buf = await buildDocx(doc, { base: b.base, title: t.name }); } catch (e) { throw httpError(400, `Não foi possível montar o Word com o papel timbrado: ${e.message}`); }
-    const rec = G.generationRecord({ project: p, template: t, input, fileName: doc.fileName, by: EH.whoAmI(), refs: G.references(t, ctxFor(p)), checklist: origin });
+    if (pdf) buf = await PDF.htmlToPdf(G.pdfHtml(doc, t.name));
+    else {
+      const b = readBase(t);
+      try { buf = await buildDocx(doc, { base: b.base, title: t.name }); } catch (e) { throw httpError(400, `Não foi possível montar o Word com o papel timbrado: ${e.message}`); }
+    }
+    const rec = G.generationRecord({ project: p, template: t, input, fileName, by: EH.whoAmI(), refs: G.references(t, ctxFor(p)), checklist: origin, format: pdf ? 'pdf' : 'docx' });
     G.pushGeneration(data(), rec);
     store.save();
-    log('documento-gerado', p, { detalhe: rec.checklist ? `${t.name} (item “${rec.checklist.itemTitle}”)` : t.name, arquivo: doc.fileName });
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-    res.setHeader('Content-Disposition', `attachment; filename="${doc.fileName.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '')}"; filename*=UTF-8''${encodeURIComponent(doc.fileName)}`);
+    log('documento-gerado', p, { detalhe: `${t.name}${pdf ? ' (PDF)' : ''}${rec.checklist ? ` (item “${rec.checklist.itemTitle}”)` : ''}`, arquivo: fileName });
+    res.setHeader('Content-Type', pdf ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '')}"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
     res.setHeader('X-Generation-Id', rec.id);
     res.setHeader('Cache-Control', 'no-store');
     res.send(buf);

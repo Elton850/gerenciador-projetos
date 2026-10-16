@@ -1,26 +1,29 @@
 /* Tema baseado no guia da marca TOTVS (https://marca.totvs.com/identidade-visual) — mesmos tokens dos demais apps (totvs_ctk.py).
    Cores de marca (constantes, usadas em fundos de tags/selos — o texto sobre elas é calculado por contraste, ver inkFor() em app.js):
      Azul #00DBFF, Roxo #A44DFF, Verde #00FFD4, Limão #D9FF65, Laranja #FF8900, Rosa #FF009E, Azul-marinho #002233.
-   Escuro (padrão): fundo azul-marinho, texto branco, destaque azul-ciano — o visual original do app.
-   Claro: fundo quase branco (cinza da marca), texto azul-marinho, destaque azul #0A46EA — o "Azul primário" que o
+   Escuro (padrão): superfícies derivadas do azul-marinho (dessaturadas, sem o "verde-água" antigo), texto branco, destaque azul-ciano.
+   Claro: fundo cinza-gelo, cartões brancos, texto azul-marinho, destaque azul #0A46EA — o "Azul primário" que o
    próprio site institucional usa para botões/links sobre fundo branco (o ciano não tem contraste suficiente em fundo claro).
-   Tipografia de sistema: Verdana (a fonte institucional TOTVS é proprietária). Gradiente só como fundo decorativo. */
+   A barra lateral é sempre azul-marinho (nos dois temas), como nos produtos TOTVS.
+   Tipografia de sistema: Segoe UI (a fonte institucional TOTVS é proprietária).
+   Gradientes (regra do guia): só como FUNDO, nunca em texto/ícone; tipo 1 = azul-marinho + azul/roxo/verde (sóbrio, corporativo);
+   tipo 2 = duas cores análogas da paleta, sem azul-marinho nem branco (tecnológico) — aqui só em detalhes finos (filete do topo). */
 :root {
   --navy: #002233; --cyan: #00DBFF; --purple: #A44DFF; --green: #00FFD4; --lime: #D9FF65; --orange: #FF8900; --pink: #FF009E;
 
   /* ---- Escuro (padrão) ---- */
-  --bg: var(--navy); --s0: #001B2A; --s1: #003144; --s2: #003D52; --border: #0A5670; --selection: #005A78; --muted: #8FB0BF; --text: #fff;
-  --accent: var(--cyan); --accent-hover: #00B4D2; --accent-text: var(--navy);
-  --ok-text: var(--green); --warn-text: var(--orange); --bad-text: #FF5CB8;
-  --shadow-modal: 0 24px 70px rgba(0,0,0,.55); --shadow-toast: 0 8px 28px rgba(0,0,0,.5); --overlay: rgba(0, 12, 20, .78);
+  --bg: #001A28; --s0: #00141F; --s1: #032434; --s2: #082E40; --border: #163F52; --selection: #0A3A52; --muted: #8DA6B4; --text: #F2F7FA;
+  --accent: var(--cyan); --accent-hover: #33E3FF; --accent-text: var(--navy);
+  --ok-text: var(--green); --warn-text: #FFA43D; --bad-text: #FF5CB8;
+  --shadow-modal: 0 24px 70px rgba(0,0,0,.55); --shadow-toast: 0 8px 28px rgba(0,0,0,.5); --overlay: rgba(0, 10, 16, .78);
   color-scheme: dark;
 }
 
 /* ---- Claro: aplicado quando o sistema operacional está em modo claro (a menos que a pessoa force "Escuro" no app) ---- */
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
-    --bg: #F4F7FA; --s0: #FFFFFF; --s1: #FFFFFF; --s2: #EDF1F6; --border: #D7DCE0; --selection: #E6F1FF; --muted: #5B6B7C; --text: var(--navy);
-    --accent: #0A46EA; --accent-hover: #002EC4; --accent-text: #FFFFFF;
+    --bg: #F2F5F8; --s0: #FFFFFF; --s1: #FFFFFF; --s2: #F1F4F8; --border: #DCE3EA; --selection: #E8EFFE; --muted: #5B6B7C; --text: var(--navy);
+    --accent: #0A46EA; --accent-hover: #0036C9; --accent-text: #FFFFFF;
     --ok-text: #0E7D66; --warn-text: #9A6200; --bad-text: #A30074;
     --shadow-modal: 0 20px 45px rgba(0,34,51,.16); --shadow-toast: 0 8px 24px rgba(0,34,51,.18); --overlay: rgba(0, 34, 51, .35);
     color-scheme: light;
@@ -28,28 +31,29 @@
 }
 /* Escolha explícita da pessoa (sobrepõe o sistema): alternador no rodapé da barra lateral. */
 :root[data-theme="light"] {
-  --bg: #F4F7FA; --s0: #FFFFFF; --s1: #FFFFFF; --s2: #EDF1F6; --border: #D7DCE0; --selection: #E6F1FF; --muted: #5B6B7C; --text: var(--navy);
-  --accent: #0A46EA; --accent-hover: #002EC4; --accent-text: #FFFFFF;
+  --bg: #F2F5F8; --s0: #FFFFFF; --s1: #FFFFFF; --s2: #F1F4F8; --border: #DCE3EA; --selection: #E8EFFE; --muted: #5B6B7C; --text: var(--navy);
+  --accent: #0A46EA; --accent-hover: #0036C9; --accent-text: #FFFFFF;
   --ok-text: #0E7D66; --warn-text: #9A6200; --bad-text: #A30074;
   --shadow-modal: 0 20px 45px rgba(0,34,51,.16); --shadow-toast: 0 8px 24px rgba(0,34,51,.18); --overlay: rgba(0, 34, 51, .35);
   color-scheme: light;
 }
 :root[data-theme="dark"] {
-  --bg: var(--navy); --s0: #001B2A; --s1: #003144; --s2: #003D52; --border: #0A5670; --selection: #005A78; --muted: #8FB0BF; --text: #fff;
-  --accent: var(--cyan); --accent-hover: #00B4D2; --accent-text: var(--navy);
-  --ok-text: var(--green); --warn-text: var(--orange); --bad-text: #FF5CB8;
-  --shadow-modal: 0 24px 70px rgba(0,0,0,.55); --shadow-toast: 0 8px 28px rgba(0,0,0,.5); --overlay: rgba(0, 12, 20, .78);
+  --bg: #001A28; --s0: #00141F; --s1: #032434; --s2: #082E40; --border: #163F52; --selection: #0A3A52; --muted: #8DA6B4; --text: #F2F7FA;
+  --accent: var(--cyan); --accent-hover: #33E3FF; --accent-text: var(--navy);
+  --ok-text: var(--green); --warn-text: #FFA43D; --bad-text: #FF5CB8;
+  --shadow-modal: 0 24px 70px rgba(0,0,0,.55); --shadow-toast: 0 8px 28px rgba(0,0,0,.5); --overlay: rgba(0, 10, 16, .78);
   color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
 body {
-  font: 13.5px/1.55 var(--font, Verdana, Geneva, "DejaVu Sans", sans-serif); background: var(--bg); color: var(--text);
+  font: 14px/1.55 var(--font, "Segoe UI", system-ui, sans-serif); background: var(--bg); color: var(--text);
+  -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
   transition: background-color .15s ease, color .15s ease;
 }
-:root { --font: Verdana, Geneva, "DejaVu Sans", sans-serif; --mono: Consolas, "Cascadia Mono", monospace; --code-bg: #0B141D; --code-text: #D7E6F0; }
-body::before { content: ""; position: fixed; inset: 0 0 auto 0; height: 4px; z-index: 300; background: linear-gradient(90deg, var(--navy) 0%, var(--accent) 100%); }
+:root { --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif; --mono: Consolas, "Cascadia Mono", monospace; --code-bg: #0B141D; --code-text: #D7E6F0; }
+body::before { content: ""; position: fixed; inset: 0 0 auto 0; height: 3px; z-index: 300; background: linear-gradient(90deg, var(--cyan) 0%, var(--purple) 100%); }
 h1, h2, h3 { margin: 0; font-weight: 700; }
 h1 { font-size: 21px; letter-spacing: .1px; overflow-wrap: anywhere; } h2 { font-size: 14px; } h3 { font-size: 13px; }
 a { color: var(--accent); }
@@ -1215,3 +1219,82 @@ main.settings-mode { padding-top: 0; } main.settings-mode .page-head { padding-t
 .dg-alt:empty { display: none; }
 .dg-gen-form button.link-quiet { padding: 0; border: 0; background: none; cursor: pointer; text-align: left; font: inherit; font-size: 12px; color: var(--accent); text-decoration: underline; }
 .dg-auto { padding: 4px 8px; border: 1px dashed var(--border); border-radius: 8px; }
+
+/* ==========================================================================================================
+   Tema corporativo (out/2026) — leitura mais sóbria do guia TOTVS. Só aparência: nenhuma classe nova é exigida do JS.
+   - Barra lateral sempre azul-marinho (tokens do tema escuro redefinidos no próprio .sidebar) com gradiente tipo 1.
+   - Gradientes da marca só em fundos: barra lateral, luz do fundo de main, faixa do topo dos KPIs, barras de progresso.
+   - Selos de status tonais (fundo translúcido + texto da cor do status) no lugar das cores chapadas; raios menores;
+     pesos de fonte 600 em vez de 700; cabeçalhos de card planos; botão perigoso tonal (cheio só no hover).
+   ========================================================================================================== */
+.app { padding-top: 3px; }
+:root { --radius: 10px; }
+
+/* Tipografia */
+h1 { font-size: 22px; font-weight: 600; letter-spacing: -.01em; } h2 { font-weight: 600; font-size: 14.5px; } h3 { font-weight: 600; }
+.nav-item .name, .brand b, .stat .n, .kpi-v, .modal-head h2, legend { font-weight: 600; }
+.nav-sep, .kpi-l, th, .side-toggle, .em-vgroup, .au-day { font-weight: 600; letter-spacing: .07em; }
+
+/* Barra lateral: azul-marinho nos dois temas, com gradiente tipo 1 (azul-marinho → azul) bem discreto */
+.sidebar {
+  --bg: #001A28; --s0: #00141F; --s1: #032434; --s2: #0A3044; --border: #163F52; --selection: #0A3A52; --muted: #8DA6B4; --text: #F2F7FA;
+  --accent: var(--cyan); --accent-hover: #33E3FF; --accent-text: var(--navy);
+  --ok-text: var(--green); --warn-text: #FFA43D; --bad-text: #FF5CB8; --glow: color-mix(in srgb, var(--cyan) 30%, transparent);
+  color-scheme: dark; color: var(--text); border-right-color: #0E3346;
+  background: linear-gradient(180deg, #00121C 0%, #001826 55%, color-mix(in srgb, var(--navy) 86%, var(--cyan)) 140%);
+}
+.brand { border-bottom-color: rgba(255,255,255,.06); }
+.brand img { box-shadow: 0 0 0 1px rgba(255,255,255,.08), 0 6px 14px -6px rgba(0,0,0,.6); }
+.nav-item { border-radius: 7px; }
+.nav-item.active { background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 16%, transparent), color-mix(in srgb, var(--accent) 3%, transparent)); box-shadow: none; }
+.sidebar-foot { border-top-color: rgba(255,255,255,.06); background: none; }
+.rail-nav button.active { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+
+/* Fundo da área principal: luz tipo 1 (azul e roxo sobre o azul-marinho), sem competir com o conteúdo */
+main { background:
+  radial-gradient(1200px 520px at 108% -14%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 64%),
+  radial-gradient(1000px 460px at -14% 114%, color-mix(in srgb, var(--purple) 7%, transparent), transparent 62%); }
+main.ws-mode { background: none; }
+
+/* Cartões: raio menor, cabeçalho plano separado por filete, borda mais discreta */
+.card { border-radius: var(--radius); }
+.card-head { background: transparent; border-radius: var(--radius) var(--radius) 0 0; padding: 13px 16px; }
+.row, .home-proj, .hr-entry, .au-entry, .hr-timer, .box, .sheetcard, .chip, fieldset, .em-head, .em-vars { border-radius: 8px; }
+.modal { border-radius: 12px; }
+.modal-head { background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 7%, var(--s2)), var(--s2) 70%); }
+
+/* KPIs da Visão Geral e estatísticas: faixa superior com gradiente da marca no lugar da borda lateral colorida */
+.kpi { position: relative; overflow: hidden; border-left-width: 1px; border-left-color: var(--border); padding-top: 14px;
+  background: linear-gradient(160deg, color-mix(in srgb, var(--kpi-c, var(--muted)) 7%, var(--s1)), var(--s1) 55%); }
+.kpi::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 2px; background: linear-gradient(90deg, var(--kpi-c, var(--border)), color-mix(in srgb, var(--kpi-c, var(--border)) 10%, transparent)); }
+.kpi.ok { --kpi-c: var(--ok-text); border-left-color: var(--border); } .kpi.warn { --kpi-c: var(--orange); border-left-color: var(--border); }
+.kpi.bad { --kpi-c: var(--pink); border-left-color: var(--border); } .kpi.info { --kpi-c: var(--accent); border-left-color: var(--border); }
+button.kpi:hover { background: linear-gradient(160deg, color-mix(in srgb, var(--kpi-c, var(--muted)) 12%, var(--s2)), var(--s2) 60%); }
+
+/* Botões */
+.btn { border-radius: 7px; }
+.btn.primary { font-weight: 600; background-image: linear-gradient(180deg, rgba(255,255,255,.14), rgba(255,255,255,0)); }
+.btn.danger { background: color-mix(in srgb, var(--pink) 14%, var(--s1)); border-color: color-mix(in srgb, var(--pink) 55%, var(--border)); color: var(--bad-text); font-weight: 600; }
+.btn.danger:hover:not(:disabled) { background: var(--pink); border-color: var(--pink); color: #fff; filter: none; }
+input[type=text], input[type=number], input[type=date], input[type=password], select, textarea { border-radius: 7px; }
+input:focus, select:focus, textarea:focus { outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 0; border-color: var(--accent); }
+.theme-toggle button.active { font-weight: 600; }
+
+/* Selos de status: tonais (o status continua com texto/glifo; a cor só reforça) */
+.pill { border-radius: 6px; font-weight: 600; padding: 2px 9px; border: 1px solid transparent; }
+.pill.ok, .pill.local, .pill.hr-st-completo { background: color-mix(in srgb, var(--green) 14%, transparent); border-color: color-mix(in srgb, var(--ok-text) 35%, transparent); color: var(--ok-text); }
+.pill.soon, .pill.hr-st-pendente { background: color-mix(in srgb, var(--orange) 14%, transparent); border-color: color-mix(in srgb, var(--warn-text) 35%, transparent); color: var(--warn-text); }
+.pill.overdue, .pill.prod, .pill.hr-st-sem_apontamento { background: color-mix(in srgb, var(--pink) 14%, transparent); border-color: color-mix(in srgb, var(--bad-text) 35%, transparent); color: var(--bad-text); }
+.pill.done, .pill.hr-st-excedente { background: color-mix(in srgb, var(--accent) 13%, transparent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); color: var(--accent); }
+.tag { border-radius: 6px; font-weight: 600; }
+.steps span { border-radius: 6px; } .steps .on { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font-weight: 600; }
+.hr-chip { border-radius: 6px; font-weight: 600; }
+
+/* Progresso: gradiente tipo 1 (azul-marinho → azul) */
+.progress { height: 10px; } .progress > div { background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 45%, var(--navy)), var(--accent)); }
+.pp-fill { background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 45%, var(--navy)), var(--accent)); }
+.pp.full .pp-fill { background: var(--ok-text); }
+
+/* Avisos */
+.toast { border-radius: 8px; }
+.toast.error { background: color-mix(in srgb, var(--pink) 16%, var(--s1)); border-color: color-mix(in srgb, var(--pink) 50%, var(--border)); border-left-color: var(--pink); color: var(--text); }

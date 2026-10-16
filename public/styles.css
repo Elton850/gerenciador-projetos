@@ -1116,6 +1116,16 @@ main.settings-mode { padding-top: 0; } main.settings-mode .page-head { padding-t
    espaços menores; iniciais e símbolo de status continuam (projeto/estado nunca só pela cor). */
 .sch-cal .sch-item { container-type: inline-size; }
 @container (max-width: 130px) { .sch-cal .sch-item .sch-diamond { display: none; } .sch-cal .sch-item .sch-ini { padding: 0 3px; } .sch-cal .sch-item .sch-glyph { font-size: 10px; } }
+/* Lembrete avulso no calendário: sem barra (ocorrência de um dia), 🔔 + horário; sem projeto = neutro. Passou = apagado. */
+.pc-neutro { --pc: #8FA3B1; --pc-ink: #002233; }
+.sch-item.is-reminder { background: none; padding-left: 4px; color: var(--muted); }
+.sch-item.is-reminder .sch-title { color: var(--text); }
+.sch-rem-time { flex: none; font-size: 10.5px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--accent); }
+.sch-item.st-past, .sch-row.st-past { opacity: .45; } .sch-st.st-past { color: var(--muted); }
+.sch-tl .sch-item.is-reminder { padding: 0; justify-content: center; } .sch-tl .sch-item.is-reminder > :not(.sch-rem-time) { display: none; }
+.sch-tl .sch-item.is-reminder .sch-rem-hhmm { display: none; } /* linha do tempo: só o 🔔 no dia (título e horário na dica) */
+@container (max-width: 130px) { .sch-cal .sch-item.is-reminder .sch-rem-bell { display: none; } } /* célula estreita: o horário já indica o lembrete */
+.sch-proj .sch-item .sch-ini { display: none; } /* dentro do projeto as iniciais são redundantes (tudo é do mesmo projeto) */
 .sch-item.is-deadline:hover, .sch-item.is-period:hover { filter: brightness(1.08); outline: 1px solid color-mix(in srgb, var(--pc) 60%, transparent); }
 .sch-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .sch-diamond { color: var(--pc); font-size: 12px; line-height: 1; }

@@ -6,7 +6,7 @@
 // Vários horários por dia (`times`): cada data × horário é uma OCORRÊNCIA independente; a pendente é `current` (data) + `slot` (hora).
 // Ação opcional (`action`): só botões no card (abrir projeto/link/Controle de Horas, gerar comunicação) — nada é executado sozinho.
 const { httpError } = require('./util');
-const { daysBetween } = require('./schedule');
+const { daysBetween, scheduleIdentity } = require('./schedule');
 
 const pad = (n) => String(n).padStart(2, '0');
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -269,4 +269,48 @@ function arrivedForNotification(items, now = nowKey()) {
   return items.filter((x) => !x.done && x.notifyAt <= now);
 }
 
-module.exports = { nowKey, addDays, isoDow, cleanDate, cleanTime, cleanKey, cleanRepeat, cleanTimes, cleanAction, timesOf, cleanReminder, firstPending, nextOnOrAfter, nextOccurrence, latestReached, completeReminder, listReminders, dueForNotification, arrivedForNotification, repeatText };
+// ---------- Lembretes no calendário (Central de Cronogramas) ----------
+// Datas em que um lembrete avulso ocorre dentro de [from, to] (mesma regra de recorrência; nada é gravado). `max` limita séries diárias.
+function occurrencesInRange(r, from, to, max = 400) {
+  const series = { start: r.date, repeat: r.repeat || null, until: r.until || null };
+  const out = [];
+  for (let d = nextOnOrAfter(series, from); d && d <= to && out.length < max; d = nextOnOrAfter(series, addDays(d, 1))) out.push(d);
+  return out;
+}
+// Situação de UMA data da série: concluída (todos os horários do dia concluídos) · passou (ficou para trás sem concluir; perdidas não
+// acumulam) · atrasada (é a pendente e o horário já passou) · hoje · normal (futura). Lembrete encerrado: datas sem conclusão = passou.
+function occurrenceStatus(r, date, now) {
+  const today = now.slice(0, 10);
+  const doneTimes = new Set((r.completions || []).filter((c) => c.date === date).map((c) => c.time || timesOf(r)[0]));
+  const allDone = timesOf(r).every((t) => doneTimes.has(t));
+  const finished = !!r.doneAt || !r.current;
+  if (allDone && doneTimes.size) return 'done';
+  if (finished || date < r.current) return doneTimes.size ? 'done' : 'past';
+  if (date === r.current && `${date}T${slotOf(r)}` < now && !(r.snoozeUntil && r.snoozeUntil > now)) return 'overdue';
+  return date === today ? 'today' : 'ok';
+}
+// Itens do calendário (mesmo formato dos prazos de src/schedule.js, kind 'reminder'): uma ocorrência por data, com cor/iniciais do
+// projeto (sem projeto = neutro). Projeto cancelado fica de fora (como na lista de lembretes). `projectIds` (opcional) restringe.
+function reminderItems(state, { from, to, now = nowKey(), projectIds = null } = {}) {
+  const projects = state.projects || [];
+  const today = now.slice(0, 10);
+  const items = [];
+  for (const r of state.reminders || []) {
+    const p = r.projectId ? projects.find((x) => x.id === r.projectId) : null;
+    if (p?.cancelled) continue;
+    if (projectIds && !(p && projectIds.has(p.id))) continue;
+    const id = p ? scheduleIdentity(p) : { color: 'neutro', initials: '' };
+    const times = timesOf(r);
+    const edit = { id: r.id, title: r.title, description: r.description || '', projectId: r.projectId || null, date: r.date, time: times[0], times, priority: r.priority || 'normal', repeat: r.repeat || null, until: r.until || null, action: r.action || null };
+    for (const d of occurrencesInRange(r, from, to)) {
+      const status = occurrenceStatus(r, d, now);
+      items.push({ key: `r:${r.id}:${d}`, kind: 'reminder', reminderId: r.id, remKey: `r:${r.id}`, projectId: p ? p.id : null, projectName: p ? p.name : 'Sem projeto',
+        color: id.color, initials: id.initials, title: r.title, note: r.description || '', start: d, end: d, times, repeatText: `${repeatText(r.repeat, r.until)}${times.length > 1 ? ` · ${times.join(', ')}` : ''}`,
+        priority: r.priority || 'normal', status, days: daysBetween(today, d), done: status === 'done', pending: !r.doneAt && r.current === d, edit });
+    }
+  }
+  return items;
+}
+
+module.exports = { nowKey, addDays, isoDow, cleanDate, cleanTime, cleanKey, cleanRepeat, cleanTimes, cleanAction, timesOf, cleanReminder, firstPending, nextOnOrAfter, nextOccurrence, latestReached, completeReminder, listReminders, dueForNotification, arrivedForNotification, repeatText,
+  occurrencesInRange, occurrenceStatus, reminderItems };

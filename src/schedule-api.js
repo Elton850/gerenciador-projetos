@@ -1,13 +1,15 @@
 // Central de Cronogramas: rotas. Regras em src/schedule.js (itens, status, filtros, próximos prazos) — a tela só desenha.
-// Fonte única: os prazos de cada projeto (project.milestones). Nada é copiado nem gravado aqui, exceto a cor do projeto.
+// Fonte única: os prazos de cada projeto (project.milestones) e as ocorrências dos lembretes avulsos (data.reminders, calculadas por
+// src/reminders.js no intervalo pedido). Nada é copiado nem gravado aqui, exceto a cor do projeto.
 // Projeto cancelado fica fora da visão consolidada (como nos alertas e lembretes); no próprio projeto continua visível.
 const { httpError, str } = require('./util');
 const S = require('./schedule');
+const R = require('./reminders');
 
 const MAX_RANGE_DAYS = 400; // calendário/linha do tempo pedem só o intervalo visível (+ folga), nunca o histórico inteiro
 const QUICK = ['today', 'week', 'next30', 'overdue'];
-const STATUS = ['done', 'overdue', 'today', 'soon', 'running', 'ok'];
-const KINDS = ['period', 'deadline'];
+const STATUS = ['done', 'overdue', 'today', 'soon', 'running', 'ok', 'past']; // past = ocorrência de lembrete que ficou para trás
+const KINDS = ['period', 'deadline', 'reminder'];
 
 function mount(app, { store, getProject, publicProject }) {
   const data = () => store.data;
@@ -38,7 +40,10 @@ function mount(app, { store, getProject, publicProject }) {
     const kind = KINDS.includes(req.query.kind) ? req.query.kind : null;
     const all = data().projects.filter((p) => !p.cancelled);
     const projects = liveProjects(req.query);
-    const items = S.filterItems(itemsOf(projects, today), { from, to, quick, status, kind, hideDone: req.query.hideDone === '1', today });
+    // Lembretes: os do(s) projeto(s) filtrado(s); sem filtro de projeto/responsável entram também os sem projeto. reminders=0 = só prazos.
+    const filtered = !!(str(req.query.project, 40) || str(req.query.person, 40));
+    const rem = req.query.reminders === '0' ? [] : R.reminderItems(data(), { from, to, projectIds: filtered ? new Set(projects.map((p) => p.id)) : null });
+    const items = S.filterItems([...itemsOf(projects, today), ...rem], { from, to, quick, status, kind, hideDone: req.query.hideDone === '1', today });
     const used = new Set(all.flatMap((p) => [p.coordinatorId, p.analystId]).filter(Boolean));
     res.json({
       today, from, to, warnDays: warnDays(), items,

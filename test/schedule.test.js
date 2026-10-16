@@ -268,3 +268,64 @@ test('carga: applyDefaults completa os campos novos sem alterar nada e é idempo
   assert.equal(kept.projects[0].scheduleColor, 'roxo');
   assert.equal(kept.projects[0].milestones[0].startDate, '2026-10-01');
 });
+
+// ---------- Lembretes no calendário (ocorrências calculadas; nada gravado) ----------
+test('lembretes no calendário: ocorrências no intervalo (pontual, diário, semanal com dias, mensal dia 31, até, virada de ano)', () => {
+  const R = require('../src/reminders');
+  const occ = (r, a, b) => R.occurrencesInRange(r, a, b);
+  assert.deepEqual(occ({ date: '2026-10-20' }, '2026-10-01', '2026-10-31'), ['2026-10-20'], 'pontual');
+  assert.deepEqual(occ({ date: '2026-10-20' }, '2026-11-01', '2026-11-30'), [], 'pontual fora do intervalo');
+  assert.deepEqual(occ({ date: '2026-10-01', repeat: { unit: 'day', every: 2 } }, '2026-10-04', '2026-10-10'), ['2026-10-05', '2026-10-07', '2026-10-09']);
+  assert.deepEqual(occ({ date: '2026-10-01', repeat: { unit: 'week', every: 1, weekdays: [1, 3] } }, '2026-10-10', '2026-10-20'), ['2026-10-12', '2026-10-14', '2026-10-19']);
+  assert.deepEqual(occ({ date: '2026-01-31', repeat: { unit: 'month', every: 1 } }, '2026-02-01', '2026-04-30'), ['2026-02-28', '2026-03-31', '2026-04-30'], 'dia 31 em mês curto = último dia');
+  assert.deepEqual(occ({ date: '2026-10-01', repeat: { unit: 'day', every: 1 }, until: '2026-10-03' }, '2026-10-01', '2026-10-31'), ['2026-10-01', '2026-10-02', '2026-10-03'], 'até');
+  assert.deepEqual(occ({ date: '2026-12-30', repeat: { unit: 'day', every: 1 } }, '2026-12-31', '2027-01-02'), ['2026-12-31', '2027-01-01', '2027-01-02'], 'atravessa o ano');
+  assert.equal(occ({ date: '2026-01-01', repeat: { unit: 'day', every: 1 } }, '2026-01-01', '2027-12-31').length, 400, 'limite por série');
+});
+
+test('lembretes no calendário: situação de cada data (concluída, passou, atrasada, hoje, futura, encerrado)', () => {
+  const R = require('../src/reminders');
+  const now = '2026-10-15T10:00';
+  const r = { date: '2026-10-12', repeat: { unit: 'day', every: 1 }, times: ['09:00'], current: '2026-10-15', slot: '09:00', completions: [{ date: '2026-10-13', time: '09:00' }] };
+  assert.equal(R.occurrenceStatus(r, '2026-10-12', now), 'past', 'ficou para trás sem concluir');
+  assert.equal(R.occurrenceStatus(r, '2026-10-13', now), 'done');
+  assert.equal(R.occurrenceStatus(r, '2026-10-15', now), 'overdue', 'pendente e o horário já passou');
+  assert.equal(R.occurrenceStatus(r, '2026-10-15', '2026-10-15T08:00'), 'today');
+  assert.equal(R.occurrenceStatus(r, '2026-10-16', now), 'ok');
+  assert.equal(R.occurrenceStatus({ ...r, snoozeUntil: '2026-10-15T12:00' }, '2026-10-15', now), 'today', 'adiado não fica atrasado');
+  const fin = { date: '2026-10-10', times: ['09:00'], current: null, doneAt: 'x', completions: [{ date: '2026-10-10', time: '09:00' }] };
+  assert.equal(R.occurrenceStatus(fin, '2026-10-10', now), 'done');
+  const two = { ...r, times: ['09:00', '14:00'], completions: [{ date: '2026-10-15', time: '09:00' }], slot: '14:00' };
+  assert.equal(R.occurrenceStatus(two, '2026-10-15', now), 'today', 'um dos dois horários concluído: o dia continua pendente');
+});
+
+test('API: lembretes avulsos aparecem na Central (projeto, sem projeto, cancelado fora, filtros) e concluir pela rota de sempre', async () => {
+  const p = ok(await api('POST', '/api/projects', { name: 'Projeto Eta' }));
+  ok(await api('POST', '/api/reminders', { title: 'Status semanal', projectId: p.id, date: day(1), times: ['10:00'], repeat: { unit: 'day', every: 7 } }));
+  ok(await api('POST', '/api/reminders', { title: 'Pagar boleto', date: day(2), times: ['08:00', '17:00'] }));
+  ok(await api('POST', '/api/reminders', { title: 'Do cancelado', projectId: 'p-cancel', date: day(1), times: ['09:00'] }));
+  const before = hash();
+  const all = ok(await api('GET', `/api/schedule?from=${day(0)}&to=${day(20)}`));
+  const rems = all.items.filter((x) => x.kind === 'reminder');
+  assert.deepEqual(rems.filter((x) => x.title === 'Status semanal').map((x) => x.start), [day(1), day(8), day(15)], 'uma ocorrência por data da série');
+  const boleto = rems.find((x) => x.title === 'Pagar boleto');
+  assert.deepEqual([boleto.projectId, boleto.projectName, boleto.color, boleto.times], [null, 'Sem projeto', 'neutro', ['08:00', '17:00']]);
+  assert.ok(!rems.some((x) => x.title === 'Do cancelado'), 'lembrete de projeto cancelado fica fora');
+  assert.equal(rems.find((x) => x.title === 'Status semanal').initials, 'PE', 'identidade do projeto');
+  assert.equal(hash(), before, 'consultar não grava nada');
+  const onlyP = ok(await api('GET', `/api/schedule?from=${day(0)}&to=${day(20)}&project=${p.id}`)).items.filter((x) => x.kind === 'reminder');
+  assert.ok(onlyP.length === 3 && onlyP.every((x) => x.projectId === p.id), 'filtro de projeto: só os do projeto (sem projeto fica fora)');
+  assert.ok(ok(await api('GET', `/api/schedule?from=${day(0)}&to=${day(20)}&kind=reminder`)).items.every((x) => x.kind === 'reminder'));
+  assert.ok(!ok(await api('GET', `/api/schedule?from=${day(0)}&to=${day(20)}&reminders=0`)).items.some((x) => x.kind === 'reminder'), 'reminders=0 = só prazos');
+  assert.ok(ok(await api('GET', '/api/schedule/upcoming')).items.every((x) => x.kind !== 'reminder'), 'Próximos prazos continua só com prazos');
+  // concluir a pendente pela rota de sempre: a data vira concluída e a próxima continua
+  const first = rems.find((x) => x.title === 'Status semanal' && x.pending);
+  assert.equal(first.start, day(1));
+  ok(await api('POST', `/api/reminders/${encodeURIComponent(first.remKey)}/complete`, {}));
+  const after = ok(await api('GET', `/api/schedule?from=${day(0)}&to=${day(20)}&project=${p.id}&kind=reminder`)).items;
+  assert.equal(after.find((x) => x.start === day(1)).status, 'done');
+  assert.ok(after.find((x) => x.start === day(8)).pending, 'a próxima ocorrência passa a ser a pendente');
+  // excluir o lembrete tira do calendário; os prazos não mudam
+  ok(await api('DELETE', `/api/reminders/${encodeURIComponent(first.remKey)}`));
+  assert.ok(!ok(await api('GET', `/api/schedule?from=${day(0)}&to=${day(20)}&project=${p.id}`)).items.some((x) => x.kind === 'reminder'));
+});

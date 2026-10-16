@@ -117,13 +117,14 @@ function remEdit(x, changed) {
 
 // ---------- Formulário (avulso) ----------
 const REM_WD = [[1, 'Seg'], [2, 'Ter'], [3, 'Qua'], [4, 'Qui'], [5, 'Sex'], [6, 'Sáb'], [7, 'Dom']];
-function reminderForm(r, after) {
+// `preset` (opcional, só para novo): { date, projectId } — ex.: “+ Lembrete neste dia” do calendário dos cronogramas.
+function reminderForm(r, after, preset = {}) {
   const today = remKeyOf(remNow());
   const title = h('input', { type: 'text', maxlength: 160, value: r?.title || '', placeholder: 'Ex.: Enviar documentação' });
   const desc = h('textarea', { maxlength: 1000, rows: 2, placeholder: 'Opcional' }, r?.description || '');
   const proj = h('select', null, h('option', { value: '' }, 'Nenhum'), sortedProjects().map((p) => h('option', { value: p.id }, p.name)));
-  proj.value = r?.projectId || '';
-  const date = h('input', { type: 'date', value: r?.date || today.slice(0, 10) });
+  proj.value = r?.projectId || preset.projectId || '';
+  const date = h('input', { type: 'date', value: r?.date || preset.date || today.slice(0, 10) });
   const timesBox = h('div', { class: 'inline rem-times' });
   let times = [...(r?.times?.length ? r.times : [r?.time || '09:00'])];
   const drawTimes = () => timesBox.replaceChildren(...times.map((t, i) => h('span', { class: 'inline', style: 'gap:2px' },

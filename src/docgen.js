@@ -6,6 +6,10 @@
 //  - fields: CAMPOS DO DOCUMENTO ({{doc.<chave>}}), preenchidos na geração. O valor inicial (default) pode usar variáveis do projeto
 //    (o MESMO registro de Comunicações: email.VARIABLES dos grupos Projeto/Pessoas/Geral). Dado que o projeto não tem (cliente, códigos,
 //    proposta, quantidades…) é campo, nunca inventado.
+//  - Campos AUTOMÁTICOS: {{doc.<chave>}} usado no conteúdo/nome do arquivo SEM campo declarado vira campo de texto na geração (sem valor
+//    inicial; rótulo a partir da chave; texto longo quando ocupa sozinho um parágrafo). Não são gravados no modelo: saem do conteúdo
+//    (fieldsOf = declarados + automáticos). Declarar o campo é o que dá valor inicial, sugestões, tipo e rótulo próprios.
+//    As demais variáveis ({{project.*}}, pessoas, {{today}}…) são fixas: só as do registro.
 //  - blocks: title | paragraph | info (quadro "Rótulo: valor", 1 ou 2 por linha) | table (colunas + linhas; editável na geração) | pagebreak.
 // Na geração: {{doc.x}} vazio vira texto vazio (escolha do usuário, listado como aviso); variável de PROJETO sem valor mantém o marcador
 // {{...}} e vira aviso (regra de Comunicações). Histórico (data.docGenerations): fotografia dos campos/tabelas usados — preenche a próxima.
@@ -27,6 +31,36 @@ const VAR_RE = /\{\{\s*([a-z0-9_.]+)\s*\}\}/gi;
 const publicVariables = () => M.publicVariables().filter((v) => VAR_GROUPS.has(v.group));
 const PROJECT_KEYS = new Set(publicVariables().map((v) => v.key));
 const varsIn = (text) => [...String(text || '').matchAll(VAR_RE)].map((m) => m[1].toLowerCase());
+
+// ---------- Campos automáticos ----------
+const DOC_VAR_WHOLE = /^\s*\{\{\s*doc\.([a-z0-9_]+)\s*\}\}\s*$/i;
+const humanize = (key) => { const x = String(key).replace(/_+/g, ' ').trim(); return x.charAt(0).toUpperCase() + x.slice(1); };
+// Textos do conteúdo em ordem (blocos e depois o nome do arquivo); whole = parágrafo que é só a variável (vira texto longo).
+function contentTexts(t) {
+  const out = [];
+  for (const b of t.blocks || []) {
+    if (b.text !== undefined) out.push({ text: b.text, whole: b.type === 'paragraph' && DOC_VAR_WHOLE.test(b.text || '') });
+    for (const c of b.columns || []) out.push({ text: c });
+    for (const r of b.rows || []) for (const c of r) { if (typeof c === 'string') out.push({ text: c }); else out.push({ text: c.label }, { text: c.value }); }
+  }
+  out.push({ text: t.fileName });
+  return out;
+}
+// {{doc.x}} do conteúdo sem campo declarado (chave válida), na ordem em que aparecem.
+function autoFields(t) {
+  const declared = new Set((t.fields || []).map((f) => f.key));
+  const found = new Map();
+  for (const { text, whole } of contentTexts(t)) {
+    for (const k of varsIn(text)) {
+      if (!k.startsWith('doc.')) continue;
+      const key = k.slice(4);
+      if (declared.has(key) || !FIELD_KEY_RE.test(key)) continue;
+      found.set(key, (found.get(key) || false) || !!whole);
+    }
+  }
+  return [...found].map(([key, long]) => ({ key, label: humanize(key), type: long ? 'textarea' : 'text', default: '', options: [], hint: '', people: false, auto: true }));
+}
+const fieldsOf = (t) => [...(t.fields || []), ...autoFields(t)];
 
 // ---------- Modelo ----------
 function cleanField(f, i) {
@@ -71,18 +105,22 @@ function cleanTemplate(b, data) {
   const baseDocumentId = b.baseDocumentId ? str(b.baseDocumentId, 64) : null;
   if (baseDocumentId && !data.documents.some((d) => d.id === baseDocumentId)) throw httpError(400, 'O papel timbrado escolhido não está mais na biblioteca.');
   const t = { name, description: str(b.description, 600), stageId, baseDocumentId, fileName: str(b.fileName, 200) || name, fields, blocks, active: b.active !== false };
-  // Variáveis: do projeto (grupos permitidos) ou {{doc.<campo>}} existente. Valor inicial de campo só usa variáveis do projeto.
-  const keys = new Set(fields.map((f) => `doc.${f.key}`));
-  const bad = new Set();
-  const check = (text, allowDoc = true) => { for (const k of varsIn(text)) if (!PROJECT_KEYS.has(k) && !(allowDoc && keys.has(k))) bad.add(k); };
+  // Variáveis: do projeto (registro fixo) ou {{doc.<chave>}} — declarado ou automático (chave válida). Valor inicial e sugestões de campo
+  // só usam variáveis do projeto.
+  const bad = new Set(); const badKey = new Set();
+  const check = (text, allowDoc = true) => {
+    for (const k of varsIn(text)) {
+      if (PROJECT_KEYS.has(k)) continue;
+      if (allowDoc && k.startsWith('doc.')) { if (!FIELD_KEY_RE.test(k.slice(4))) badKey.add(k); continue; }
+      bad.add(k);
+    }
+  };
   for (const f of fields) { check(f.default, false); f.options.forEach((o) => check(o, false)); }
-  check(t.fileName);
-  for (const x of blocks) {
-    if (x.text) check(x.text);
-    for (const r of x.rows || []) for (const c of r) { if (typeof c === 'string') check(c); else { check(c.label); check(c.value); } }
-    for (const c of x.columns || []) check(c);
-  }
-  if (bad.size) throw httpError(400, `Variável desconhecida no modelo: ${[...bad].map((k) => `{{${k}}}`).join(', ')}. Use as variáveis da lista ou crie o campo correspondente.`, { code: 'DOC_UNKNOWN_VARIABLE' });
+  for (const { text } of contentTexts(t)) check(text);
+  if (badKey.size) throw httpError(400, `Chave de campo inválida: ${[...badKey].map((k) => `{{${k}}}`).join(', ')}. Depois de “doc.” use letra inicial e só letras minúsculas, números e _ (ex.: {{doc.data_termino}}).`, { code: 'DOC_UNKNOWN_VARIABLE' });
+  if (bad.size) throw httpError(400, `Variável desconhecida no modelo: ${[...bad].map((k) => `{{${k}}}`).join(', ')}. Use as variáveis da lista ou um campo do documento ({{doc.chave}}).`, { code: 'DOC_UNKNOWN_VARIABLE' });
+  const total = fields.length + autoFields(t).length;
+  if (total > MAX_FIELDS) throw httpError(400, `No máximo ${MAX_FIELDS} campos por modelo (declarados + {{doc.…}} do conteúdo): este tem ${total}.`);
   return t;
 }
 
@@ -107,7 +145,7 @@ function references(t, ctx) {
   const sv = Object.fromEntries(Object.entries(projectValues(ctx)).filter(([k]) => !VOLATILE.has(k)));
   const tables = {};
   t.blocks.forEach((b, i) => { if (b.type === 'table') tables[i] = JSON.stringify([b.columns, b.rows.map((r) => r.map((c) => resolveProjectOnly(c, sv)))]); });
-  return { defaults: Object.fromEntries(t.fields.map((f) => [f.key, M.renderText(f.default, sv).text])), tables };
+  return { defaults: Object.fromEntries(fieldsOf(t).map((f) => [f.key, M.renderText(f.default, sv).text])), tables };
 }
 // Geração anterior à referência (versão 1.7.0/1.7.1): compara com o modelo padrão de mesmo id; outro modelo → sem referência (mantém).
 function refsOf(g, ctx, data) {
@@ -123,7 +161,7 @@ function buildForm(t, ctx, data) {
   const values = projectValues(ctx);
   const now = references(t, ctx);
   const { same, any } = lastGeneration(data, ctx.project.id, t.id);
-  const fields = t.fields.map((f) => {
+  const fields = fieldsOf(t).map((f) => {
     const r = M.renderText(f.default, values);
     const def = { ...f, value: r.missing.length ? r.text.replace(VAR_RE, '').replace(/\s{2,}/g, ' ').trim() : r.text, from: 'default', warnings: r.missing.map((k) => missMsg(k, ctx)) };
     const src = same && f.key in (same.fields || {}) ? same : any && f.key in (any.fields || {}) ? any : null;
@@ -152,7 +190,7 @@ const resolveProjectOnly = (text, values) => String(text || '').replace(VAR_RE, 
 // Limpa o que veio da tela (valores dos campos e linhas das tabelas editadas).
 function cleanInput(t, body) {
   const fields = {};
-  for (const f of t.fields) fields[f.key] = String(body?.fields?.[f.key] ?? '').replace(/\r\n?/g, '\n').slice(0, f.type === 'textarea' ? 8000 : 2000);
+  for (const f of fieldsOf(t)) fields[f.key] = String(body?.fields?.[f.key] ?? '').replace(/\r\n?/g, '\n').slice(0, f.type === 'textarea' ? 8000 : 2000);
   const tables = {};
   t.blocks.forEach((b, i) => {
     if (b.type !== 'table') return;
@@ -167,7 +205,8 @@ function cleanInput(t, body) {
 // Monta o documento resolvido (estrutura neutra: a prévia HTML e o .docx saem dela). warnings = lista de mensagens.
 function render(t, ctx, input) {
   const values = { ...projectValues(ctx) };
-  for (const f of t.fields) values[`doc.${f.key}`] = String(input.fields[f.key] ?? '').trim();
+  const all = fieldsOf(t);
+  for (const f of all) values[`doc.${f.key}`] = String(input.fields[f.key] ?? '').trim();
   const missing = new Set(); const unknown = new Set();
   const R = (text) => { const r = M.renderText(text, values); r.missing.forEach((k) => missing.add(k)); r.unknown.forEach((k) => unknown.add(k)); return r.text; };
   const blocks = t.blocks.map((b, i) => {
@@ -181,7 +220,7 @@ function render(t, ctx, input) {
     const rows = input.tables[i] || b.rows;
     return { type: b.type, columns: b.columns.map(R), rows: rows.map((r) => r.map(R)) };
   });
-  const blank = t.fields.filter((f) => !values[`doc.${f.key}`]).map((f) => f.label);
+  const blank = all.filter((f) => !values[`doc.${f.key}`]).map((f) => f.label);
   const warnings = [...[...missing].map((k) => missMsg(k, ctx)), ...[...unknown].map((k) => `Variável desconhecida mantida no texto: {{${k}}}.`)];
   if (blank.length) warnings.push(`Campos em branco: ${blank.join(', ')}.`);
   return { blocks, warnings, fileName: fileNameFor(R(t.fileName), t.name) };
@@ -292,6 +331,6 @@ function defaultTemplates(data) {
 }
 
 module.exports = {
-  BLOCK_TYPES, FIELD_TYPES, MAX_GENERATIONS, publicVariables, cleanTemplate, templateUsage, buildForm, cleanInput, render, previewHtml, fileNameFor,
+  BLOCK_TYPES, FIELD_TYPES, MAX_GENERATIONS, publicVariables, cleanTemplate, autoFields, fieldsOf, templateUsage, buildForm, cleanInput, render, previewHtml, fileNameFor,
   generationRecord, pushGeneration, defaultTemplates, references,
 };

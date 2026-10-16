@@ -54,9 +54,9 @@ const readme = (folder, version) => [
 ].join('\r\n');
 
 // Publica a versão instalada em appDir no canal. version/electron/schemaVersion = da instalação que está sendo publicada.
-// Assina com a chave da pasta do canal (senha). Pasta sem chave → 409 KEY_MISSING; com createKey: true, cria a chave com essa senha.
+// Assina com a chave da pasta do canal (senha). Pasta inacessível → CHANNEL_NOT_FOUND; pasta sem chave → 409 KEY_MISSING; com createKey: true, cria a chave com essa senha.
 async function publishApp({ appDir, channelDir, version, electron, schemaVersion, notes = '', password, createKey = false, now = new Date() }) {
-  if (!channelDir || !fs.existsSync(channelDir)) throw fail('CHANNEL_MISSING', 'Escolha a pasta de publicação (canal) antes de publicar.');
+  C.requireChannelDir(channelDir); // pasta inacessível ≠ pasta sem chave (CHANNEL_NOT_FOUND antes de olhar a chave)
   const resourcesDir = path.join(appDir, 'resources');
   if (!fs.existsSync(path.join(resourcesDir, 'app.asar'))) throw fail('NOT_PACKAGED', 'Não há aplicativo gerado para publicar (falta resources\\app.asar). Gere o aplicativo antes (npm run build:desktop).');
   if (!C.parseVersion(version)) throw fail('BAD_VERSION', `Versão inválida: ${version}`);
@@ -131,7 +131,7 @@ function checkApp({ channelDir, lay = layout(), appVersion, electron }) {
 // Passa a confiar na chave da pasta do canal (a senha prova quem é o dono da chave). Só a parte pública é gravada na instalação.
 function trustChannelKey({ channelDir, lay = layout(), password }) {
   if (!lay.packaged) throw fail('NOT_PACKAGED', 'Confiar na chave só no aplicativo instalado.');
-  if (!channelDir || !fs.existsSync(channelDir)) throw fail('CHANNEL_MISSING', 'Escolha a pasta de publicação.');
+  C.requireChannelDir(channelDir, 'Escolha a pasta de publicação.');
   const keys = C.unlockChannelKey(channelDir, password);
   C.writeAtomic(path.join(lay.resourcesDir, C.PUBKEY_FILE), keys.pubPem);
   return { keyId: keys.keyId };

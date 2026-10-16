@@ -29,6 +29,15 @@ const MIN_PASSWORD = 8;
 const TAR = path.join(SYS, 'System32', 'tar.exe'); // bsdtar do Windows 10/11: cria e extrai ZIP sem dependências
 
 const fail = (code, message, status = 400) => Object.assign(new Error(message), { code, status });
+// Pasta do canal informada mas inacessível (Google Drive fechado, unidade G: não montada, caminho errado) é diferente de "pasta sem chave":
+// sem esta conferência, o aviso de chave ausente levaria a criar outra chave e todas as instalações teriam de confiar nela de novo.
+const channelNotFound = (dir) => fail('CHANNEL_NOT_FOUND', `Pasta de publicação não encontrada: ${dir}. Ela está sincronizada/conectada (ex.: Google Drive aberto)?`);
+function requireChannelDir(dir, emptyMessage = 'Escolha a pasta de publicação (canal) antes de publicar.') {
+  if (!dir) throw fail('CHANNEL_MISSING', emptyMessage);
+  let st = null;
+  try { st = fs.statSync(dir); } catch { /* não existe ou inacessível */ }
+  if (!st || !st.isDirectory()) throw channelNotFound(dir);
+}
 
 // ---------- versões (semver x.y.z[-pré]) ----------
 function parseVersion(v) {
@@ -136,6 +145,7 @@ function channelKeyInfo(dir) {
 }
 // Cria a chave da pasta (só se ainda não existir). A senha nunca é guardada; sem ela ninguém publica nem troca a confiança.
 function createChannelKey(dir, password, now = new Date()) {
+  requireChannelDir(dir); // nunca cria a pasta (writeAtomic criaria): chave nova só numa pasta de canal que já existe
   if (readKeyFile(dir)) throw fail('KEY_EXISTS', 'A pasta de publicação já tem uma chave de publicação.', 409);
   if (String(password ?? '').length < MIN_PASSWORD) throw fail('KEY_PASSWORD_WEAK', `A senha da chave de publicação precisa ter pelo menos ${MIN_PASSWORD} caracteres.`);
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
@@ -176,6 +186,6 @@ function verify(obj, signature, pubPem) {
 }
 
 module.exports = {
-  CHANNEL_FILE, FORMAT, PUBKEY_FILE, TAR, fail, parseVersion, compareVersions, sha256File, writeAtomic, copyAtomic, channelPath,
+  CHANNEL_FILE, FORMAT, PUBKEY_FILE, TAR, fail, requireChannelDir, parseVersion, compareVersions, sha256File, writeAtomic, copyAtomic, channelPath,
   zipEntries, unzipTo, readChannel, writeChannel, canonical, keyIdOf, KEY_FILE, readKeyFile, channelKeyInfo, createChannelKey, unlockChannelKey, sign, verify,
 };

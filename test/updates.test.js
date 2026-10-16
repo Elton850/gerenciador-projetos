@@ -45,8 +45,31 @@ test('versões: comparação semver', () => {
   assert.throws(() => C.compareVersions('x', '1.0.0'), { code: 'BAD_VERSION' });
 });
 
+test('publicar: pasta do canal inacessível (Drive fechado) não é "pasta sem chave" e nunca ganha chave nova', async () => {
+  const sumida = path.join(tmp, 'drive-desconectado', 'GerenciadorProjetos-canal');
+  const base = { appDir: publisher.appDir, channelDir: sumida, version: '1.1.0', electron: ELECTRON, schemaVersion: 1, password: SENHA };
+  await assert.rejects(U.publishApp(base), { code: 'CHANNEL_NOT_FOUND', message: /Pasta de publicação não encontrada: .*drive-desconectado.*sincronizada\/conectada/ });
+  await assert.rejects(U.publishApp({ ...base, createKey: true }), { code: 'CHANNEL_NOT_FOUND' }, 'createKey não cria pasta nem chave');
+  assert.throws(() => C.createChannelKey(sumida, SENHA), { code: 'CHANNEL_NOT_FOUND' });
+  const arquivo = path.join(tmp, 'canal-e-arquivo.txt');
+  fs.writeFileSync(arquivo, 'não é pasta');
+  assert.throws(() => C.requireChannelDir(arquivo), { code: 'CHANNEL_NOT_FOUND' });
+  // comando npm run publicar: falha antes de pedir senha ou gerar o app, sem sugerir --nova-chave
+  const env = { ...process.env }; delete env.GP_CHAVE_SENHA;
+  for (const extra of [[], ['--nova-chave']]) {
+    let r;
+    try { execFileSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'publicar.js'), '--canal', sumida, '--sem-build', ...extra], { env, stdio: 'pipe', encoding: 'utf8' }); }
+    catch (e) { r = e; }
+    assert.ok(r, `publicar ${extra.join(' ')} devia falhar`);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /Pasta de publicação não encontrada/);
+    assert.doesNotMatch(r.stderr, /ainda não tem chave|acrescente --nova-chave/);
+  }
+  assert.equal(fs.existsSync(path.join(tmp, 'drive-desconectado')), false, 'nada foi criado no caminho do canal');
+});
+
 test('publicar: pacote de atualização (só o código) + pacote de instalação, assinados; versão repetida ou menor é recusada', async () => {
-  await assert.rejects(U.publishApp({ appDir: publisher.appDir, channelDir: path.join(tmp, 'nao-existe'), version: '1.1.0', electron: ELECTRON, schemaVersion: 1, password: SENHA }), { code: 'CHANNEL_MISSING' });
+  await assert.rejects(U.publishApp({ appDir: publisher.appDir, channelDir: '', version: '1.1.0', electron: ELECTRON, schemaVersion: 1, password: SENHA }), { code: 'CHANNEL_MISSING' });
   await assert.rejects(U.publishApp({ appDir: publisher.appDir, channelDir: CANAL, version: '1.1.0', electron: ELECTRON, schemaVersion: 1, password: SENHA }), { code: 'KEY_MISSING' }, 'pasta sem chave: só cria pedindo');
   await assert.rejects(U.publishApp({ appDir: publisher.appDir, channelDir: CANAL, version: '1.1.0', electron: ELECTRON, schemaVersion: 1, password: 'curta', createKey: true }), { code: 'KEY_PASSWORD_WEAK' });
   const e = await U.publishApp({ appDir: publisher.appDir, channelDir: CANAL, version: '1.1.0', electron: ELECTRON, schemaVersion: 1, notes: 'Tela nova', password: SENHA, createKey: true });

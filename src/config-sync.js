@@ -72,7 +72,7 @@ async function collect(dataDir, state) {
 }
 
 async function publishConfigs({ dataDir, state, channelDir, appVersion, schemaVersion, now = new Date() }) {
-  if (!channelDir || !fs.existsSync(channelDir)) throw fail('CHANNEL_MISSING', 'Escolha a pasta de publicação (canal) antes de publicar.');
+  C.requireChannelDir(channelDir);
   const ch = C.readChannel(channelDir) || {};
   const revision = (ch.configs?.revision || 0) + 1;
   const { items, settings, files, hashes } = await collect(dataDir, state);

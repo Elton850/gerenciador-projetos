@@ -3,7 +3,7 @@
 //   1. aumente a versão:      npm version patch   (ou minor / major)
 //   2. publique:              npm run publicar -- --canal "G:\Meu Drive\GerenciadorProjetos-canal" --notas "o que mudou"
 // Gera o aplicativo (npm run build:desktop; feche o app antes), assina com a chave da pasta do canal (pede a senha) e grava no canal o
-// pacote de atualização e o de instalação. Opções: --sem-build (publica o app\ já gerado) · --nova-chave (a pasta ainda não tem chave:
+// pacote de atualização e o de instalação. Opções: --sem-build (publica o app\ já gerado) · --nova-chave (a pasta EXISTE e ainda não tem chave:
 // cria uma com a senha informada; as instalações passam a confiar nela pela tela, com a mesma senha). Senha também por GP_CHAVE_SENHA.
 // A mesma publicação existe na tela: Configurações → Atualizações → Publicar esta versão.
 'use strict';
@@ -46,6 +46,7 @@ function ask(question) {
   if (!canal) throw new Error('Informe a pasta do canal: npm run publicar -- --canal "<pasta>" --notas "<o que mudou>"');
   const channelDir = path.resolve(canal);
   const C = require('../src/channel');
+  C.requireChannelDir(channelDir); // Drive fechado / unidade não montada: não é "pasta sem chave" (e --nova-chave não cria pasta nem chave)
   const hasKey = !!C.readKeyFile(channelDir);
   const createKey = args.includes('--nova-chave');
   if (!hasKey && !createKey) throw Object.assign(new Error('A pasta de publicação ainda não tem chave de publicação.'), { code: 'KEY_MISSING' });
@@ -67,6 +68,7 @@ function ask(question) {
   console.log(`  instalação:  ${entry.install.file} (${(entry.install.size / 1048576).toFixed(1)} MB)`);
 })().catch((e) => {
   console.error(`Falha ao publicar: ${e.message}`);
+  if (e.code === 'CHANNEL_NOT_FOUND') console.error('Nada foi publicado. Abra o Google Drive para computador (ou conecte a unidade) e rode o comando de novo; não use --nova-chave.');
   if (e.code === 'KEY_MISSING') console.error('Para criar a chave desta pasta (uma vez): acrescente --nova-chave ao comando.');
   process.exit(1);
 });

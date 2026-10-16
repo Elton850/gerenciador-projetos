@@ -3,11 +3,15 @@
 // Fonte única: os prazos de cada projeto (project.milestones). Os itens (status, dias, cor, lembrete) vêm calculados pelo servidor
 // (src/schedule.js: GET /api/schedule, /api/schedule/upcoming e publicProject.scheduleItems) — aqui só desenho e navegação.
 // Prazo com início = PERÍODO (barra); sem início = MARCO (◆). Editar, concluir e lembrete usam as rotas de sempre dos prazos.
+// Lembretes avulsos (pontuais/recorrentes) entram como ocorrências por dia (kind 'reminder', 🔔 + horário), calculadas no servidor
+// (src/reminders.js `reminderItems`); concluir/editar usam as rotas de sempre dos lembretes (/api/reminders*).
 
 const SCH_STATUS = {
   ok: { label: 'Normal', glyph: '' }, running: { label: 'Em andamento', glyph: '▸' }, soon: { label: 'Próximo do prazo', glyph: '◔' },
   today: { label: 'Vence hoje', glyph: '●' }, overdue: { label: 'Atrasado', glyph: '⚠' }, done: { label: 'Concluído', glyph: '✓' },
+  past: { label: 'Passou', glyph: '·' }, // ocorrência de lembrete que ficou para trás sem concluir (perdidas não acumulam)
 };
+const schIsRem = (x) => x.kind === 'reminder';
 const SCH_COLORS = ['ciano', 'roxo', 'verde', 'laranja', 'rosa', 'lima', 'azul', 'coral']; // chaves (a cor de cada uma fica no CSS)
 const SCH_MONTHS = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
 const SCH_WD = ['SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SÁB', 'DOM'];
@@ -27,13 +31,14 @@ const schWeekend = (s) => sdDow(s) >= 5;
 
 // Identificação do projeto: cor + iniciais (nunca só a cor).
 const schBadge = (x, cls = '') => h('span', { class: `sch-badge pc-${x.color}${cls ? ` ${cls}` : ''}`, 'aria-hidden': 'true' }, x.initials);
-function schRange(x) { return x.kind === 'period' ? `${fmtDate(x.start)} → ${fmtDate(x.end)}` : fmtDate(x.end); }
+function schRange(x) { return x.kind === 'period' ? `${fmtDate(x.start)} → ${fmtDate(x.end)}` : schIsRem(x) ? `${fmtDate(x.end)} às ${x.times.join(', ')}` : fmtDate(x.end); }
 function schReminderText(x) {
   if (!x.reminder) return '';
   return x.reminder.lead ? `${plural(x.reminder.lead, 'dia', 'dias')} antes` : 'no dia';
 }
 // Dica ao passar o mouse (complementa; o clique abre os detalhes completos).
 function schTip(x) {
+  if (schIsRem(x)) return [x.projectName, `🔔 ${x.title}`, schRange(x), x.repeatText, `Status: ${SCH_STATUS[x.status].label}`].filter(Boolean).join('\n');
   return [x.projectName, x.title, schRange(x), `Status: ${SCH_STATUS[x.status].label}${x.done ? '' : x.days != null ? ` (${daysText(x.days)})` : ''}`,
     x.reminder ? `🔔 Lembrete ${schReminderText(x)} · em ${fmtDate(x.reminder.notifyDate)} às ${x.reminder.time}${x.reminder.dismissed ? ' (aviso dispensado)' : ''}` : null,
     schProject(x)?.cancelled ? 'Projeto cancelado: somente leitura' : null].filter(Boolean).join('\n');
@@ -41,11 +46,13 @@ function schTip(x) {
 function schItemEl(x, { onItem, segment } = {}) {
   const st = SCH_STATUS[x.status];
   const deadline = x.kind === 'deadline';
-  const cls = ['sch-item', deadline ? 'is-deadline' : 'is-period', `pc-${x.color}`, `st-${x.status}`, segment?.contL ? 'cont-l' : '', segment?.contR ? 'cont-r' : ''].filter(Boolean).join(' ');
+  const rem = schIsRem(x);
+  const cls = ['sch-item', rem ? 'is-reminder' : deadline ? 'is-deadline' : 'is-period', `pc-${x.color}`, `st-${x.status}`, segment?.contL ? 'cont-l' : '', segment?.contR ? 'cont-r' : ''].filter(Boolean).join(' ');
   return h('button', { type: 'button', class: cls, title: schTip(x), 'aria-label': `${x.projectName}: ${x.title}, ${schRange(x)}, ${st.label}${x.reminder ? ', com lembrete' : ''}`,
     style: segment ? `grid-column:${segment.c0 + 1} / ${segment.c1 + 2};grid-row:${segment.lane + 1}` : null, onclick: (e) => { e.stopPropagation(); onItem && onItem(x); } },
   deadline ? h('span', { class: 'sch-diamond', 'aria-hidden': 'true' }, '◆') : null,
-  h('span', { class: 'sch-ini', 'aria-hidden': 'true' }, x.initials),
+  rem ? h('span', { class: 'sch-rem-time', 'aria-hidden': 'true' }, h('span', { class: 'sch-rem-bell' }, '🔔'), h('span', { class: 'sch-rem-hhmm' }, x.times[0])) : null,
+  x.initials ? h('span', { class: 'sch-ini', 'aria-hidden': 'true' }, x.initials) : null,
   st.glyph ? h('span', { class: 'sch-glyph', 'aria-hidden': 'true' }, st.glyph) : null,
   h('span', { class: 'sch-title' }, x.title),
   x.reminder && !x.reminder.dismissed ? h('span', { class: 'sch-bell', 'aria-hidden': 'true' }, '🔔') : null);
@@ -57,11 +64,13 @@ function schLanes(items, days, { labelDays = 1 } = {}) {
   const first = days[0]; const last = days[days.length - 1];
   const segs = items.filter((x) => x.start <= last && x.end >= first).map((x) => {
     const c0 = Math.max(0, sdDiff(first, x.start));
-    const c1 = Math.min(days.length - 1, x.kind === 'deadline' ? c0 + labelDays - 1 : sdDiff(first, x.end));
+    const c1 = Math.min(days.length - 1, x.kind === 'deadline' ? c0 + labelDays - 1 : sdDiff(first, x.end)); // lembrete: 1 dia
     return { x, c0, c1, contL: x.start < first, contR: x.end > last };
   })
     // pela data real de início (não a recortada): uma barra que vem da semana anterior fica na mesma faixa de cima
-    .sort((a, b) => a.x.start.localeCompare(b.x.start) || b.x.end.localeCompare(a.x.end) || a.x.projectName.localeCompare(b.x.projectName, 'pt-BR'));
+    // (no mesmo dia: prazos antes dos lembretes; lembretes pelo horário)
+    .sort((a, b) => a.x.start.localeCompare(b.x.start) || b.x.end.localeCompare(a.x.end) || Number(schIsRem(a.x)) - Number(schIsRem(b.x))
+      || (schIsRem(a.x) && schIsRem(b.x) ? a.x.times[0].localeCompare(b.x.times[0]) : 0) || a.x.projectName.localeCompare(b.x.projectName, 'pt-BR'));
   const lanes = [];
   for (const s of segs) {
     let i = lanes.findIndex((occ) => occ.every(([a, b]) => s.c1 < a || s.c0 > b));
@@ -115,10 +124,11 @@ function schAgenda(items, today, { onItem }) {
 function schRowEl(x, { onItem, compact } = {}) {
   const st = SCH_STATUS[x.status];
   return h('button', { type: 'button', class: `sch-row st-${x.status}`, title: schTip(x), onclick: () => onItem && onItem(x) },
-    h('span', { class: 'sch-kind', 'aria-hidden': 'true' }, x.kind === 'period' ? '━' : '◆'), schBadge(x),
+    h('span', { class: 'sch-kind', 'aria-hidden': 'true' }, x.kind === 'period' ? '━' : schIsRem(x) ? '🔔' : '◆'), x.initials ? schBadge(x) : null,
     h('span', { class: 'sch-row-main' }, h('span', { class: 'sch-row-title' }, x.title), h('span', { class: 'sch-row-sub' }, compact ? x.projectName : `${x.projectName} · ${schRange(x)}`)),
     x.reminder && !x.reminder.dismissed ? h('span', { class: 'sch-bell', title: `Lembrete ${schReminderText(x)}` }, '🔔') : null,
-    h('span', { class: `sch-st st-${x.status}` }, st.glyph ? `${st.glyph} ` : '', x.done ? st.label : x.status === 'running' ? `${st.label} · ${daysText(x.days)}` : daysText(x.days)));
+    h('span', { class: `sch-st st-${x.status}` }, st.glyph ? `${st.glyph} ` : '', schIsRem(x) ? (['done', 'past', 'overdue'].includes(x.status) ? st.label : x.times.join(', '))
+      : x.done ? st.label : x.status === 'running' ? `${st.label} · ${daysText(x.days)}` : daysText(x.days)));
 }
 
 // Linha do tempo: projetos em linhas, dias em colunas; períodos = barras, marcos = ◆; linha de hoje e fins de semana discretos.
@@ -170,7 +180,37 @@ async function schSetReminder(x, lead) {
   toast(lead ? `Lembrete criado: ${plural(lead, 'dia', 'dias')} antes do prazo.` : 'Lembrete criado: no dia do prazo.', 'ok');
 }
 
+// Detalhe de uma ocorrência de lembrete avulso: concluir só a pendente (rota de sempre), editar (formulário do lembrete), abrir Lembretes.
+function schReminderDetail(x, { onChanged } = {}) {
+  const st = SCH_STATUS[x.status];
+  const p = x.projectId ? schProject(x) : null;
+  const done = async (msg) => { md.close(); if (msg) toast(msg, 'ok'); await remRefresh(); if (onChanged) onChanged(); else render(); };
+  const md = openModal({
+    title: `🔔 ${x.title}`, size: 'md',
+    body: [h('div', { class: 'sch-detail' },
+      h('div', { class: 'sch-det-proj' }, x.initials ? schBadge(x) : null, h('strong', null, x.projectName), x.priority === 'important' ? h('span', { class: 'pill overdue' }, '! Importante') : null,
+        h('span', { class: `sch-st st-${x.status}` }, st.glyph ? `${st.glyph} ` : '', x.status === 'today' ? 'Hoje' : st.label)),
+      x.note ? h('div', { class: 'sch-det-note' }, x.note) : null,
+      h('dl', { class: 'sch-det-grid' },
+        h('dt', null, 'Tipo'), h('dd', null, '🔔 Lembrete'),
+        h('dt', null, 'Data'), h('dd', null, fmtDate(x.start)),
+        h('dt', null, x.times.length > 1 ? 'Horários' : 'Horário'), h('dd', null, x.times.join(', ')),
+        h('dt', null, 'Repetição'), h('dd', null, x.repeatText)),
+      x.pending ? null : h('div', { class: 'hint' }, x.status === 'done' ? 'Ocorrência já concluída.' : x.status === 'past' ? 'Esta data ficou para trás (ocorrências perdidas não se acumulam).' : 'Ocorrência futura: só a pendente pode ser concluída (em Lembretes ou aqui, quando chegar).'))],
+    footer: [
+      h('button', { class: 'btn', onclick: () => { md.close(); location.hash = '#/reminders'; } }, 'Abrir Lembretes'),
+      p ? h('button', { class: 'btn', onclick: () => { md.close(); location.hash = `#/project/${p.id}`; } }, 'Abrir projeto') : null,
+      h('button', { class: 'btn', onclick: () => { md.close(); reminderForm(x.edit, done); } }, 'Editar'),
+      x.pending && x.status !== 'done' ? h('button', { class: 'btn primary', onclick: (e) => busy(e.target, async () => {
+        const r = await api('POST', `/api/reminders/${encodeURIComponent(x.remKey)}/complete`, {});
+        await done(r.finished ? 'Lembrete concluído.' : `Ocorrência concluída. Próxima: ${fmtDate(r.next)}${r.nextAt ? ` às ${r.nextAt.slice(11)}` : ''}.`);
+      }) }, x.edit.repeat || x.times.length > 1 ? 'Concluir esta' : 'Concluir') : null,
+    ].filter(Boolean),
+  });
+}
+
 function schDetail(x0, { onChanged } = {}) {
+  if (schIsRem(x0)) return schReminderDetail(x0, { onChanged });
   const x = x0;
   const changed = () => { md.close(); if (onChanged) onChanged(); else render(); };
   const run = (btn, fn) => busy(btn, async () => { await fn(); await changed(); });
@@ -211,10 +251,12 @@ function schDetail(x0, { onChanged } = {}) {
 async function refreshQuiet() { try { const s = await api('GET', '/api/state'); Object.assign(state, s); } catch { /* a próxima recarga corrige */ } }
 
 // Itens de um dia (o “+N” e o clique no dia).
-function schDayList(day, items, { onItem }) {
+function schDayList(day, items, { onItem, projectId = null, onChanged } = {}) {
   const list = items.filter((x) => x.start <= day && x.end >= day);
+  const after = async (msg) => { if (msg) toast(msg, 'ok'); await remRefresh(); if (onChanged) onChanged(); else render(); };
   const md = openModal({ title: `${fmtDate(day)}${day === state.today ? ' · hoje' : ''}`, size: 'md',
-    body: list.length ? h('div', { class: 'sch-list' }, list.map((x) => schRowEl(x, { onItem: (y) => { md.close(); onItem(y); } }))) : h('div', { class: 'empty' }, 'Nada neste dia.') });
+    body: list.length ? h('div', { class: 'sch-list' }, list.map((x) => schRowEl(x, { onItem: (y) => { md.close(); onItem(y); } }))) : h('div', { class: 'empty' }, 'Nada neste dia.'),
+    footer: [h('button', { class: 'btn', onclick: () => { md.close(); reminderForm(null, after, { date: day, projectId }); } }, '+ Lembrete neste dia')] });
 }
 
 // Sugestão opcional de lembrete ao criar um prazo (nunca cria sozinho; dá para desligar).
@@ -275,7 +317,7 @@ function schBody(v, items, today, opts) {
 
 // ---------- Central de Cronogramas (#/schedule) ----------
 const SCH = { view: uiPref('schView', 'calendar'), mode: uiPref('schMode', 'month'), span: uiPref('schSpan', 'month'), anchor: null,
-  f: { project: '', person: '', status: '', kind: '', quick: '', hideDone: uiPref('schHideDone', false) }, seq: 0 };
+  f: { project: '', person: '', status: '', kind: '', quick: '', hideDone: uiPref('schHideDone', false) }, showRem: uiPref('schShowRem', true), seq: 0 };
 
 async function renderSchedule(main) {
   if (!SCH.anchor) SCH.anchor = state.today;
@@ -283,6 +325,7 @@ async function renderSchedule(main) {
   const vis = schVisible(SCH);
   const q = new URLSearchParams({ from: vis.from, to: vis.to });
   for (const [k, val] of Object.entries(SCH.f)) if (val) q.set(k, val === true ? '1' : val);
+  if (!SCH.showRem) q.set('reminders', '0');
   const pq = new URLSearchParams(); if (SCH.f.project) pq.set('project', SCH.f.project); if (SCH.f.person) pq.set('person', SCH.f.person);
   const page = h('div', { class: 'page sch-page' });
   main.append(page);
@@ -296,11 +339,12 @@ async function renderSchedule(main) {
   const sel = (label, val, opts, onchange) => h('label', { class: 'sch-filter' }, h('span', null, label),
     h('select', { onchange: (e) => onchange(e.target.value) }, opts.map(([v, l]) => h('option', { value: v, selected: v === val }, l))));
   const hide = h('input', { type: 'checkbox', checked: SCH.f.hideDone, onchange: (e) => setF({ hideDone: e.target.checked }) });
+  const showRem = h('input', { type: 'checkbox', checked: SCH.showRem, onchange: (e) => { setUiPref('schShowRem', e.target.checked); set({ showRem: e.target.checked }); } });
   const without = d.projects.filter((p) => !p.hasSchedule);
   const quick = [['', 'Todos'], ['today', 'Hoje'], ['week', 'Esta semana'], ['next30', 'Próximos 30 dias'], ['overdue', 'Atrasados']];
 
   page.append(
-    h('div', { class: 'page-head' }, h('div', { class: 'grow' }, h('h1', null, 'Cronogramas'), h('div', { class: 'muted' }, 'Prazos e períodos de todos os projetos, no mesmo lugar. Os dados são os do cronograma de cada projeto.')),
+    h('div', { class: 'page-head' }, h('div', { class: 'grow' }, h('h1', null, 'Cronogramas'), h('div', { class: 'muted' }, 'Prazos, períodos e lembretes de todos os projetos, no mesmo lugar. Os dados são os do cronograma de cada projeto e os da página Lembretes.')),
       schSeg([['calendar', 'Calendário'], ['timeline', 'Linha do tempo']], SCH.view, (v) => { setUiPref('schView', v); set({ view: v }); }, 'Visualização')),
     h('div', { class: 'sch-toolbar' },
       schNav(vis.label, { prev: () => set({ anchor: schShift(SCH, -1) }), next: () => set({ anchor: schShift(SCH, 1) }), today: () => set({ anchor: state.today }) }),
@@ -312,13 +356,14 @@ async function renderSchedule(main) {
       sel('Projeto', SCH.f.project, [['', 'Todos'], ...d.projects.map((p) => [p.id, p.name])], (v) => setF({ project: v })),
       d.people.length ? sel('Responsável', SCH.f.person, [['', 'Todos'], ...d.people.map((p) => [p.id, p.name])], (v) => setF({ person: v })) : null,
       sel('Status', SCH.f.status, [['', 'Todos'], ...Object.entries(SCH_STATUS).map(([k, s]) => [k, s.label])], (v) => setF({ status: v })),
-      sel('Tipo', SCH.f.kind, [['', 'Todos'], ['period', 'Períodos'], ['deadline', 'Prazos (◆)']], (v) => setF({ kind: v })),
+      sel('Tipo', SCH.f.kind, [['', 'Todos'], ['period', 'Períodos'], ['deadline', 'Prazos (◆)'], ['reminder', 'Lembretes (🔔)']], (v) => setF({ kind: v })),
       h('div', { class: 'sch-quick', role: 'group', 'aria-label': 'Atalhos' }, quick.map(([v, l]) => h('button', { type: 'button', class: `chip-btn${SCH.f.quick === v ? ' active' : ''}`, 'aria-pressed': SCH.f.quick === v ? 'true' : 'false', onclick: () => setF({ quick: v }) }, l))),
-      h('label', { class: 'check small' }, hide, ' Ocultar concluídos')),
+      h('label', { class: 'check small' }, hide, ' Ocultar concluídos'),
+      h('label', { class: 'check small', title: 'Lembretes avulsos (pontuais e recorrentes) da página Lembretes' }, showRem, ' Lembretes')),
     h('div', { class: 'sch-layout' },
-      h('div', { class: 'sch-main' }, schBody(SCH, d.items, d.today, { onItem, onDay: (day) => schDayList(day, d.items, { onItem }), projects: d.projects }),
+      h('div', { class: 'sch-main' }, schBody(SCH, d.items, d.today, { onItem, onDay: (day) => schDayList(day, d.items, { onItem, projectId: SCH.f.project || null, onChanged: redraw }), projects: d.projects }),
         h('div', { class: 'sch-legend' },
-          h('span', { class: 'sch-leg' }, h('span', { class: 'sch-leg-bar' }), 'Período'), h('span', { class: 'sch-leg' }, '◆ Prazo'), h('span', { class: 'sch-leg' }, '🔔 Com lembrete'),
+          h('span', { class: 'sch-leg' }, h('span', { class: 'sch-leg-bar' }), 'Período'), h('span', { class: 'sch-leg' }, '◆ Prazo'), h('span', { class: 'sch-leg' }, '🔔 Prazo com lembrete'), h('span', { class: 'sch-leg' }, h('span', { class: 'sch-rem-time' }, '🔔09:00'), 'Lembrete'),
           Object.entries(SCH_STATUS).filter(([k]) => SCH_STATUS[k].glyph).map(([, s]) => h('span', { class: 'sch-leg' }, `${s.glyph} ${s.label}`)),
           without.length ? h('span', { class: 'sch-leg muted', title: without.map((p) => p.name).join('\n') }, `${plural(without.length, 'projeto sem cronograma', 'projetos sem cronograma')}`) : null)),
       schUpcoming(up, { onItem })));
@@ -344,16 +389,23 @@ const SCH_PROJ = {}; // por projeto: visão e período visível (só nesta sess�
 function scheduleViews(p, listEl) {
   const v = SCH_PROJ[p.id] || (SCH_PROJ[p.id] = { view: uiPref('schProjView', 'list'), mode: 'month', span: 'month', anchor: state.today });
   const box = h('div', { class: 'sch-proj' });
+  let rem = { key: '', items: [] }; // ocorrências dos lembretes deste projeto no intervalo visível
   const draw = () => {
-    const items = p.scheduleItems || [];
-    const onItem = (x) => schDetail(x, { onChanged: () => render() });
     const vis = schVisible({ ...v, view: v.view === 'timeline' ? 'timeline' : 'calendar' });
+    const want = `${vis.from}|${vis.to}`;
+    if (v.view !== 'list' && rem.key !== want) {
+      rem = { key: want, items: [] };
+      api('GET', `/api/schedule?${new URLSearchParams({ from: vis.from, to: vis.to, project: p.id, kind: 'reminder' })}`)
+        .then((d) => { if (rem.key === want && d.items.length) { rem.items = d.items; draw(); } }).catch(() => { /* sem lembretes na visão; o resto continua */ });
+    }
+    const items = [...(p.scheduleItems || []), ...(v.view === 'list' ? [] : rem.items)];
+    const onItem = (x) => schDetail(x, { onChanged: () => render() });
     box.replaceChildren(
       h('div', { class: 'sch-toolbar' },
         schSeg([['list', 'Lista'], ['calendar', 'Calendário'], ['timeline', 'Linha do tempo']], v.view, (x) => { v.view = x; setUiPref('schProjView', x); draw(); }, 'Visualização do cronograma'),
         v.view === 'list' ? null : schNav(vis.label, { prev: () => { v.anchor = schShift({ ...v, view: v.view === 'timeline' ? 'timeline' : 'calendar' }, -1); draw(); }, next: () => { v.anchor = schShift({ ...v, view: v.view === 'timeline' ? 'timeline' : 'calendar' }, 1); draw(); }, today: () => { v.anchor = state.today; draw(); } })),
       v.view === 'list' ? listEl
-        : items.length ? schBody({ ...v, view: v.view === 'timeline' ? 'timeline' : 'calendar' }, items, state.today, { onItem, onDay: (day) => schDayList(day, items, { onItem }), projects: [] })
+        : items.length ? schBody({ ...v, view: v.view === 'timeline' ? 'timeline' : 'calendar' }, items, state.today, { onItem, onDay: (day) => schDayList(day, items, { onItem, projectId: p.id }), projects: [] })
           : h('div', { class: 'empty' }, 'Este projeto não tem cronograma — e tudo bem.'));
   };
   draw();

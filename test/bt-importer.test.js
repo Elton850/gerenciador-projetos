@@ -219,7 +219,7 @@ test('injection em nome de tabela/coluna vindo do arquivo: sempre entre colchete
   assert.equal(n, 1);
   assert.equal(sql[0], "CREATE TABLE [dbo].[T]]; DROP TABLE x--] ([c]]1] NVARCHAR(MAX) NULL, [c'2] NVARCHAR(MAX) NULL)");
   assert.equal(sql[1], 'ALTER TABLE [dbo].[T]]; DROP TABLE x--] ADD [novo]]] NVARCHAR(MAX) NULL');
-  assert.equal(sql[2], "INSERT INTO [dbo].[T]]; DROP TABLE x--] ([c]]1], [c'2]) VALUES (@p0000, @p0001)");
+  assert.equal(sql[2], "INSERT INTO [dbo].[T]]; DROP TABLE x--] ([c]]1], [c'2]) VALUES (@bt0, @bt1)");
   assert.deepEqual(inputs, ["'); DROP TABLE y;--", null], 'valor do arquivo nunca entra no texto do SQL');
   assert.throws(() => S.assertGenerated('insert', 'INSERT INTO [dbo].[t] ([a]) VALUES (@p0); DROP TABLE x'), /trava de segurança/);
   assert.throws(() => S.assertGenerated('create', 'CREATE TABLE [dbo].[t] ([a] INT)'), /trava de segurança/);

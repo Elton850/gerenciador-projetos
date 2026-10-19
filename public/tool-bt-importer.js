@@ -25,9 +25,9 @@
       if (BT.dir === null) BT.recursive = s.settings.recursive;
     } catch (e) { return fail(e); }
     if (route().name !== 'tools') return;
-    const body = h('div', { class: 'stack', style: 'gap:14px' });
+    const body = h('div', { class: 'bt-flow' });
     const tabs = [['import', 'Importar'], ['history', 'Histórico'], ['settings', 'Configurações']];
-    main.replaceChildren(h('div', { class: 'page' },
+    main.replaceChildren(h('div', { class: 'page bt-page' },
       h('div', { class: 'page-head' }, h('div', { class: 'grow' },
         h('a', { class: 'link-quiet small', href: '#/tools' }, '← Ferramentas Auxiliares'),
         h('h1', null, tool.name),
@@ -40,26 +40,37 @@
   }
 
   // ---------- Importar ----------
+  // Peças visuais pequenas (classes em styles.css, bloco "Importador BT").
+  const tag = (kind, text, title) => h('span', { class: `bt-tag ${kind}`, title: title || null }, text);
+  const msgs = (kind, list) => (list && list.length ? h('ul', { class: `bt-msgs ${kind}` }, list.map((m) => h('li', null, m))) : null);
+  const stat = (label, value, kind = '') => h('div', { class: `bt-stat ${kind}` }, h('span', { class: 'bt-stat-value' }, value), h('span', { class: 'bt-stat-label' }, label));
+  const bar = (pct) => h('div', { class: 'progress' }, h('div', { style: `width:${Math.max(0, Math.min(100, pct))}%` }));
+
   function renderImport(host) {
-    const sec = (n, title, ...content) => h('div', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', null, `${n}. ${title}`)), h('div', { class: 'card-body stack' }, ...content));
-    const filesHost = h('div'); const groupsHost = h('div'); const actionsHost = h('div'); const resultHost = h('div');
-    const originHint = h('div', { class: 'hint' });
+    // Seção numerada: cabeçalho (número, título, ações à direita) + corpo.
+    const sec = (n, title, { actions = null, sub = null } = {}, ...content) => h('section', { class: 'card bt-section' },
+      h('div', { class: 'bt-section-head' }, h('span', { class: 'bt-step' }, String(n)),
+        h('div', { class: 'bt-section-title' }, h('h2', null, title), sub ? h('span', { class: 'bt-sub' }, sub) : null), actions ? h('div', { class: 'bt-section-actions' }, actions) : null),
+      h('div', { class: 'bt-section-body' }, ...content));
+    const filesHost = h('div', { class: 'bt-files-host' }); const groupsHost = h('div', { class: 'bt-groups-host' }); const actionsHost = h('div', { class: 'bt-section-body' }); const resultHost = h('div');
+    const originHint = h('p', { class: 'bt-note' });
     const drawOrigin = () => { originHint.textContent = BT.dir ? `Pasta: ${BT.dir}${BT.recursive ? ' (com subpastas)' : ''} · ${plural(BT.files.length, 'arquivo .bt', 'arquivos .bt')}` : BT.files.length ? plural(BT.files.length, 'arquivo selecionado', 'arquivos selecionados') : 'Escolha um arquivo, vários arquivos (Ctrl/Shift no seletor) ou uma pasta inteira. Só arquivos .bt são considerados.'; };
     const redraw = () => { drawOrigin(); drawFiles(); drawGroups(); drawActions(); };
 
     // 1) Origem
     const recursive = h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: BT.recursive, onchange: (e) => { BT.recursive = e.target.checked; if (BT.dir) loadList({ dir: BT.dir }); } }), ' Incluir subpastas');
     // Caminho digitado/colado (como o campo "Pasta" + "Ler .bt" do app original): pasta ou um arquivo .bt.
-    const typed = h('input', { type: 'text', placeholder: 'C:\\pasta\\com\\arquivos  ou  C:\\pasta\\arquivo.bt', value: BT.dir || '', style: 'flex:1;min-width:260px', 'aria-label': 'Pasta ou arquivo .bt',
+    const typed = h('input', { type: 'text', placeholder: 'C:\\pasta\\com\\arquivos  ou  C:\\pasta\\arquivo.bt', value: BT.dir || '', 'aria-label': 'Pasta ou arquivo .bt', spellcheck: 'false',
       onkeydown: (e) => { if (e.key === 'Enter') readTyped(); } });
     const readTyped = () => { const v = typed.value.trim().replace(/^"|"$/g, ''); if (!v) return toast('Informe uma pasta ou um arquivo .bt.', 'error'); return loadList(/\.bt$/i.test(v) ? { paths: [v] } : { dir: v }); };
-    const origin = sec(1, 'Origem',
-      h('div', { class: 'inline' },
-        h('button', { class: 'btn', onclick: (e) => busy(e.currentTarget, () => pick('files')) }, 'Selecionar arquivo(s) .bt…'),
-        h('button', { class: 'btn', onclick: (e) => busy(e.currentTarget, () => pick('folder')) }, 'Selecionar pasta…'),
-        recursive,
-        BT.files.length ? h('button', { class: 'btn ghost', onclick: () => { BT.files = []; BT.dir = null; invalidate(); redraw(); } }, 'Limpar lista') : null),
-      h('div', { class: 'inline' }, typed, h('button', { class: 'btn', onclick: (e) => busy(e.currentTarget, readTyped) }, 'Ler .bt')),
+    const clearBtn = h('button', { class: 'btn ghost sm', onclick: () => { BT.files = []; BT.dir = null; typed.value = ''; invalidate(); redraw(); } }, 'Limpar lista');
+    const origin = sec(1, 'Origem', { actions: clearBtn },
+      h('div', { class: 'bt-origin' },
+        h('div', { class: 'bt-origin-pick' },
+          h('button', { class: 'btn', onclick: (e) => busy(e.currentTarget, () => pick('files')) }, 'Arquivo(s) .bt…'),
+          h('button', { class: 'btn', onclick: (e) => busy(e.currentTarget, () => pick('folder')) }, 'Pasta…'),
+          recursive),
+        h('div', { class: 'bt-origin-path' }, typed, h('button', { class: 'btn', onclick: (e) => busy(e.currentTarget, readTyped) }, 'Ler .bt'))),
       originHint);
 
     async function pick(mode) {
@@ -78,13 +89,13 @@
     }
 
     // 2) Conexão
-    const connSel = h('select', { onchange: (e) => { BT.connectionId = e.target.value; invalidate(); drawActions(); } },
+    const connSel = h('select', { 'aria-label': 'Conexão', onchange: (e) => { BT.connectionId = e.target.value; invalidate(); drawActions(); } },
       BT.conns.length ? BT.conns.map((c) => h('option', { value: c.id }, `${c.name} — ${c.envLabel} · ${c.server}${c.port ? ',' + c.port : ''} · ${c.auth === 'sql' ? `login ${c.user}` : 'Windows'}`))
         : h('option', { value: '' }, 'Nenhuma conexão cadastrada'));
     if (BT.connectionId) connSel.value = BT.connectionId;
-    const conn = sec(2, 'Conexão', connSel,
-      h('div', { class: 'hint' }, 'Usa as conexões de Configurações → Conexões (a senha fica protegida e nunca aparece aqui). O banco padrão da conexão é ignorado: cada arquivo vai para o banco de destino da lista abaixo, criado se não existir.'),
-      !BT.conns.length ? h('div', null, h('a', { href: '#/settings' }, 'Cadastrar uma conexão')) : null);
+    const conn = sec(2, 'Conexão', { sub: 'Configurações → Conexões · a senha nunca aparece aqui' },
+      h('div', { class: 'bt-conn' }, connSel, !BT.conns.length ? h('a', { class: 'btn', href: '#/settings' }, 'Cadastrar conexão') : null),
+      h('p', { class: 'bt-note' }, 'O banco padrão da conexão é ignorado: cada arquivo vai para o banco de destino da lista abaixo (criado se não existir).'));
 
     // 3) Arquivos e bancos de destino
     function groupsOf(list) {
@@ -92,72 +103,93 @@
       for (const f of list) { const k = dbKey(f.database); if (!k) continue; if (!m.has(k)) m.set(k, { database: f.database.trim(), files: [] }); m.get(k).files.push(f); }
       return m;
     }
-    function statusOf(f) {
-      const it = BT.plan?.items.find((x) => x.path === f.path);
-      if (!f.include) return h('span', { class: 'muted small' }, 'Não importar');
-      if (!f.database.trim()) return h('span', { class: 'pill overdue' }, 'Sem destino');
-      if (!it) return h('span', { class: 'muted small' }, BT.plan ? '—' : 'Pronto para validar');
-      if (it.status === 'blocked') return h('span', { class: 'pill overdue', title: it.reasons.join('\n') }, 'Problema');
-      if (it.status === 'empty') return h('span', { class: 'pill soon', title: it.warnings.join('\n') }, 'Sem dados');
-      return h('span', { class: `pill ${it.warnings.length ? 'soon' : 'ok'}`, title: it.warnings.join('\n') || null }, `Pronto · ${N(it.rows)} linha(s)`);
+    function statusOf(f, it) {
+      if (!f.include) return tag('none', 'Não importar');
+      if (!f.database.trim()) return tag('bad', 'Sem destino');
+      if (!it) return tag('none', BT.plan ? '—' : 'A validar');
+      if (it.status === 'blocked') return tag('bad', 'Problema', it.reasons.join('\n'));
+      if (it.status === 'empty') return tag('warn', 'Sem dados', it.warnings.join('\n'));
+      return tag(it.warnings.length ? 'warn' : 'ok', 'Pronto', it.warnings.join('\n'));
+    }
+    // Tabelas do arquivo: resumo numa linha + lista completa recolhível (importadas em destaque, ignoradas à parte).
+    function fileTables(it) {
+      if (!it || !it.tables.length) return null;
+      const inc = it.tables.filter((t) => t.included); const skip = it.tables.filter((t) => !t.included);
+      const reasons = [...new Set(skip.map((t) => t.skipReason))];
+      return h('details', { class: 'bt-details' },
+        h('summary', null, `${plural(inc.length, 'tabela importada', 'tabelas importadas')}${skip.length ? ` · ${plural(skip.length, 'ignorada', 'ignoradas')}` : ''}`),
+        inc.length ? h('div', { class: 'bt-chips' }, inc.map((t) => h('span', { class: 'bt-chip' }, h('span', { class: 'mono' }, t.name), h('span', { class: 'bt-chip-n' }, N(t.rows))))) : null,
+        skip.length ? h('div', { class: 'bt-skipped' }, h('span', { class: 'bt-label' }, `Ignoradas — ${reasons.join(', ')}`), h('div', { class: 'bt-chips muted' }, skip.map((t) => h('span', { class: 'bt-chip', title: t.skipReason }, h('span', { class: 'mono' }, t.name))))) : null);
     }
     function drawFiles() {
-      if (!BT.files.length) { filesHost.replaceChildren(h('div', { class: 'empty' }, 'Nenhum arquivo selecionado.')); return; }
+      clearBtn.hidden = !BT.files.length;
+      if (!BT.files.length) { filesHost.replaceChildren(h('div', { class: 'bt-empty' }, 'Nenhum arquivo selecionado. Escolha a origem no passo 1.')); return; }
       const groups = groupsOf(selected());
-      const all = h('input', { type: 'checkbox', checked: BT.files.every((f) => f.include), 'aria-label': 'Marcar todos', onchange: (e) => { for (const f of BT.files) f.include = e.target.checked; invalidate(); redraw(); } });
+      const all = h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: BT.files.every((f) => f.include), onchange: (e) => { for (const f of BT.files) f.include = e.target.checked; invalidate(); redraw(); } }), ` Todos (${selected().length} de ${BT.files.length})`);
       const rows = BT.files.map((f) => {
         const g = groups.get(dbKey(f.database));
-        const input = h('input', { type: 'text', value: f.database, 'aria-label': `Banco de destino de ${f.name}`, disabled: !f.include, style: 'min-width:180px;width:100%',
-          oninput: (e) => { f.database = e.target.value; f.custom = true; invalidate(); drawGroups(); drawActions(); }, onchange: () => drawFiles() });
         const it = BT.plan?.items.find((x) => x.path === f.path);
-        return h('tr', { class: f.include ? '' : 'off' },
-          h('td', null, h('input', { type: 'checkbox', checked: f.include, 'aria-label': `Importar ${f.name}`, onchange: (e) => { f.include = e.target.checked; invalidate(); redraw(); } })),
-          h('td', null, h('strong', null, f.rel || f.name), h('div', { class: 'small muted' }, fmtSize(f.size)),
-            it && it.status !== 'ok' && it.reasons.length ? h('div', { class: 'small', style: 'color:var(--bad-text)' }, it.reasons.join(' · ')) : null,
-            it && it.warnings.length ? h('div', { class: 'small', style: 'color:var(--warn-text)' }, it.warnings.join(' · ')) : null,
-            it && it.tables.length ? h('div', { class: 'small muted' }, 'Tabelas: ', it.tables.map((t) => (t.included ? `${t.name} (${N(t.rows)})` : `${t.name} — ignorada: ${t.skipReason}`)).join(' · ')) : null),
-          h('td', null, h('div', { class: 'inline', style: 'gap:6px;flex-wrap:nowrap' }, input,
-            f.include && g && g.files.length > 1 ? h('span', { class: 'pill info', title: `${g.files.length} arquivos vão para ${g.database}: as tabelas de mesmo nome são somadas` }, `agrupado ×${g.files.length}`) : null)),
-          h('td', null, statusOf(f)));
+        const input = h('input', { type: 'text', value: f.database, 'aria-label': `Banco de destino de ${f.name}`, disabled: !f.include, spellcheck: 'false',
+          oninput: (e) => { f.database = e.target.value; f.custom = true; invalidate(); drawGroups(); drawActions(); }, onchange: () => drawFiles() });
+        const meta = [fmtSize(f.size), it && it.status !== 'blocked' ? `${N(it.rows)} linha(s)` : null, f.rel && f.rel !== f.name ? f.rel : null].filter(Boolean).join(' · ');
+        return h('div', { class: `bt-file${f.include ? '' : ' off'}${it?.status === 'blocked' ? ' bad' : ''}` },
+          h('input', { type: 'checkbox', class: 'bt-file-check', checked: f.include, 'aria-label': `Importar ${f.name}`, onchange: (e) => { f.include = e.target.checked; invalidate(); redraw(); } }),
+          h('div', { class: 'bt-file-main' },
+            h('div', { class: 'bt-file-top' }, h('span', { class: 'bt-file-name', title: f.path }, f.name), statusOf(f, it)),
+            h('div', { class: 'bt-meta' }, meta),
+            it && it.status !== 'ok' ? msgs('bad', it.reasons) : null,
+            it ? msgs('warn', it.warnings) : null,
+            fileTables(it)),
+          h('div', { class: 'bt-file-dest' },
+            h('span', { class: 'bt-label' }, 'Banco de destino'), input,
+            f.include && g && g.files.length > 1 ? tag('info', `agrupado com ${g.files.length - 1} arquivo(s)`, `${g.files.length} arquivos vão para ${g.database}: as tabelas de mesmo nome são somadas`) : null));
       });
-      filesHost.replaceChildren(h('div', { class: 'tablewrap', style: 'max-height:48vh' }, h('table', { class: 'compact batch-list bt-files' },
-        h('thead', null, h('tr', null, h('th', null, all), h('th', null, 'Arquivo'), h('th', null, 'Banco de destino'), h('th', null, 'Status'))),
-        h('tbody', null, rows))));
+      filesHost.replaceChildren(h('div', { class: 'bt-list-head' }, all), h('div', { class: `bt-filelist${BT.files.length > 12 ? ' scroll' : ''}` }, rows));
     }
+    // Resumo por banco de destino: o que cada banco recebe (tabelas, linhas, criar × acrescentar), já com o resultado da validação.
     function drawGroups() {
       const groups = [...groupsOf(selected()).values()];
       if (!groups.length) { groupsHost.replaceChildren(); return; }
       const planGroups = new Map((BT.plan?.groups || []).map((g) => [dbKey(g.database), g]));
-      groupsHost.replaceChildren(h('div', { class: 'bt-groups' }, groups.map((g) => {
-        const pg = planGroups.get(dbKey(g.database));
-        return h('div', { class: `bt-group${pg?.issues.length || pg?.tables.some((t) => t.issues.length) ? ' bad' : ''}` },
-          h('div', { class: 'inline', style: 'gap:6px' }, h('strong', { class: 'mono' }, g.database), pg ? h('span', { class: `pill ${pg.createDatabase ? 'info' : 'soon'}` }, pg.createDatabase ? 'banco novo' : 'banco existente') : null),
-          h('div', { class: 'small muted' }, plural(g.files.length, 'arquivo', 'arquivos')),
-          pg ? pg.tables.map((t) => h('div', { class: 'small' }, h('span', { class: 'mono' }, t.name), ` · ${N(t.rows)} linha(s) · ${plural(t.files.length, 'arquivo', 'arquivos')} · `,
-            t.create ? h('span', { class: 'pill ok' }, t.existed ? 'acrescentar' : 'criar') : h('span', { class: 'pill soon' }, 'acrescentar'),
-            t.addColumns.length ? h('span', { class: 'small', style: 'color:var(--warn-text)' }, ` + colunas ${t.addColumns.join(', ')}`) : null,
-            t.issues.length ? h('div', { class: 'small', style: 'color:var(--bad-text)' }, t.issues.join(' · ')) : null,
-            t.warnings.length ? h('div', { class: 'small', style: 'color:var(--warn-text)' }, t.warnings.join(' · ')) : null)) : null,
-          pg?.issues.length ? h('div', { class: 'small', style: 'color:var(--bad-text)' }, pg.issues.join(' · ')) : null);
-      })));
+      groupsHost.replaceChildren(h('div', { class: 'bt-subhead' }, h('h3', null, 'Bancos de destino'), h('span', { class: 'bt-sub' }, BT.plan ? 'conforme a validação' : 'valide para ver as tabelas de cada banco')),
+        h('div', { class: 'bt-dbs' }, groups.map((g) => {
+          const pg = planGroups.get(dbKey(g.database));
+          const tables = pg ? pg.tables : [];
+          const rows = tables.reduce((n, t) => n + t.rows, 0);
+          const bad = pg && (pg.issues.length || tables.some((t) => t.issues.length));
+          const created = tables.filter((t) => t.create && !t.existed).length;
+          return h('div', { class: `bt-db${bad ? ' bad' : ''}` },
+            h('div', { class: 'bt-db-head' },
+              h('span', { class: 'bt-db-name mono' }, g.database),
+              pg ? tag(pg.createDatabase ? 'info' : 'warn', pg.createDatabase ? 'banco novo' : 'banco existente') : null,
+              h('span', { class: 'bt-meta' }, [plural(g.files.length, 'arquivo', 'arquivos'), pg ? plural(tables.length, 'tabela', 'tabelas') : null, pg ? `${N(rows)} linha(s)` : null, pg && tables.length ? `${created} a criar · ${tables.length - created} a acrescentar` : null].filter(Boolean).join(' · '))),
+            pg?.issues.length ? msgs('bad', pg.issues) : null,
+            tables.length ? h('div', { class: 'bt-tables' }, tables.map((t) => h('div', { class: `bt-tbl${t.issues.length ? ' bad' : ''}`, title: [t.issues.join('\n'), t.warnings.join('\n'), t.addColumns.length ? `Colunas novas: ${t.addColumns.join(', ')}` : ''].filter(Boolean).join('\n') || null },
+              h('span', { class: 'bt-tbl-name mono' }, t.name),
+              h('span', { class: 'bt-tbl-n' }, N(t.rows)),
+              t.create && !t.existed ? tag('ok sm', 'criar') : tag('warn sm', 'acrescentar'),
+              t.addColumns.length ? tag('warn sm', `+${t.addColumns.length} col.`) : null,
+              t.files.length > 1 ? tag('info sm', `${t.files.length} arq.`) : null))) : null,
+            ...tables.filter((t) => t.issues.length || t.warnings.length).map((t) => msgs(t.issues.length ? 'bad' : 'warn', [...t.issues, ...t.warnings].map((m) => `${t.name}: ${m}`))));
+        })));
     }
 
     function batchRename() {
       const targets = selected();
       if (!targets.length) return toast('Marque os arquivos que serão renomeados.', 'info');
-      const input = h('input', { type: 'text', value: BT.settings.namePattern || 'MIGRA_[ARQUIVO]', style: 'width:100%' });
+      const input = h('input', { type: 'text', value: BT.settings.namePattern || 'MIGRA_[ARQUIVO]', spellcheck: 'false' });
       const preview = h('div');
       const draw = () => {
         const p = input.value.trim();
         preview.replaceChildren(h('div', { class: 'tablewrap', style: 'max-height:40vh' }, h('table', { class: 'compact' },
           h('thead', null, h('tr', null, h('th', null, 'Arquivo'), h('th', null, 'Banco atual'), h('th', null, 'Novo banco'))),
-          h('tbody', null, targets.map((f) => h('tr', null, h('td', null, f.name), h('td', { class: 'mono muted' }, f.database), h('td', { class: 'mono' }, p ? applyPattern(p, f.name) : '—')))))));
+          h('tbody', null, targets.map((f) => h('tr', null, h('td', null, f.name), h('td', { class: 'mono muted' }, f.database || '—'), h('td', { class: 'mono' }, p ? applyPattern(p, f.name) : '—')))))));
       };
       input.addEventListener('input', draw); draw();
       const m = openModal({
         title: `Renomear em lote — ${plural(targets.length, 'arquivo', 'arquivos')}`,
         body: [field('Padrão do banco de destino', input, 'Use [ARQUIVO] onde entra o nome do arquivo (sem .bt). Sem [ARQUIVO], todos vão para o MESMO banco. Ex.: MIGRA_[ARQUIVO] · ZMIGRA_TESTE_[ARQUIVO]_PRD2 · historico'),
-          h('div', { class: 'inline' }, ['MIGRA_[ARQUIVO]', '[ARQUIVO]', 'historico'].map((p) => h('button', { class: 'btn sm ghost', onclick: () => { input.value = p; draw(); } }, p))), preview],
+          h('div', { class: 'inline' }, h('span', { class: 'bt-label' }, 'Atalhos'), ['MIGRA_[ARQUIVO]', '[ARQUIVO]', 'historico'].map((p) => h('button', { class: 'btn sm ghost mono', onclick: () => { input.value = p; draw(); } }, p))), preview],
         footer: [h('button', { class: 'btn', onclick: () => m.close() }, 'Cancelar'), h('button', { class: 'btn primary', onclick: () => {
           const p = input.value.trim();
           if (!p) return toast('Informe um nome ou padrão para o banco de destino.', 'error');
@@ -166,45 +198,51 @@
         } }, 'Aplicar')],
       });
     }
-    const files = sec(3, 'Arquivos e bancos de destino',
-      h('div', { class: 'inline' },
-        h('button', { class: 'btn', onclick: batchRename }, 'Renomear em lote'),
-        h('button', { class: 'btn ghost', title: 'Volta ao nome padrão do app original: MIGRA_<ARQUIVO>', onclick: () => { for (const f of selected()) { f.database = `MIGRA_${fileBase(f.name)}`.slice(0, 128); f.custom = false; } invalidate(); redraw(); } }, 'Nome padrão'),
-        h('button', { class: 'btn ghost', onclick: () => { for (const f of selected()) f.database = ''; invalidate(); redraw(); } }, 'Limpar destinos')),
-      filesHost, groupsHost);
+    const files = sec(3, 'Arquivos e bancos de destino', {
+      actions: [h('button', { class: 'btn sm', onclick: batchRename }, 'Renomear em lote'),
+        h('button', { class: 'btn sm ghost', title: 'Volta ao nome padrão do app original: MIGRA_<ARQUIVO>', onclick: () => { for (const f of selected()) { f.database = `MIGRA_${fileBase(f.name)}`.slice(0, 128); f.custom = false; } invalidate(); redraw(); } }, 'Nome padrão'),
+        h('button', { class: 'btn sm ghost', onclick: () => { for (const f of selected()) f.database = ''; invalidate(); redraw(); } }, 'Limpar destinos')],
+    }, filesHost, groupsHost);
 
     // 4) Opções desta importação
     const o = BT.options;
-    const opt = (k, label, hint) => h('label', { class: 'check', title: hint }, h('input', { type: 'checkbox', checked: !!o[k], onchange: (e) => { o[k] = e.target.checked; invalidate(); redraw(); } }), ` ${label}`);
-    const batch = h('input', { type: 'number', min: 100, max: 50000, step: 500, value: o.batchSize, style: 'width:110px', onchange: (e) => { o.batchSize = Number(e.target.value); invalidate(); drawActions(); } });
-    const options = sec(4, 'Opções desta importação',
-      h('div', { class: 'inline', style: 'gap:16px;flex-wrap:wrap' },
-        opt('onlyAllowed', `Somente tabelas da lista (${BT.settings.allowedTables.length})`, 'Como no app original: só os blocos cujo nome está na lista de Configurações são importados.'),
-        opt('addMissingColumns', 'Adicionar colunas que faltam em tabela existente', 'Como no app original: ALTER TABLE ADD da coluna (NVARCHAR(MAX) NULL). Desligado: estrutura diferente bloqueia o destino.'),
+    const opt = (k, label, desc) => h('label', { class: 'bt-option' }, h('input', { type: 'checkbox', checked: !!o[k], onchange: (e) => { o[k] = e.target.checked; invalidate(); redraw(); } }),
+      h('span', { class: 'bt-option-text' }, h('strong', null, label), h('span', null, desc)));
+    const batch = h('input', { type: 'number', min: 100, max: 50000, step: 500, value: o.batchSize, 'aria-label': 'Linhas por lote', onchange: (e) => { o.batchSize = Number(e.target.value); invalidate(); drawActions(); } });
+    const options = sec(4, 'Opções desta importação', { sub: 'os padrões ficam em Configurações' },
+      h('div', { class: 'bt-options' },
+        opt('onlyAllowed', `Somente tabelas da lista (${BT.settings.allowedTables.length})`, 'Só os blocos cujo nome está na lista de Configurações, como no app original.'),
+        opt('addMissingColumns', 'Adicionar colunas que faltam', 'Tabela existente ganha a coluna como NVARCHAR(MAX) NULL. Desligado: estrutura diferente bloqueia o destino.'),
         opt('stopOnError', 'Parar no primeiro arquivo com erro', 'O app original continua nos próximos arquivos.'),
-        h('label', { class: 'inline', style: 'gap:6px' }, 'Linhas por lote', batch)),
-      h('div', { class: 'hint' }, 'Tabela nova: todas as colunas NVARCHAR(MAX). Tabela existente: os dados são acrescentados; nada é apagado nem alterado de forma destrutiva. Cada arquivo roda numa transação própria: se falhar, nada dele fica no banco.'));
+        h('div', { class: 'bt-option bt-option-field' }, h('span', { class: 'bt-option-text' }, h('strong', null, 'Linhas por lote'), h('span', null, 'Entre 100 e 50.000 (original: 5.000).')), batch)),
+      h('p', { class: 'bt-note' }, 'Tabela nova: todas as colunas NVARCHAR(MAX). Tabela existente: os dados são acrescentados; nada é apagado nem alterado de forma destrutiva. Cada arquivo roda numa transação própria: se falhar, nada dele fica no banco.'));
 
     // 5) Validar e importar
     function drawActions() {
       const sel = selected();
       const missing = sel.filter((f) => !f.database.trim()).length;
-      const canValidate = sel.length && BT.connectionId && !missing && !BT.validating && !(BT.job && BT.job.status === 'running');
+      const running = !!(BT.job && BT.job.status === 'running');
+      const canValidate = sel.length && BT.connectionId && !missing && !BT.validating && !running;
       const pl = BT.plan;
       const c = BT.conns.find((x) => x.id === BT.connectionId);
       const nonLocal = c && c.env !== 'local';
-      const validateBtn = h('button', { class: 'btn', disabled: !canValidate, onclick: (e) => busy(e.currentTarget, validate, 'Validando…') }, 'Validar');
-      const importBtn = h('button', { class: `btn ${nonLocal ? 'danger' : 'primary'}`, disabled: !pl || !pl.canExecute || (BT.job && BT.job.status === 'running'), onclick: (e) => busy(e.currentTarget, () => execute(false)) },
-        pl ? `Importar ${plural(pl.totals.files, 'arquivo', 'arquivos')}${nonLocal ? ` em ${c.envLabel}` : ''}` : 'Importar');
+      const validateBtn = h('button', { class: `btn${pl ? '' : ' primary'}`, disabled: !canValidate, onclick: (e) => busy(e.currentTarget, validate, 'Validando…') }, pl ? 'Validar de novo' : 'Validar');
+      const importBtn = h('button', { class: 'btn primary', disabled: !pl || !pl.canExecute || running, onclick: (e) => busy(e.currentTarget, () => execute(false)) },
+        pl ? `Importar ${plural(pl.totals.files, 'arquivo', 'arquivos')}` : 'Importar');
+      const status = !sel.length ? 'Selecione arquivos.' : missing ? `${plural(missing, 'arquivo', 'arquivos')} sem banco de destino.` : !BT.connectionId ? 'Escolha a conexão.'
+        : pl ? `Validado às ${new Date(pl.validatedAt).toLocaleTimeString('pt-BR')} · expira às ${new Date(pl.expiresAt).toLocaleTimeString('pt-BR')}` : 'A validação lê os arquivos e confere o servidor, sem gravar nada.';
       const v = BT.validating;
       actionsHost.replaceChildren(...[
-        h('div', { class: 'inline' }, validateBtn, importBtn, h('span', { class: 'small muted' },
-          !sel.length ? 'Selecione arquivos.' : missing ? `${plural(missing, 'arquivo', 'arquivos')} sem banco de destino.` : !BT.connectionId ? 'Escolha a conexão.' : pl ? `Validado às ${new Date(pl.validatedAt).toLocaleTimeString('pt-BR')} · ${N(pl.totals.rows)} linha(s) em ${plural(pl.totals.databases, 'banco', 'bancos')} · expira às ${new Date(pl.expiresAt).toLocaleTimeString('pt-BR')}` : 'Valide antes de importar (lê os arquivos e confere o servidor, sem gravar nada).')),
-        v ? h('div', { class: 'stack' }, h('div', { class: 'progress' }, h('div', { style: `width:${v.size ? Math.round((v.bytes / v.size) * 100) : 0}%` })), h('div', { class: 'small muted' }, `Validando ${Math.min(v.done + 1, v.total)} de ${v.total}${v.current ? ` — ${v.current}` : ''}`)) : null,
-        pl && pl.issues.length ? h('div', { class: 'box bad' }, h('strong', null, 'Corrija antes de importar:'), h('ul', null, pl.issues.map((i) => h('li', null, i)))) : null,
-        pl && pl.canExecute ? h('div', { class: `box${nonLocal ? ' warn' : ''}` }, h('dl', { class: 'kv', style: 'margin:0' },
-          h('dt', null, 'Servidor'), h('dd', null, `${pl.target.server} (${pl.target.connectedTo})`), h('dt', null, 'Login'), h('dd', null, pl.target.login),
-          h('dt', null, 'Ambiente'), h('dd', null, `${c ? c.envLabel : pl.target.env}`))) : null,
+        pl && pl.canExecute ? h('div', { class: 'bt-stats' },
+          stat('Arquivos', N(pl.totals.files)), stat('Bancos', N(pl.totals.databases)), stat('Tabelas', N(pl.groups.reduce((n, g) => n + g.tables.length, 0))), stat('Linhas', N(pl.totals.rows))) : null,
+        pl && pl.canExecute ? h('div', { class: `bt-target${nonLocal ? ' warn' : ''}` },
+          h('div', null, h('span', { class: 'bt-label' }, 'Servidor'), h('span', null, h('strong', null, pl.target.server), h('span', { class: 'bt-meta' }, ` · ${pl.target.connectedTo}`))),
+          h('div', null, h('span', { class: 'bt-label' }, 'Login'), h('strong', null, pl.target.login)),
+          h('div', null, h('span', { class: 'bt-label' }, 'Ambiente'), h('strong', null, c ? c.envLabel : pl.target.env)),
+          nonLocal ? h('div', { class: 'bt-target-note' }, 'Fora do localhost: será pedida confirmação antes de importar.') : null) : null,
+        pl && pl.issues.length ? h('div', { class: 'box bad' }, h('strong', null, 'Corrija antes de importar'), msgs('bad', pl.issues)) : null,
+        v ? h('div', { class: 'bt-progress-line' }, bar(v.size ? (v.bytes / v.size) * 100 : 0), h('span', { class: 'bt-meta' }, `Validando ${Math.min(v.done + 1, v.total)} de ${v.total}${v.current ? ` — ${v.current}` : ''}`)) : null,
+        h('div', { class: 'bt-actionbar' }, h('span', { class: 'bt-meta' }, status), h('div', { class: 'bt-actionbar-buttons' }, validateBtn, importBtn)),
       ].filter(Boolean));
     }
     async function validate() {
@@ -255,45 +293,58 @@
         } catch (e) { clearInterval(BT.timer); fail(e); }
       };
       BT.timer = setInterval(tick, 500); tick();
+      setTimeout(() => resultHost.scrollIntoView({ behavior: 'smooth', block: 'start' }), 300);
     }
     function drawProgress(j) {
       const groups = new Map();
       for (const it of j.items) { const g = groups.get(it.database) || { database: it.database, size: 0, bytes: 0, rows: 0, files: 0 }; groups.set(it.database, g); g.size += it.size || 0; g.bytes += it.status === 'done' ? it.size : Math.min(it.bytes || 0, it.size || 0); g.rows += it.rows || 0; g.files++; }
-      const mark = { pending: ['○', 'muted', 'aguardando'], running: ['◐', 'ck-wait', 'processando'], done: ['✓', 'ck-done', ''], error: ['✕', 'ck-bad', ''], cancelled: ['–', 'muted', 'cancelado'], skipped: ['–', 'muted', 'não executado'] };
+      const mark = { pending: ['○', 'none', 'aguardando'], running: ['◐', 'info', 'processando'], done: ['✓', 'ok', ''], error: ['✕', 'bad', ''], cancelled: ['–', 'none', 'cancelado'], skipped: ['–', 'none', 'não executado'] };
       const running = j.status === 'running';
       const r = j.result;
-      resultHost.replaceChildren(...[
-        h('div', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', null, running ? `Importando ${plural(j.total, 'arquivo', 'arquivos')} — ${j.done} / ${j.total}` : 'Resultado'),
-          running ? h('button', { class: 'btn danger sm', onclick: async (e) => { e.currentTarget.disabled = true; try { await api('POST', `${BASE}/jobs/${j.id}/cancel`); toast('Cancelamento pedido: o arquivo em andamento será desfeito.', 'info'); } catch (err) { fail(err); } } }, 'Cancelar') : null),
-        h('div', { class: 'card-body stack' },
-          j.current && running ? h('div', { class: 'small muted' }, j.current) : null,
-          h('div', { class: 'bt-groups' }, [...groups.values()].map((g) => h('div', { class: 'bt-group' },
-            h('div', { class: 'inline', style: 'gap:6px' }, h('strong', { class: 'mono' }, g.database), h('span', { class: 'small muted' }, `${N(g.rows)} registro(s)`)),
-            h('div', { class: 'progress' }, h('div', { style: `width:${g.size ? Math.round((g.bytes / g.size) * 100) : 100}%` })),
-            h('div', { class: 'small muted' }, `${g.size ? Math.round((g.bytes / g.size) * 100) : 100}% · ${plural(g.files, 'arquivo', 'arquivos')}`)))),
-          h('div', { class: 'batch-result' }, j.items.map((it) => h('div', { class: `batch-item ${it.status}` }, h('span', { class: mark[it.status][1] }, mark[it.status][0]),
-            h('div', { class: 'grow stack', style: 'gap:1px' }, h('span', null, h('strong', null, it.name), h('span', { class: 'small muted' }, ` → ${it.database}`)),
-              h('span', { class: 'small muted' }, it.status === 'done' ? `${N(it.rows)} registro(s) · ${Object.keys(it.tables).length} tabela(s) · ${fmtMs(it.ms)}` : it.status === 'running' ? `processando${it.table ? ` ${it.table}` : ''} · ${N(it.rows)} registro(s) · ${it.size ? Math.round((it.bytes / it.size) * 100) : 0}%` : mark[it.status][2]),
-              it.error ? h('span', { class: 'small', style: `color:${it.status === 'error' ? 'var(--bad-text)' : 'var(--muted)'}` }, it.error) : null)))),
+      const pctOf = (g) => (g.size ? Math.round((g.bytes / g.size) * 100) : 100);
+      const total = j.items.reduce((n, i) => n + (i.size || 0), 0);
+      const doneBytes = j.items.reduce((n, i) => n + (i.status === 'done' ? i.size || 0 : Math.min(i.bytes || 0, i.size || 0)), 0);
+      const ok = r && !r.failed && j.status === 'done';
+      resultHost.replaceChildren(h('section', { class: 'card bt-section' },
+        h('div', { class: 'bt-section-head' }, h('span', { class: `bt-step ${running ? 'live' : ok ? 'ok' : 'bad'}` }, running ? '◐' : ok ? '✓' : '!'),
+          h('div', { class: 'bt-section-title' }, h('h2', null, running ? 'Importando…' : 'Resultado'), h('span', { class: 'bt-sub' }, `${j.done} de ${plural(j.total, 'arquivo', 'arquivos')}${running && j.current ? ` · ${j.current}` : ''}`)),
+          running ? h('div', { class: 'bt-section-actions' }, h('button', { class: 'btn danger sm', onclick: async (e) => { e.currentTarget.disabled = true; try { await api('POST', `${BASE}/jobs/${j.id}/cancel`); toast('Cancelamento pedido: o arquivo em andamento será desfeito.', 'info'); } catch (err) { fail(err); } } }, 'Cancelar')) : null),
+        h('div', { class: 'bt-section-body' }, ...[
+          running ? h('div', { class: 'bt-progress-line' }, bar(total ? (doneBytes / total) * 100 : 0), h('span', { class: 'bt-meta' }, `${total ? Math.round((doneBytes / total) * 100) : 0}% · ${N(j.items.reduce((n, i) => n + (i.rows || 0), 0))} registro(s)`)) : null,
+          !running && r ? summary(j, r) : null,
+          running && groups.size > 1 ? h('div', { class: 'bt-dbs grid' }, [...groups.values()].map((g) => h('div', { class: 'bt-db' },
+            h('div', { class: 'bt-db-head' }, h('span', { class: 'bt-db-name mono' }, g.database), h('span', { class: 'bt-meta' }, `${N(g.rows)} registro(s) · ${plural(g.files, 'arquivo', 'arquivos')}`)),
+            h('div', { class: 'bt-progress-line' }, bar(pctOf(g)), h('span', { class: 'bt-meta' }, `${pctOf(g)}%`))))) : null,
+          h('div', { class: 'bt-subhead' }, h('h3', null, 'Arquivos')),
+          h('div', { class: 'bt-runlist' }, j.items.map((it) => h('div', { class: `bt-run ${it.status}` },
+            tag(`${mark[it.status][1]} icon`, mark[it.status][0]),
+            h('div', { class: 'bt-run-main' }, h('div', { class: 'bt-run-name' }, h('strong', null, it.name), h('span', { class: 'bt-meta' }, ` → ${it.database}`)),
+              it.error ? h('div', { class: `bt-run-error${it.status === 'error' ? '' : ' muted'}` }, it.error) : null),
+            h('span', { class: 'bt-meta bt-run-info' }, it.status === 'done' ? `${N(it.rows)} registro(s) · ${Object.keys(it.tables).length} tabela(s) · ${fmtMs(it.ms)}`
+              : it.status === 'running' ? `${it.table ? `${it.table} · ` : ''}${N(it.rows)} registro(s) · ${it.size ? Math.round((it.bytes / it.size) * 100) : 0}%` : mark[it.status][2])))),
           !running && j.error ? h('div', { class: 'box bad' }, j.error) : null,
-          !running && r ? summary(j, r) : null)),
-      ].filter(Boolean));
+        ].filter(Boolean))));
     }
     function summary(j, r) {
       const failed = j.items.filter((i) => i.status === 'error');
-      return h('div', { class: 'stack' },
-        h('div', { class: r.failed || j.status !== 'done' ? 'result-bad' : 'result-ok' },
-          j.status === 'cancelled' ? 'Importação cancelada.' : j.status === 'error' ? 'Importação não executada.' : r.failed ? `Concluído com ${plural(r.failed, 'falha', 'falhas')}.` : '✓ Concluído'),
-        h('dl', { class: 'kv' }, h('dt', null, 'Arquivos processados'), h('dd', null, String(r.ok + r.failed)), h('dt', null, 'Sucesso'), h('dd', null, String(r.ok)), h('dt', null, 'Falha'), h('dd', null, String(r.failed)),
-          r.cancelled ? [h('dt', null, 'Cancelados'), h('dd', null, String(r.cancelled))] : null, r.skipped ? [h('dt', null, 'Não executados'), h('dd', null, String(r.skipped))] : null,
-          h('dt', null, 'Registros'), h('dd', null, N(r.rows)), h('dt', null, 'Duração'), h('dd', null, fmtMs(r.durationMs))),
-        r.databases.map((d) => h('div', { class: 'bt-group' }, h('strong', { class: 'mono' }, d.database),
-          d.tables.map((t) => h('div', { class: 'small' }, h('span', { class: 'mono' }, t.table), ` — ${plural(t.files, 'arquivo', 'arquivos')} · ${N(t.rows)} registro(s) adicionado(s)`)))),
-        failed.length ? h('div', { class: 'box bad' }, h('strong', null, 'Falhas:'), h('ul', null, failed.map((i) => h('li', null, h('strong', null, i.name), ` — ${i.error}`)))) : null,
-        h('div', { class: 'hint' }, 'Cada arquivo também foi registrado na Auditoria de execuções e no Histórico desta ferramenta.'));
+      const head = j.status === 'cancelled' ? ['warn', 'Importação cancelada'] : j.status === 'error' ? ['bad', 'Importação não executada'] : r.failed ? ['warn', `Concluído com ${plural(r.failed, 'falha', 'falhas')}`] : ['ok', 'Concluído'];
+      return h('div', { class: 'bt-summary' },
+        h('div', { class: `bt-banner ${head[0]}` }, `${head[0] === 'ok' ? '✓' : '!'} ${head[1]}`),
+        h('div', { class: 'bt-stats' }, ...[
+          stat('Processados', N(r.ok + r.failed)), stat('Sucesso', N(r.ok), 'ok'), stat('Falha', N(r.failed), r.failed ? 'bad' : ''),
+          r.cancelled ? stat('Cancelados', N(r.cancelled), 'warn') : null, r.skipped ? stat('Não executados', N(r.skipped), 'warn') : null,
+          stat('Registros', N(r.rows)), stat('Duração', fmtMs(r.durationMs))].filter(Boolean)),
+        r.databases.map((d) => h('div', { class: 'bt-db' },
+          h('div', { class: 'bt-db-head' }, h('span', { class: 'bt-db-name mono' }, d.database),
+            h('span', { class: 'bt-meta' }, `${plural(d.tables.length, 'tabela', 'tabelas')} · ${N(d.tables.reduce((n, t) => n + t.rows, 0))} registro(s) adicionado(s)`)),
+          h('div', { class: 'bt-tables' }, d.tables.map((t) => h('div', { class: 'bt-tbl', title: plural(t.files, 'arquivo', 'arquivos') },
+            h('span', { class: 'bt-tbl-name mono' }, t.table), h('span', { class: 'bt-tbl-n' }, N(t.rows)), t.files > 1 ? tag('info sm', `${t.files} arq.`) : null))))),
+        failed.length ? h('div', { class: 'box bad' }, h('strong', null, 'Falhas'), msgs('bad', failed.map((i) => `${i.name} — ${i.error}`))) : null,
+        h('p', { class: 'bt-note' }, 'Cada arquivo também foi registrado na Auditoria de execuções e no Histórico desta ferramenta.'));
     }
 
-    host.append(origin, conn, files, options, sec(5, 'Validação e importação', actionsHost), resultHost);
+    host.append(origin, conn, files, options, h('section', { class: 'card bt-section' },
+      h('div', { class: 'bt-section-head' }, h('span', { class: 'bt-step' }, '5'), h('div', { class: 'bt-section-title' }, h('h2', null, 'Validação e importação'))), actionsHost), resultHost);
     redraw();
     if (BT.job) drawProgress(BT.job);
     if (BT.job && BT.job.status === 'running' && BT.job.id) watch(BT.job.id);

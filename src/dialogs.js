@@ -33,6 +33,10 @@ $owner.Close()
 if ($r -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.FileName) }
 `;
 
+// Vários arquivos de uma vez (Importador BT): um caminho por linha.
+const FILES = FILE.replace('$d.Filter = $env:GP_FILTER', '$d.Filter = $env:GP_FILTER\n$d.Multiselect = $true')
+  .replace('[Console]::Out.Write($d.FileName)', '[Console]::Out.Write(($d.FileNames -join "`n"))');
+
 const SAVE = `
 Add-Type -AssemblyName System.Windows.Forms
 [System.Windows.Forms.Application]::EnableVisualStyles()
@@ -59,6 +63,7 @@ async function pickFolder({ title = 'Selecione uma pasta', start = '' } = {}) {
 const FILTERS = {
   xlsx: 'Planilhas Excel (*.xlsx)|*.xlsx|Todos os arquivos (*.*)|*.*',
   sql: 'Scripts SQL (*.sql)|*.sql|Todos os arquivos (*.*)|*.*',
+  bt: 'Arquivos BT (*.bt)|*.bt|Todos os arquivos (*.*)|*.*',
   gpbackup: 'Backup do Gerenciador de Projetos (*.gpbackup)|*.gpbackup|Todos os arquivos (*.*)|*.*',
   docs: 'Documentos|*.pdf;*.doc;*.docx;*.dot;*.dotx;*.rtf;*.odt;*.txt;*.md;*.csv;*.xls;*.xlsx;*.xlsm;*.xlt;*.xltx;*.ods;*.ppt;*.pptx;*.pot;*.potx;*.odp;*.sql;*.xml;*.json;*.png;*.jpg;*.jpeg;*.gif;*.zip|Todos os arquivos (*.*)|*.*',
 };
@@ -68,6 +73,11 @@ async function pickFile({ title = 'Selecione um arquivo', start = '', filter = '
   return out.trim() || null;
 }
 
+async function pickFiles({ title = 'Selecione os arquivos', start = '', filter = 'bt' } = {}) {
+  const out = await runPowerShell(FILES, { sta: true, env: { GP_TITLE: title, GP_START: start, GP_FILTER: FILTERS[filter] || FILTERS.bt } });
+  return out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+}
+
 // "Salvar como" (exportar): o próprio Windows pergunta se pode substituir um arquivo existente.
 async function pickSaveFile({ title = 'Salvar como', fileName = '', start = '', filter = 'sql' } = {}) {
   const downloads = path.join(os.homedir(), 'Downloads');
@@ -75,4 +85,4 @@ async function pickSaveFile({ title = 'Salvar como', fileName = '', start = '', 
   return out.trim() || null;
 }
 
-module.exports = { pickFolder, pickFile, pickSaveFile };
+module.exports = { pickFolder, pickFile, pickFiles, pickSaveFile };

@@ -8,7 +8,7 @@ const express = require('express');
 const { Store } = require('./src/store');
 const { Audit } = require('./src/audit');
 const { protect, unprotect } = require('./src/secrets');
-const { pickFolder, pickFile } = require('./src/dialogs');
+const { pickFolder, pickFile, pickFiles } = require('./src/dialogs');
 const { SYS } = require('./src/powershell');
 const { parseSheetUrl } = require('./src/sheets');
 const { parseDriveFolderUrl } = require('./src/drive');
@@ -664,6 +664,8 @@ require('./src/notes-api').mount(app, { store, audit, getProject, publicProject,
 require('./src/rm-env-api').mount(app, { store, audit, getProject, publicProject }); // ambientes RM (HMG/PRD): link, diretório, abrir RM.exe -Multi=True
 require('./src/email-api').mount(app, { store, audit, getProject, getIn, publicProject, dataDir: DATA_DIR }); // Comunicações: gerador de e-mails (modelos, prévia, copiar) — não envia nada
 require('./src/docgen-api').mount(app, { store, audit, getProject }); // Documentos gerados: modelos → prévia → Word (.docx) baixado pela tela
+// Ferramentas Auxiliares (registro em src/tools/registry.js): cada ferramenta monta as próprias rotas em /api/tools/<id>.
+require('./src/tools').mount(app, { store, audit, db, resolveConn, connPassword, whoAmI: require('./src/evidence-http').whoAmI, pickFiles, pickFolder });
 
 app.get('/api/jobs/:id', (req, res) => {
   const j = jobs.get(req.params.id);

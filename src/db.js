@@ -52,7 +52,10 @@ async function assertReachable(conn) {
 
 // Roda uma operação no processo-filho. O timeout vale só até a conexão ser estabelecida; depois disso
 // (ex.: importação longa) o processo roda até terminar.
-function runWorker(op, args, { onProgress, signal } = {}) {
+// gracefulCancel (ex.: Importador BT): ao cancelar, pede para a operação parar no próximo ponto seguro e só encerra o processo
+// se ela não terminar em GRACE_MS. Sem a opção, o cancelamento encerra o processo na hora (comportamento de sempre).
+const GRACE_MS = 15000;
+function runWorker(op, args, { onProgress, signal, gracefulCancel = false } = {}) {
   return new Promise((resolve, reject) => {
     const child = fork(path.join(__dirname, 'dbworker.js'), [], { windowsHide: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
     let settled = false;
@@ -63,11 +66,14 @@ function runWorker(op, args, { onProgress, signal } = {}) {
     }, CONNECT_TIMEOUT_MS);
     child.on('message', (m) => {
       if (m.type === 'connected') clearTimeout(timer);
-      else if (m.type === 'progress') onProgress && onProgress(m.done, m.total);
+      else if (m.type === 'progress') onProgress && onProgress(m.done, m.total, m.info);
       else if (m.type === 'result') settle(resolve, m.value);
-      else if (m.type === 'error') settle(reject, Object.assign(new Error(m.message), { status: m.status, executed: m.executed, scriptOutput: m.scriptOutput }));
+      else if (m.type === 'error') settle(reject, Object.assign(new Error(m.message), { status: m.status, executed: m.executed, scriptOutput: m.scriptOutput, code: m.code, cancelled: m.cancelled }));
     });
-    if (signal) { // cancelado (ex.: a pessoa fechou a janela ou clicou em Parar): encerra o processo; o SQL Server desfaz a transação aberta
+    if (signal && gracefulCancel) {
+      const ask = () => { try { child.send({ type: 'cancel' }); } catch { /* já saiu */ } setTimeout(() => { if (!settled) { settle(reject, Object.assign(new Error('Importação cancelada. O que estava em andamento foi desfeito (a transação não foi confirmada).'), { status: 499, cancelled: true })); child.kill(); } }, GRACE_MS); };
+      if (signal.aborted) ask(); else signal.addEventListener('abort', ask, { once: true });
+    } else if (signal) { // cancelado (ex.: a pessoa fechou a janela ou clicou em Parar): encerra o processo; o SQL Server desfaz a transação aberta
       const stop = () => { settle(reject, Object.assign(new Error('Execução cancelada. O que o script já tinha feito foi desfeito (a transação não foi confirmada).'), { status: 499, cancelled: true })); child.kill(); };
       if (signal.aborted) stop(); else signal.addEventListener('abort', stop, { once: true });
     }
@@ -111,4 +117,5 @@ async function runScript(conn, password, script, { signal } = {}) {
 module.exports = {
   isLoopback: core.isLoopback, validateConnection: core.validateConnection, friendly: core.friendly, label: core.label,
   testConnection, precheck, executePlan, runScript, assertReachable,
+  runWorker, // ferramentas auxiliares (src/tools): operações próprias no mesmo processo-filho, com o mesmo timeout de conexão
 };

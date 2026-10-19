@@ -1,0 +1,9 @@
+[EPG]
+[CODIGO:s;NOME:s;CIDADE:s]
+001|Cliente Alfa|S$E3o Paulo|
+002|Cliente Beta|@|
+003||Curitiba|
+[EMP]
+[CODEMP:n;RAZAO:s]
+1|Empresa Exemplo LTDA
+2|Com $7C barra

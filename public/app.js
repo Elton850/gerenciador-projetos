@@ -29,6 +29,7 @@ const ICONS = {
   settings: ['M4 6h9', 'M17 6h3', 'M4 12h3', 'M11 12h9', 'M4 18h11', 'M19 18h1', [15, 6, 2], [9, 12, 2], [17, 18, 2]],
   audit: ['M10 6h10', 'M10 12h10', 'M10 18h10', 'm3.5 6 1.5 1.5L7.5 5', 'm3.5 12 1.5 1.5 2.5-2.5', 'm3.5 18 1.5 1.5 2.5-2.5'],
   plus: ['M12 5v14', 'M5 12h14'],
+  tools: ['M14.7 6.3a4 4 0 0 0-5.4 5.2L4 16.8V20h3.2l5.3-5.3a4 4 0 0 0 5.2-5.4l-2.5 2.5-2.4-.6-.6-2.4z'],
   chevronDown: ['m6 9 6 6 6-6'], chevronUp: ['m6 15 6-6 6 6'], chevronLeft: ['m15 18-6-6 6-6'], chevronRight: ['m9 18 6-6-6-6'],
   sun: ['M12 2v2', 'M12 20v2', 'm4.9 4.9 1.4 1.4', 'm17.7 17.7 1.4 1.4', 'M2 12h2', 'M20 12h2', 'm4.9 19.1 1.4-1.4', 'm17.7 6.3 1.4-1.4', [12, 12, 4]],
   moon: ['M20.5 13.2A8.5 8.5 0 1 1 10.8 3.5a6.6 6.6 0 0 0 9.7 9.7z'],
@@ -247,7 +248,7 @@ function replaceProject(p) {
   render();
 }
 const route = () => {
-  const m = location.hash.match(/^#\/(project|audit|settings|docs|scripts|workspace|hours|reminders|schedule)(?:\/(\w+))?/);
+  const m = location.hash.match(/^#\/(project|audit|settings|docs|scripts|workspace|hours|reminders|schedule|tools)(?:\/([\w-]+))?/);
   return m ? { name: m[1], id: m[2] } : { name: 'home' };
 };
 window.addEventListener('hashchange', render);
@@ -271,6 +272,7 @@ function render() {
   if (r.name === 'hours') return renderHours(main);
   if (r.name === 'reminders') return renderReminders(main);
   if (r.name === 'schedule') return renderSchedule(main);
+  if (r.name === 'tools') return renderTools(main, r.id); // Ferramentas Auxiliares (public/tools.js)
   if (r.name === 'project') {
     const p = state.projects.find((x) => x.id === r.id);
     if (p) return renderProject(main, p);
@@ -317,6 +319,7 @@ const NAV_MENU = [
   { hash: '#/workspace', name: 'workspace', icon: 'workspace', label: 'Workspace (arquivos e Git)' },
   { hash: '#/docs', name: 'docs', icon: 'docs', label: 'Documentos e Modelos' },
   { hash: '#/scripts', name: 'scripts', icon: 'scripts', label: 'Scripts SQL' },
+  { hash: '#/tools', name: 'tools', icon: 'tools', label: 'Ferramentas Auxiliares' },
   { hash: '#/settings', name: 'settings', icon: 'settings', label: 'Configurações' },
   { hash: '#/audit', name: 'audit', icon: 'audit', label: 'Auditoria de execuções' },
 ];
@@ -860,10 +863,12 @@ const ACTION_LABEL = { 'email-modelo-criado': 'E-mail: modelo criado', 'email-mo
   'horas-criada': 'Horas: apontamento manual', 'horas-editada': 'Horas: apontamento editado', 'horas-excluida': 'Horas: apontamento excluído', 'horas-descartada': 'Horas: atividade descartada',
   'horas-exportada': 'Horas: planilha exportada', 'horas-config': 'Horas: jornada alterada',
   'ciclo-alterado': 'Ciclo alterado', 'ciclo-aplicado': 'Ciclo aplicado ao projeto', 'conexao-cadastrada': 'Conexão cadastrada', 'conexao-alterada': 'Conexão alterada', 'conexao-excluida': 'Conexão excluída',
-  'script-executado': 'Script executado (checklist)', 'script-falhou': 'Script com erro (checklist)', 'projeto-cancelado': 'Projeto cancelado', 'projeto-descancelado': 'Projeto descancelado (voltou ao último estado)', 'exportacao-script-executado': 'Gerar arquivos: script executado (desfeito)', 'exportacao-script-falhou': 'Gerar arquivos: script com erro', 'exportacao-arquivos-gerados': 'Gerar arquivos: arquivos gravados', 'gitignore-salvo': '.gitignore salvo' };
+  'script-executado': 'Script executado (checklist)', 'script-falhou': 'Script com erro (checklist)', 'projeto-cancelado': 'Projeto cancelado', 'projeto-descancelado': 'Projeto descancelado (voltou ao último estado)', 'exportacao-script-executado': 'Gerar arquivos: script executado (desfeito)', 'exportacao-script-falhou': 'Gerar arquivos: script com erro', 'exportacao-arquivos-gerados': 'Gerar arquivos: arquivos gravados', 'gitignore-salvo': '.gitignore salvo',
+  'bt-importacao-iniciada': 'Importador BT: importação iniciada', 'bt-banco-criado': 'Importador BT: banco criado', 'bt-arquivo-importado': 'Importador BT: arquivo importado', 'bt-arquivo-falhou': 'Importador BT: arquivo com erro (desfeito)',
+  'bt-importacao-concluida': 'Importador BT: importação concluída', 'bt-importacao-com-falhas': 'Importador BT: importação com falhas', 'bt-importacao-cancelada': 'Importador BT: importação cancelada', 'bt-importacao-falhou': 'Importador BT: importação não executada', 'bt-config-alterada': 'Importador BT: configurações alteradas' };
 // Tipo e situação de cada ação (só para agrupar, filtrar e colorir; o registro em si não muda).
 const AUDIT_TYPES = [
-  ['import', 'Importação', /^(plano-gerado|execucao-iniciada|importacao-|simulacao-|lote-|depara-|download-depara)/],
+  ['import', 'Importação', /^(plano-gerado|execucao-iniciada|importacao-|simulacao-|lote-|depara-|download-depara|bt-)/],
   ['script', 'Scripts SQL', /^script-/],
   ['checklist', 'Checklist e etapas', /^(checklist-|evidencia-|etapa-|avanco-)/],
   ['hours', 'Horas', /^(horas-|observacao-)/],
@@ -887,7 +892,7 @@ function auditSummary(a) {
   if (a.tabelas?.length) return `${plural(a.tabelas.length, 'tabela', 'tabelas')}: ${a.tabelas.slice(0, 4).map((t) => `${t.tabela}${t.linhas != null ? ` (${Number(t.linhas).toLocaleString('pt-BR')})` : ''}`).join(', ')}${a.tabelas.length > 4 ? '…' : ''}`;
   return [a.resultado, a.arquivo, a.item].filter(Boolean).join(' · ');
 }
-const AUDIT_FIELD = { project: 'Projeto', base: 'Base', env: 'Ambiente', server: 'Servidor', database: 'Banco', login: 'Login', by: 'Usuário', etapa: 'Etapa', item: 'Item', detalhe: 'Detalhe', arquivo: 'Arquivo', resultado: 'Resultado', hash: 'Hash do plano', dryRun: 'Simulação', bloqueios: 'Bloqueios', erro: 'Erro' };
+const AUDIT_FIELD = { linhas: 'Linhas', arquivos: 'Arquivos', bancos: 'Bancos', duracaoMs: 'Duração (ms)', project: 'Projeto', base: 'Base', env: 'Ambiente', server: 'Servidor', database: 'Banco', login: 'Login', by: 'Usuário', etapa: 'Etapa', item: 'Item', detalhe: 'Detalhe', arquivo: 'Arquivo', resultado: 'Resultado', hash: 'Hash do plano', dryRun: 'Simulação', bloqueios: 'Bloqueios', erro: 'Erro' };
 function auditDetails(a) {
   const skip = new Set(['at', 'action', 'tabelas', 'scripts', 'erro']);
   const kv = Object.entries(a).filter(([k, v]) => !skip.has(k) && v !== null && v !== undefined && v !== '' && typeof v !== 'object');

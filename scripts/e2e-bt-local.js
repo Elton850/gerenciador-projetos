@@ -102,6 +102,19 @@ async function job(id) { for (;;) { const j = (await api('GET', `${B}/jobs/${id}
     const audit = fs.readFileSync(path.join(tmp, 'data', 'audit.log'), 'utf8');
     assert.ok(!audit.includes('não numérico'), 'valor do registro não vai para a auditoria');
 
+    // 4) Muitos parâmetros por comando (poucas colunas → até 2000 parâmetros): os nomes não podem colidir com os @P<n>
+    //    que o próprio ODBC usa por dentro (bug real: "@p1000 já foi declarado").
+    const many = ['[EPG]', '[A:s;B:s]']; for (let i = 0; i < 2500; i++) many.push(`${i}|v${i}`);
+    many.push('[EMP]', '[X:s]'); for (let i = 0; i < 1500; i++) many.push(`x${i}`);
+    fs.writeFileSync(path.join(dir, 'MUITOS.bt'), Buffer.from(many.join('\n'), 'latin1'));
+    v = await job((await api('POST', `${B}/validate`, { connectionId: conn.id, files: [{ path: path.join(dir, 'MUITOS.bt'), database: `${PREFIX}MUITOS` }] })).json.jobId);
+    ex = await api('POST', `${B}/plans/${v.result.planId}/execute`, { hash: v.result.hash, authorized: true });
+    r = await job(ex.json.jobId);
+    assert.equal(r.items[0].status, 'done', r.items[0].error);
+    assert.equal((await q(`${PREFIX}MUITOS`, 'SELECT COUNT(*) AS n FROM dbo.EPG'))[0].n, 2500);
+    assert.equal((await q(`${PREFIX}MUITOS`, "SELECT B FROM dbo.EPG WHERE A = '1999'"))[0].B, 'v1999');
+    assert.equal((await q(`${PREFIX}MUITOS`, 'SELECT COUNT(*) AS n FROM dbo.EMP'))[0].n, 1500);
+
     console.log('e2e-bt-local: OK');
   } finally {
     await dropTestDbs().catch((e) => console.error('limpeza:', e.message));

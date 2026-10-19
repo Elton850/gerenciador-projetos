@@ -59,7 +59,7 @@ async function importFile(adapter, { filePath, expectedSha = null, settings, onP
 const SAFE = {
   create: /^CREATE TABLE \[dbo\]\.\[(?:[^\]]|\]\])+\] \((?:\[(?:[^\]]|\]\])+\] NVARCHAR\(MAX\) NULL(?:, )?)+\)$/,
   alter: /^ALTER TABLE \[dbo\]\.\[(?:[^\]]|\]\])+\] ADD (?:\[(?:[^\]]|\]\])+\] NVARCHAR\(MAX\) NULL(?:, )?)+$/,
-  insert: /^INSERT INTO \[dbo\]\.\[(?:[^\]]|\]\])+\] \((?:\[(?:[^\]]|\]\])+\](?:, )?)+\) VALUES (?:\((?:@p\d+(?:, )?)+\)(?:, )?)+$/,
+  insert: /^INSERT INTO \[dbo\]\.\[(?:[^\]]|\]\])+\] \((?:\[(?:[^\]]|\]\])+\](?:, )?)+\) VALUES (?:\((?:@bt\d+(?:, )?)+\)(?:, )?)+$/,
   createdb: /^CREATE DATABASE \[(?:[^\]]|\]\])+\]$/,
 };
 function assertGenerated(kind, sql) {
@@ -91,7 +91,7 @@ function sqlAdapter(h, tx) {
         const r = req();
         let k = 0;
         const values = chunk.map((row) => `(${row.map((v) => {
-          const name = `p${String(k++).padStart(4, '0')}`; // largura fixa: o driver ODBC confunde @p1 com @p10
+          const name = `bt${k++}`; // nunca @p<n>: o ODBC nomeia os parâmetros posicionais @P1…@Pn por dentro e o SQL Server não diferencia caixa
           r.input(name, v !== null && v.length > 4000 ? h.sql.NVarChar(h.sql.MAX) : h.sql.NVarChar(4000), v);
           return `@${name}`;
         }).join(', ')})`).join(', ');

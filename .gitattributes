@@ -1,0 +1,2 @@
+# Fixtures .bt: bytes exatos (latin-1, fins de linha misturados de propósito) — sem conversão de fim de linha
+*.bt binary

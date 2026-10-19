@@ -1308,3 +1308,15 @@ input:focus, select:focus, textarea:focus { outline: 2px solid color-mix(in srgb
 /* Avisos */
 .toast { border-radius: 8px; }
 .toast.error { background: color-mix(in srgb, var(--pink) 16%, var(--s1)); border-color: color-mix(in srgb, var(--pink) 50%, var(--border)); border-left-color: var(--pink); color: var(--text); }
+
+/* Ferramentas Auxiliares (public/tools.js) e Importador BT (public/tool-bt-importer.js) */
+.tool-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.tool-card { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--s1); }
+.bt-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; }
+.bt-group { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--s0); min-width: 0; overflow-wrap: anywhere; }
+.bt-group.bad { border-color: color-mix(in srgb, var(--pink) 45%, var(--border)); }
+.batch-item.cancelled { opacity: .75; }
+table.bt-files td:nth-child(2) { min-width: 220px; overflow-wrap: normal; word-break: normal; }
+table.bt-files td:nth-child(2) strong { overflow-wrap: anywhere; }
+.pill.info { background: color-mix(in srgb, var(--cyan) 14%, transparent); border: 1px solid color-mix(in srgb, var(--cyan) 40%, transparent); color: var(--text); }
+.pill.none { background: var(--s0); border: 1px solid var(--border); color: var(--muted); }

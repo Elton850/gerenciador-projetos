@@ -54,6 +54,8 @@ function applyDefaults(data) {
   // (excluídos não voltam); ids fixos. Ver src/docgen.js.
   if (!Array.isArray(data.docTemplates)) data.docTemplates = defaultTemplates(data);
   if (!Array.isArray(data.docGenerations)) data.docGenerations = [];
+  // Ferramentas Auxiliares (data.tools.<ferramenta>): configuração e histórico de cada uma. Ver src/tools/registry.js.
+  require('./tools').ensureTools(data);
   for (const p of data.projects || []) {
     if (p.coordinatorId === undefined) p.coordinatorId = null;
     // Contatos externos do projeto (stakeholders/cliente) e modelos de e-mail habilitados (null = todos os globais ativos).

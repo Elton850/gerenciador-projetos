@@ -229,4 +229,4 @@ async function runScript(conn, password, { name, batches, allowDestructiveScript
   });
 }
 
-module.exports = { isLoopback, validateConnection, testConnection, precheck, executePlan, runScript, friendly, label, setOnConnected, EXPORT_MAX };
+module.exports = { isLoopback, validateConnection, testConnection, precheck, executePlan, runScript, friendly, label, setOnConnected, EXPORT_MAX, withPool, identity }; // withPool/identity: ferramentas auxiliares (src/tools)

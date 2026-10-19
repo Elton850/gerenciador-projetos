@@ -4,6 +4,11 @@ const core = require('./db-core');
 
 process.on('disconnect', () => process.exit(0)); // o pai morreu/fechou: não deixa processo órfão
 
+// Cancelamento em ponto seguro (só operações que consultam isCancelled, ex.: Importador BT): o pai pede, a operação desfaz a
+// transação no próximo lote e termina. Se não terminar a tempo, o pai encerra o processo (o SQL Server desfaz do mesmo jeito).
+let cancelRequested = false;
+process.on('message', (m) => { if (m && m.type === 'cancel') cancelRequested = true; });
+
 process.once('message', async ({ op, args }) => {
   core.setOnConnected(() => process.send({ type: 'connected' }));
   const finish = (msg) => process.send(msg, () => process.exit(0));
@@ -17,9 +22,13 @@ process.once('message', async ({ op, args }) => {
         onProgress: (done, total) => process.send({ type: 'progress', done, total }),
       });
     } else if (op === 'runscript') value = await core.runScript(args.conn, args.password, args.script);
+    else if (op.startsWith('tool:')) value = await require('./tools/worker-ops').run(op.slice(5), core, args, {
+      progress: (info) => process.send({ type: 'progress', done: info.done || 0, total: info.total || 0, info }),
+      isCancelled: () => cancelRequested,
+    });
     else throw new Error(`Operação desconhecida: ${op}`);
     finish({ type: 'result', value });
   } catch (e) {
-    finish({ type: 'error', message: e.message, status: e.status, executed: e.executed, scriptOutput: e.scriptOutput });
+    finish({ type: 'error', message: e.message, status: e.status, executed: e.executed, scriptOutput: e.scriptOutput, code: /^BT_/.test(e.code || '') ? e.code : undefined, cancelled: e.cancelled });
   }
 });

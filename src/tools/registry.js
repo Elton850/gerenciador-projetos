@@ -16,6 +16,15 @@ const TOOLS = [
     api: () => require('./bt-importer/api'),
     ensure: (data) => require('./bt-importer/plan').ensureData(data), // dados persistidos (chamado na carga, applyDefaults)
   },
+  {
+    id: 'db-explorer',
+    name: 'Explorador de Banco',
+    description: 'Entende bancos SQL Server de qualquer tamanho: visão geral, mapa relacional interativo, caminhos entre tabelas, montador de JOIN, busca, amostras e Console SQL somente leitura.',
+    icon: 'layers',
+    permissions: ['Conexão cadastrada', 'SQL: leitura do catálogo (VIEW DEFINITION) e SELECT para amostras/consultas', 'Somente leitura: nada é gravado no banco'],
+    api: () => require('./db-explorer/api'),
+    ensure: (data) => require('./db-explorer/settings').ensureData(data),
+  },
 ];
 
 const publicTools = () => TOOLS.map(({ id, name, description, icon, permissions }) => ({ id, name, description, icon, permissions }));

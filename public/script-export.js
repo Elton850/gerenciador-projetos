@@ -129,6 +129,7 @@ async function renderScriptExport(main) {
       h('div', { class: 'box ok-box small' }, h('strong', null, `✓ ${plural(rs.total, 'linha retornada', 'linhas retornadas')}`), ` · ${plural(rs.columns.length, 'coluna', 'colunas')} · ${fmtMs(r.ms)} · ${r.target}${r.identity ? ` (${r.identity.server} / ${r.identity.database})` : ''} · transação desfeita`),
       tooBig ? h('div', { class: 'box bad small' }, `O resultado passou do limite de ${rs.loaded.toLocaleString('pt-BR')} linhas: não é possível gerar os arquivos. Divida o script.`) : null,
       r.cellTruncated ? h('div', { class: 'box bad small' }, 'Algum valor passou do tamanho máximo e seria cortado: não é possível gerar os arquivos.') : null,
+      rs.hiddenColumns ? h('div', { class: 'box bad small' }, `O resultado tem ${plural(rs.hiddenColumns, 'coluna', 'colunas')} além do limite de ${rs.columns.length.toLocaleString('pt-BR')}: não é possível gerar os arquivos.`) : null,
       h('div', { class: 'inline' }, setSel, h('span', { class: 'small muted' }, 'Colunas encontradas:'), rs.columns.map((c) => h('span', { class: 'pill' }, c || '(sem nome)'))),
       resultGrid(rs),
       h('div', { class: 'inline small muted' }, `Mostrando ${Math.min(rs.rows.length, rs.total).toLocaleString('pt-BR')} de ${rs.total.toLocaleString('pt-BR')}`, rs.loaded > XP_ROWS[0] ? h('label', { class: 'inline', style: 'gap:6px' }, 'Exibir:', rowsSel) : null)].filter(Boolean));

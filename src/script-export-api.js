@@ -44,9 +44,10 @@ function mount(app, { store, audit, db, connPassword, scriptRun, dataDir, SYS })
     if (!r) throw httpError(410, 'O resultado expirou ou o aplicativo foi reiniciado. Execute o script de novo.', { code: 'EXPORT_EXPIRED' });
     return r;
   };
-  // Conjunto de resultado escolhido, completo (sem corte de linhas nem de valores) — senão o arquivo sairia incompleto.
+  // Conjunto de resultado escolhido, completo (sem corte de linhas, colunas nem valores) — senão o arquivo sairia incompleto.
   const getSet = (r, n) => {
     const rs = r.sets[Number(n) || 0] || (() => { throw httpError(400, 'Conjunto de resultado inexistente.'); })();
+    if (rs.hiddenColumns) throw httpError(400, `O resultado tem mais de ${EXPORT_MAX.cols.toLocaleString('pt-BR')} colunas e o arquivo sairia incompleto. Nada foi gerado.`, { code: 'EXPORT_TOO_BIG' });
     if (rs.total > rs.rows.length) throw httpError(400, `O resultado tem ${rs.total.toLocaleString('pt-BR')} linhas e o limite é ${EXPORT_MAX.rows.toLocaleString('pt-BR')}. Divida o script (ex.: por tabela ou coligada).`, { code: 'EXPORT_TOO_BIG' });
     if (r.cellTruncated) throw httpError(400, `Algum valor do resultado passou de ${EXPORT_MAX.cell.toLocaleString('pt-BR')} caracteres e seria cortado. Nada foi gerado.`, { code: 'EXPORT_TOO_BIG' });
     return rs;

@@ -1,6 +1,6 @@
 'use strict';
 // Scripts SQL → Gerar arquivos de importação (#/scripts/export).
-// Executar o script (transação sempre desfeita no final) → ver o resultado → escolher pastas (níveis), coluna de conteúdo e
+// Executar o script (transação sempre desfeita no final) → ver o resultado → escolher pastas (níveis), colunas do conteúdo (ordem, separador, NULL) e
 // nome do arquivo → prévia (nada é escrito) → gerar. A configuração pode ser salva no próprio script.
 // Reaproveita: resultGrid/runPref/fmtMs (checklist.js), choiceDialog (workspace.js), pathField/lastDir (app.js).
 
@@ -160,7 +160,60 @@ async function renderScriptExport(main) {
       !levels.length ? h('div', { class: 'small muted' }, 'Sem níveis: todos os arquivos ficam direto na pasta de saída.') : null].filter(Boolean));
     };
     drawLevels();
-    const contentSel = colSelect(cfg.contentColumn || '', '— escolha —');
+
+    // Conteúdo das linhas: uma ou mais colunas, na ordem escolhida, juntadas pelo separador; NULL em branco ou como "NULL".
+    const realName = (n) => cols.find((c) => c.toLowerCase() === String(n).toLowerCase()) ?? n;
+    let content = (cfg.contentColumns?.length ? cfg.contentColumns : cfg.contentColumn ? [cfg.contentColumn] : []).map(realName);
+    const contentBox = h('div', { class: 'stack' });
+    const SEPS = [['', 'Nenhum (valores colados)'], [';', 'Ponto e vírgula ( ; )'], [',', 'Vírgula ( , )'], ['|', 'Barra vertical ( | )'], ['\t', 'Tabulação'], [' ', 'Espaço']];
+    const sepSel = h('select', { 'aria-label': 'Separador', style: 'width:auto' }, SEPS.map(([v, l]) => h('option', { value: v }, l)), h('option', { value: '*' }, 'Personalizado…'));
+    const sepInput = h('input', { type: 'text', maxlength: 10, placeholder: 'Ex.: ;; ou " - "', 'aria-label': 'Separador personalizado', style: 'width:140px;font-family:var(--mono)' });
+    const initSep = typeof cfg.separator === 'string' ? cfg.separator : '';
+    if (SEPS.some(([v]) => v === initSep)) sepSel.value = initSep; else { sepSel.value = '*'; sepInput.value = initSep; }
+    const separator = () => (sepSel.value === '*' ? sepInput.value.replace(/[\r\n]/g, '') : sepSel.value);
+    const sepHint = h('span', { class: 'small muted' }, 'Usado ao escolher duas ou mais colunas.');
+    const sepBox = h('div', { class: 'inline' }, h('span', { class: 'lbl', style: 'min-width:90px' }, 'Separador'), sepSel, sepInput, sepHint);
+    const nullSel = h('select', { 'aria-label': 'Valores NULL', style: 'width:auto' }, h('option', { value: 'blank' }, 'Deixar em branco'), h('option', { value: 'null' }, 'Manter como NULL'));
+    nullSel.value = cfg.nullAs === 'null' ? 'null' : 'blank';
+    const nullBox = h('div', { class: 'inline' }, h('span', { class: 'lbl', style: 'min-width:90px' }, 'Valores NULL'), nullSel);
+    const sample = h('div', { class: 'small' });
+    // separador e exemplo (1ª linha do resultado) são atualizados sem recriar os campos: o foco fica onde está
+    const drawSample = () => {
+      const multi = content.length > 1;
+      sepSel.disabled = !multi; sepInput.disabled = !multi;
+      sepInput.style.display = sepSel.value === '*' ? '' : 'none';
+      sepHint.style.display = multi ? 'none' : '';
+      const row = rs.rows[0];
+      const idx = content.filter(has).map((c) => cols.findIndex((x) => x.toLowerCase() === c.toLowerCase()));
+      const val = (v) => (v === null || v === undefined ? (nullSel.value === 'null' ? 'NULL' : '') : String(v));
+      sample.replaceChildren(...(row && idx.length ? [h('span', { class: 'muted' }, 'Exemplo (1ª linha): '),
+        h('code', { class: 'mono', style: 'white-space:pre-wrap;word-break:break-all' }, idx.map((c) => val(row[c])).join(multi ? separator() : '') || '(linha vazia)')] : []));
+    };
+    const drawContent = () => {
+      const on = (c) => content.some((x) => x.toLowerCase() === c.toLowerCase());
+      const change = () => { drawContent(); dirty(); };
+      const move = (i, d) => { [content[i], content[i + d]] = [content[i + d], content[i]]; change(); };
+      const toggle = (c) => { content = on(c) ? content.filter((x) => x.toLowerCase() !== c.toLowerCase()) : [...content, c]; change(); };
+      const named = cols.filter(Boolean);
+      contentBox.replaceChildren(
+        h('div', { class: 'inline small' },
+          h('span', { class: 'muted' }, `${content.length} de ${named.length} · clique na coluna para incluir (no fim da ordem) ou tirar:`),
+          h('button', { class: 'btn sm ghost', disabled: named.every(on), onclick: () => { content = [...content, ...named.filter((c) => !on(c))]; change(); } }, 'Selecionar todas'),
+          h('button', { class: 'btn sm ghost', disabled: !content.length, onclick: () => { content = []; change(); } }, 'Limpar')),
+        h('div', { class: 'inline', style: 'gap:6px' }, named.map((c) => h('button', { class: `chip-btn mono${on(c) ? ' active' : ''}`, 'aria-pressed': String(on(c)), title: on(c) ? 'Tirar do conteúdo' : 'Incluir no fim do conteúdo', onclick: () => toggle(c) },
+          on(c) ? `${content.findIndex((x) => x.toLowerCase() === c.toLowerCase()) + 1}. ${c}` : c))),
+        content.length ? h('div', { class: 'stack', style: 'gap:4px' }, h('span', { class: 'small muted' }, 'Ordem em cada linha do arquivo:'), ...content.map((c, i) => h('div', { class: 'inline', style: 'gap:4px' },
+          h('span', { class: 'small muted', style: 'min-width:22px;text-align:right' }, `${i + 1}.`),
+          h('span', { class: `pill mono${has(c) ? '' : ' overdue'}`, style: 'min-width:160px' }, has(c) ? c : `${c} (não existe no resultado)`),
+          h('button', { class: 'btn sm ghost', title: 'Mover para cima', 'aria-label': `Mover ${c} para cima`, disabled: i === 0, onclick: () => move(i, -1) }, '↑'),
+          h('button', { class: 'btn sm ghost', title: 'Mover para baixo', 'aria-label': `Mover ${c} para baixo`, disabled: i === content.length - 1, onclick: () => move(i, 1) }, '↓'),
+          h('button', { class: 'btn sm ghost', title: 'Tirar do conteúdo', 'aria-label': `Tirar ${c} do conteúdo`, onclick: () => { content.splice(i, 1); change(); } }, '✕')))) : h('div', { class: 'small muted' }, 'Nenhuma coluna escolhida.'));
+      drawSample();
+    };
+    sepSel.addEventListener('change', () => { drawSample(); dirty(); if (sepSel.value === '*') sepInput.focus(); });
+    sepInput.addEventListener('input', () => { drawSample(); dirty(); });
+    nullSel.addEventListener('change', () => { drawSample(); dirty(); });
+    drawContent();
     const nameInput = h('input', { type: 'text', maxlength: 200, value: cfg.fileName || '', placeholder: 'Ex.: {TABELA}-{COLIGADA}.txt', style: 'font-family:var(--mono)' });
     nameInput.addEventListener('input', dirty);
     const insertCol = (c) => {
@@ -173,7 +226,7 @@ async function renderScriptExport(main) {
     const dir = pathField({ value: lastDir('script-export'), kind: 'folder', title: 'Pasta de saída dos arquivos', placeholder: 'C:\\Migracao\\Importacao' });
     dir.input.addEventListener('input', dirty);
     xpDir = dir;
-    const config = () => ({ levels: levels.filter(Boolean), contentColumn: contentSel.value, fileName: nameInput.value.trim(), encoding: encSel.value });
+    const config = () => ({ levels: levels.filter(Boolean), contentColumn: content[0] || '', contentColumns: content, separator: separator(), nullAs: nullSel.value, fileName: nameInput.value.trim(), encoding: encSel.value });
 
     const saveBtn = h('button', { class: 'btn', onclick: (e) => busy(e.target, async () => {
       const r = await api('PUT', `/api/scripts/${scriptSel.value}/export-config`, { config: config() });
@@ -191,7 +244,8 @@ async function renderScriptExport(main) {
     }
     configBox.replaceChildren(card('Organização dos arquivos', null,
       field('Pastas (níveis de agrupamento)', levelsBox, 'Cada nível vira uma subpasta com o valor da coluna, na ordem.'),
-      field('Conteúdo das linhas', contentSel, 'O valor desta coluna é gravado como uma linha do arquivo, sem alteração, na ordem do resultado.'),
+      field('Conteúdo das linhas', h('div', { class: 'stack' }, contentBox, sepBox, nullBox, sample),
+        'Cada linha do resultado vira uma linha do arquivo, na ordem do resultado: os valores das colunas escolhidas, na ordem acima, juntados pelo separador, sem outra alteração. NULL: em branco ou o texto “NULL”.'),
       field('Nome do arquivo', h('div', { class: 'stack' }, nameInput,
         h('div', { class: 'inline small' }, h('span', { class: 'muted' }, 'Inserir coluna:'), cols.filter(Boolean).map((c) => h('button', { class: 'btn sm ghost mono', onclick: () => insertCol(c) }, `{${c}}`)))),
       'Texto fixo + {COLUNA}. Linhas com os mesmos valores de pasta e nome vão para o mesmo arquivo. Caracteres inválidos no Windows (\\ / : * ? " < > |) viram “_”; valor vazio vira “_”.'),

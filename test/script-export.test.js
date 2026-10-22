@@ -70,6 +70,28 @@ test('resultado vazio, coluna inexistente e configuração inválida', () => {
   assert.throws(() => X.cleanConfig({ levels: ['A', 'a'] }), /mais de um nível/);
 });
 
+test('várias colunas no conteúdo: ordem escolhida, separador e NULL em branco ou como "NULL"', () => {
+  const rs = { columns: ['T', 'COD', 'NOME', 'VALOR'], rows: [['A', '001', 'Ação', null], ['A', null, 'Beta', '10,5'], ['B', '003', '', '7']] };
+  const p = X.buildPlan(rs, { levels: [], contentColumns: ['nome', 'COD', 'VALOR'], separator: ';', fileName: '{T}.txt' });
+  assert.deepEqual(p.config.contentColumns, ['nome', 'COD', 'VALOR']);
+  assert.equal(p.config.contentColumn, 'nome', 'primeira coluna também na forma antiga');
+  assert.equal(X.fileText(p.files[0], rs.rows, p.content, p.config), 'Ação;001;\r\nBeta;;10,5\r\n', 'ordem escolhida; NULL em branco por padrão');
+  const sep = (s) => X.fileText(p.files[0], rs.rows, p.content, { separator: s });
+  assert.equal(sep('\t'), 'Ação\t001\t\r\nBeta\t\t10,5\r\n', 'tabulação');
+  assert.equal(sep(''), 'Ação001\r\nBeta10,5\r\n', 'sem separador = valores colados');
+  const n = X.buildPlan(rs, { contentColumns: ['COD', 'VALOR'], separator: ' | ', nullAs: 'null', fileName: 'x.txt' });
+  assert.equal(X.fileText(n.files[0], rs.rows, n.content, n.config), '001 | NULL\r\nNULL | 10,5\r\n003 | 7\r\n', 'NULL mantido como texto; vazio continua vazio');
+  const one = X.buildPlan(rs, { contentColumns: ['VALOR'], separator: ';', nullAs: 'null', fileName: 'x.txt' });
+  assert.equal(X.fileText(one.files[0], rs.rows, one.content, one.config), 'NULL\r\n10,5\r\n7\r\n', 'uma coluna também respeita NULL');
+  assert.deepEqual(X.cleanConfig({ contentColumns: ['L'], separator: ';', fileName: 'a.txt' }), { levels: [], contentColumn: 'L', fileName: 'a.txt', encoding: 'utf8' }, 'uma coluna e NULL em branco = forma antiga');
+  assert.deepEqual(X.cleanConfig({ contentColumn: 'L', fileName: 'a.txt' }), { levels: [], contentColumn: 'L', fileName: 'a.txt', encoding: 'utf8' }, 'configuração antiga continua válida');
+  assert.throws(() => X.cleanConfig({ contentColumns: ['A', 'a'] }), /mais de uma vez/);
+  assert.throws(() => X.cleanConfig({ contentColumns: ['A', 'B'], separator: '12345678901' }), /no máximo 10/);
+  assert.throws(() => X.cleanConfig({ contentColumns: ['A', 'B'], separator: '\r\n' }), /quebra de linha/);
+  assert.throws(() => X.buildPlan(rs, { contentColumns: ['COD', 'XPTO'], fileName: 'a.txt' }), (e) => e.code === 'EXPORT_COLUMNS' && e.missing.join() === 'XPTO');
+  assert.throws(() => X.buildPlan(rs, { contentColumns: [], fileName: 'a.txt' }), /conteúdo das linhas/);
+});
+
 test('codificação: UTF-8 sem BOM e ANSI (Windows-1252) com "?" para o que não existe', () => {
   assert.deepEqual([...X.encode('ação', 'utf8').buffer], [0x61, 0xc3, 0xa7, 0xc3, 0xa3, 0x6f]);
   const a = X.encode('ação € “x” ✓', 'ansi');
@@ -171,6 +193,14 @@ test('API: executar (transação desfeita), prévia sem gravar, gerar, conflitos
   assert.deepEqual(listFiles(out2), ['PFUNC (2).txt', 'pfunc.txt'], 'o segundo grupo ganha nome livre');
   assert.equal(split.json.filesCreated, 2);
 
+  // várias colunas no conteúdo, na ordem escolhida, com separador e NULL mantido
+  const out3 = path.join(tmp, 'Colunas'); fs.mkdirSync(out3);
+  const multi = (await api('POST', '/api/script-export/run', { scriptId: await mk('Colunas', `SELECT T, COD, NOME FROM (VALUES ('A', '1', 'Ação'), ('A', NULL, 'Beta')) v(T, COD, NOME) ORDER BY NOME`), target })).json;
+  const mcfg = { levels: [], contentColumns: ['NOME', 'T', 'COD'], separator: ';', nullAs: 'null', fileName: '{T}.txt', encoding: 'ansi' };
+  const mg = await api('POST', '/api/script-export/generate', { resultId: multi.resultId, config: mcfg, outDir: out3 });
+  assert.equal(mg.status, 200, JSON.stringify(mg.json));
+  assert.deepEqual([...fs.readFileSync(path.join(out3, 'A.txt'))], [...Buffer.from('A\xe7\xe3o;A;1\r\nBeta;A;NULL\r\n', 'latin1')], 'colunas na ordem, separador, NULL e ANSI');
+
   // 12) coluna inexistente; diretório inválido
   const bad = await api('POST', '/api/script-export/preview', { resultId: rid, config: { ...cfg, levels: ['EMPRESA'] }, outDir: out });
   assert.equal(bad.json.code, 'EXPORT_COLUMNS');
@@ -216,4 +246,9 @@ test('API: executar (transação desfeita), prévia sem gravar, gerar, conflitos
   assert.equal(raw.scripts.find((s) => s.id === sid).exportConfig.fileName, '{TABELA}-{COLIGADA}.txt', 'persistido');
   assert.equal((await api('POST', '/api/script-export/run', { scriptId: sid, target })).json.config.encoding, 'ansi', 'volta ao executar');
   assert.equal((await api('PUT', `/api/scripts/${sid}/export-config`, { config: { contentColumn: '' } })).status, 400);
+  const sv2 = await api('PUT', `/api/scripts/${sid}/export-config`, { config: { levels: [], contentColumns: ['LINHA_IMPORTACAO', 'TABELA'], separator: '\t', nullAs: 'null', fileName: '{TABELA}.txt' } });
+  assert.equal(sv2.status, 200, JSON.stringify(sv2.json));
+  const back = (await api('POST', '/api/script-export/run', { scriptId: sid, target })).json.config;
+  assert.deepEqual([back.contentColumns, back.separator, back.nullAs], [['LINHA_IMPORTACAO', 'TABELA'], '\t', 'null'], 'várias colunas, separador e NULL voltam ao executar');
+  assert.equal((await api('PUT', `/api/scripts/${sid}/export-config`, { config: { contentColumns: [], fileName: 'a.txt' } })).status, 400);
 });

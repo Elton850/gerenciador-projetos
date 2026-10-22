@@ -118,10 +118,8 @@ function mount(app, { store, audit, db, connPassword, scriptRun, dataDir, SYS })
   app.post('/api/script-export/preview', (req, res) => {
     const { rs, plan } = planFor(req.body);
     const outDir = outDirOf(req.body.outDir);
-    const content = plan.config.contentColumn;
-    const ci = rs.columns.findIndex((c) => c.toLowerCase() === content.toLowerCase());
     let unmappable = 0;
-    if (plan.config.encoding === 'ansi') for (const f of plan.files) unmappable += encode(fileText(f, rs.rows, ci), 'ansi').unmappable;
+    if (plan.config.encoding === 'ansi') for (const f of plan.files) unmappable += encode(fileText(f, rs.rows, plan.content, plan.config), 'ansi').unmappable;
     const cmp = (x, y) => x.localeCompare(y, 'pt-BR', { numeric: true, sensitivity: 'base' });
     const byPath = (a, b) => { for (let i = 0; i < Math.min(a.dirs.length, b.dirs.length); i++) { const c = cmp(a.dirs[i], b.dirs[i]); if (c) return c; } return a.dirs.length - b.dirs.length || cmp(a.name, b.name); };
     const files = plan.files.map((f) => ({ rel: f.rel, dirs: f.dirs, name: f.name, lines: f.rows.length, exists: fs.existsSync(path.join(outDir, f.rel)) })).sort(byPath); // árvore da prévia em ordem
@@ -156,7 +154,6 @@ function mount(app, { store, audit, db, connPassword, scriptRun, dataDir, SYS })
     const probe = path.join(outDir, `.gp-teste-escrita-${crypto.randomBytes(4).toString('hex')}.tmp`);
     try { fs.writeFileSync(probe, ''); fs.unlinkSync(probe); } catch (e) { throw httpError(400, `Não foi possível gravar na pasta “${outDir}”: ${writeError(e)}.`, { code: 'EXPORT_DIR' }); }
 
-    const ci = rs.columns.findIndex((c) => c.toLowerCase() === plan.config.contentColumn.toLowerCase());
     let replaced = 0;
     if (existing.length && onExisting === 'replace') {
       await trash(existing.map((rel) => path.join(outDir, rel)));
@@ -180,7 +177,7 @@ function mount(app, { store, audit, db, connPassword, scriptRun, dataDir, SYS })
         let name = f.name;
         if (fs.existsSync(path.join(dir, name)) || taken.has(path.join(dir, name).toLowerCase())) { name = freeName(dir, name, false, taken); renamed++; }
         const target = path.join(dir, name);
-        const enc = encode(fileText(f, rs.rows, ci), plan.config.encoding);
+        const enc = encode(fileText(f, rs.rows, plan.content, plan.config), plan.config.encoding);
         fs.writeFileSync(target, enc.buffer, { flag: 'wx' }); // 'wx': nunca sobrescreve
         taken.add(target.toLowerCase());
         filesCreated++; lines += f.rows.length; unmappable += enc.unmappable;

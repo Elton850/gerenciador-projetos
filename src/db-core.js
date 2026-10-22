@@ -183,10 +183,10 @@ async function executePlan(conn, password, plan, { dryRun = false, allowDestruct
 // qualquer erro desfaz tudo o que o script fez. Devolve os resultados com limites (a tela mostra; nada vai para a auditoria).
 // Opcional (Gerar arquivos de importação): `limits` maiores (até EXPORT_MAX) e `rollback: true` = desfaz no final mesmo sem erro.
 const RUN_LIMITS = { sets: 20, rows: 1000, cols: 100, cell: 2000, messages: 500 };
-const EXPORT_MAX = { rows: 200000, cell: 1000000 };
+const EXPORT_MAX = { rows: 200000, cell: 1000000, cols: 4096 }; // 4096 = máximo de colunas de um SELECT no SQL Server
 async function runScript(conn, password, { name, batches, allowDestructiveScripts = false, limits = null, rollback = false }) {
   const L = { ...RUN_LIMITS };
-  if (limits) for (const k of ['rows', 'cell']) if (Number(limits[k]) > 0) L[k] = Math.min(Number(limits[k]), EXPORT_MAX[k]);
+  if (limits) for (const k of ['rows', 'cell', 'cols']) if (Number(limits[k]) > 0) L[k] = Math.min(Number(limits[k]), EXPORT_MAX[k]);
   batches.forEach((b, i) => assertStatementSafe({ kind: 'userscript', sql: b.sql, script: name, batch: i + 1, of: batches.length }, { allowDestructiveScripts }));
   return withPool(conn, password, async (h) => {
     const who = await identity(h);

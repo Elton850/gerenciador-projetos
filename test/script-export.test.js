@@ -248,6 +248,19 @@ test('API: executar (transação desfeita), prévia sem gravar, gerar, conflitos
     assert.match(off.error, /VPN/);
   } finally { db.runScript = real; }
 
+  // layout com mais de 100 colunas: todas chegam (antes o resultado parava na 100ª) e entram na linha do arquivo
+  const wideCols = Array.from({ length: 150 }, (_, i) => `C${String(i + 1).padStart(3, '0')}`);
+  const wide = (await api('POST', '/api/script-export/run', { scriptId: await mk('Largo', `SELECT ${wideCols.map((c, i) => `${i === 2 ? "' '" : `'v${i + 1}'`} AS ${c}`).join(', ')}`), target })).json;
+  assert.equal(wide.ok, true, wide.error);
+  assert.equal(wide.sets[0].columns.length, 150, 'nenhuma coluna cortada');
+  assert.equal(wide.sets[0].hiddenColumns, 0);
+  const out4 = path.join(tmp, 'Largo'); fs.mkdirSync(out4);
+  const wg = await api('POST', '/api/script-export/generate', { resultId: wide.resultId, config: { levels: [], contentColumns: [...wideCols].reverse(), separator: ';', fileName: 'largo.txt' }, outDir: out4 });
+  assert.equal(wg.status, 200, JSON.stringify(wg.json));
+  const line = fs.readFileSync(path.join(out4, 'largo.txt'), 'utf8').replace(/\r\n$/, '').split(';');
+  assert.equal(line.length, 150);
+  assert.deepEqual([line[0], line[147], line[149]], ['v150', '', 'v1'], 'ordem invertida; coluna só com espaço sai vazia');
+
   // 13) salvar configuração no script e recarregar
   const sv = await api('PUT', `/api/scripts/${sid}/export-config`, { config: { levels: ['TABELA', 'COLIGADA'], contentColumn: 'LINHA_IMPORTACAO', fileName: '{TABELA}-{COLIGADA}.txt', encoding: 'ansi' } });
   assert.equal(sv.status, 200, JSON.stringify(sv.json));

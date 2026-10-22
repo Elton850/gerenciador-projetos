@@ -92,6 +92,17 @@ test('várias colunas no conteúdo: ordem escolhida, separador e NULL em branco 
   assert.throws(() => X.buildPlan(rs, { contentColumns: [], fileName: 'a.txt' }), /conteúdo das linhas/);
 });
 
+test('várias colunas com separador: valor só com espaços sai vazio (";;", não "; ;"); sem separador ou uma coluna mantém', () => {
+  const rs = { columns: ['V', 'B', 'Z', 'T'], rows: [['828,89', ' ', '0', '   '], [' a ', '\t', null, 'x']] };
+  const p = X.buildPlan(rs, { contentColumns: ['V', 'B', 'Z', 'T'], separator: ';', fileName: 'f.txt' });
+  assert.equal(X.fileText(p.files[0], rs.rows, p.content, p.config), '828,89;;0;\r\n a ;;;x\r\n', 'só espaços → vazio; espaços em volta de texto ficam');
+  const n = X.buildPlan(rs, { contentColumns: ['B', 'Z'], separator: ';', nullAs: 'null', fileName: 'f.txt' });
+  assert.equal(X.fileText(n.files[0], rs.rows, n.content, n.config), ';0\r\n;NULL\r\n', 'em branco não vira o texto NULL');
+  assert.equal(X.fileText(p.files[0], rs.rows, p.content, { separator: '' }), '828,89 0   \r\n a \tx\r\n', 'sem separador (posicional): espaços mantidos');
+  const one = X.buildPlan(rs, { contentColumn: 'B', fileName: 'f.txt' });
+  assert.equal(X.fileText(one.files[0], rs.rows, one.content, one.config), ' \r\n\t\r\n', 'uma coluna: valor sem alteração');
+});
+
 test('codificação: UTF-8 sem BOM e ANSI (Windows-1252) com "?" para o que não existe', () => {
   assert.deepEqual([...X.encode('ação', 'utf8').buffer], [0x61, 0xc3, 0xa7, 0xc3, 0xa3, 0x6f]);
   const a = X.encode('ação € “x” ✓', 'ansi');

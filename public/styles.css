@@ -1612,3 +1612,11 @@ tr.dbx-hit > td { background: color-mix(in srgb, var(--accent) 14%, transparent)
   .dbx-barrow { grid-template-columns: minmax(0, 1fr) auto; } .dbx-barrow .dbx-barline { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { .dbx-edge, .dbx-node { transition: none; } }
+
+/* Gerar arquivos de importação: lista dupla (Disponíveis ↔ Ordem no arquivo), feita para layouts com centenas de colunas */
+.dual-list { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1.3fr); gap: 10px; align-items: start; }
+.dual-actions { display: flex; flex-direction: column; gap: 6px; padding-top: 58px; }
+.dual-select { width: 100%; min-height: 280px; font-size: 12.5px; padding: 4px; white-space: pre; }
+.dual-select option { padding: 2px 6px; border-radius: 4px; }
+.dual-select option:checked { background: var(--selection); color: var(--text); box-shadow: inset 3px 0 0 var(--accent); }
+@media (max-width: 760px) { .dual-list { grid-template-columns: minmax(0, 1fr); } .dual-actions { flex-direction: row; flex-wrap: wrap; padding-top: 0; } }

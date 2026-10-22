@@ -185,31 +185,111 @@ async function renderScriptExport(main) {
       sepHint.style.display = multi ? 'none' : '';
       const row = rs.rows[0];
       const idx = content.filter(has).map((c) => cols.findIndex((x) => x.toLowerCase() === c.toLowerCase()));
-      const val = (v) => (v === null || v === undefined ? (nullSel.value === 'null' ? 'NULL' : '') : String(v));
+      const sep = multi ? separator() : '';
+      // igual a fileText (servidor): com várias colunas e separador, valor só com espaços sai vazio
+      const val = (v) => { if (v === null || v === undefined) return nullSel.value === 'null' ? 'NULL' : ''; const t = String(v); return multi && sep && !t.trim() ? '' : t; };
       sample.replaceChildren(...(row && idx.length ? [h('span', { class: 'muted' }, 'Exemplo (1ª linha): '),
-        h('code', { class: 'mono', style: 'white-space:pre-wrap;word-break:break-all' }, idx.map((c) => val(row[c])).join(multi ? separator() : '') || '(linha vazia)')] : []));
+        h('code', { class: 'mono', style: 'white-space:pre-wrap;word-break:break-all' }, idx.map((c) => val(row[c])).join(sep) || '(linha vazia)')] : []));
     };
-    const drawContent = () => {
-      const on = (c) => content.some((x) => x.toLowerCase() === c.toLowerCase());
-      const change = () => { drawContent(); dirty(); };
-      const move = (i, d) => { [content[i], content[i + d]] = [content[i + d], content[i]]; change(); };
-      const toggle = (c) => { content = on(c) ? content.filter((x) => x.toLowerCase() !== c.toLowerCase()) : [...content, c]; change(); };
-      const named = cols.filter(Boolean);
-      contentBox.replaceChildren(
-        h('div', { class: 'inline small' },
-          h('span', { class: 'muted' }, `${content.length} de ${named.length} · clique na coluna para incluir (no fim da ordem) ou tirar:`),
-          h('button', { class: 'btn sm ghost', disabled: named.every(on), onclick: () => { content = [...content, ...named.filter((c) => !on(c))]; change(); } }, 'Selecionar todas'),
-          h('button', { class: 'btn sm ghost', disabled: !content.length, onclick: () => { content = []; change(); } }, 'Limpar')),
-        h('div', { class: 'inline', style: 'gap:6px' }, named.map((c) => h('button', { class: `chip-btn mono${on(c) ? ' active' : ''}`, 'aria-pressed': String(on(c)), title: on(c) ? 'Tirar do conteúdo' : 'Incluir no fim do conteúdo', onclick: () => toggle(c) },
-          on(c) ? `${content.findIndex((x) => x.toLowerCase() === c.toLowerCase()) + 1}. ${c}` : c))),
-        content.length ? h('div', { class: 'stack', style: 'gap:4px' }, h('span', { class: 'small muted' }, 'Ordem em cada linha do arquivo:'), ...content.map((c, i) => h('div', { class: 'inline', style: 'gap:4px' },
-          h('span', { class: 'small muted', style: 'min-width:22px;text-align:right' }, `${i + 1}.`),
-          h('span', { class: `pill mono${has(c) ? '' : ' overdue'}`, style: 'min-width:160px' }, has(c) ? c : `${c} (não existe no resultado)`),
-          h('button', { class: 'btn sm ghost', title: 'Mover para cima', 'aria-label': `Mover ${c} para cima`, disabled: i === 0, onclick: () => move(i, -1) }, '↑'),
-          h('button', { class: 'btn sm ghost', title: 'Mover para baixo', 'aria-label': `Mover ${c} para baixo`, disabled: i === content.length - 1, onclick: () => move(i, 1) }, '↓'),
-          h('button', { class: 'btn sm ghost', title: 'Tirar do conteúdo', 'aria-label': `Tirar ${c} do conteúdo`, onclick: () => { content.splice(i, 1); change(); } }, '✕')))) : h('div', { class: 'small muted' }, 'Nenhuma coluna escolhida.'));
+    // Lista dupla (funciona com centenas de colunas): Disponíveis ↔ Ordem no arquivo. Seleção múltipla (Ctrl/Shift), busca nos
+    // dois lados, duplo clique/Enter inclui, Delete tira, Alt+↑/↓ move; topo, fim, posição exata e “Colar ordem” (lista do layout).
+    const lower = (c) => String(c).toLowerCase();
+    const on = (c) => content.some((x) => lower(x) === lower(c));
+    const named = cols.filter(Boolean);
+    const listSel = (label) => h('select', { multiple: true, size: 14, 'aria-label': label, class: 'mono dual-select' });
+    const availSel = listSel('Colunas disponíveis');
+    const orderSel = listSel('Ordem das colunas em cada linha do arquivo');
+    const availFilter = h('input', { type: 'search', placeholder: 'Buscar coluna…', 'aria-label': 'Buscar nas colunas disponíveis' });
+    const orderFilter = h('input', { type: 'search', placeholder: 'Buscar na ordem…', 'aria-label': 'Buscar na ordem escolhida' });
+    const availCount = h('span', { class: 'small muted' });
+    const orderCount = h('span', { class: 'small muted' });
+    const posInput = h('input', { type: 'number', min: 1, step: 1, placeholder: 'nº', 'aria-label': 'Posição de destino', style: 'width:70px' });
+    const picked = (sel) => [...sel.selectedOptions].map((o) => o.value);
+    const fill = (sel, items, keep, label) => {
+      const top = sel.scrollTop;
+      sel.replaceChildren(...items.map((it) => { const o = h('option', { value: it.value, title: it.value }, label(it)); o.selected = keep.has(lower(it.value)); return o; }));
+      sel.scrollTop = top;
+    };
+    // redesenha só as opções (as listas e campos continuam os mesmos: foco, rolagem e seleção ficam)
+    const drawContent = (keepOrder = new Set(picked(orderSel).map(lower)), keepAvail = new Set(picked(availSel).map(lower))) => {
+      const fa = lower(availFilter.value.trim()); const fo = lower(orderFilter.value.trim());
+      const avail = named.filter((c) => !on(c));
+      fill(availSel, avail.filter((c) => !fa || lower(c).includes(fa)).map((c) => ({ value: c })), keepAvail, (it) => it.value);
+      fill(orderSel, content.map((c, i) => ({ value: c, i })).filter((it) => !fo || lower(it.value).includes(fo)), keepOrder,
+        (it) => `${String(it.i + 1).padStart(String(content.length).length, ' ')}. ${it.value}${has(it.value) ? '' : '  (não existe no resultado)'}`);
+      availCount.textContent = `${avail.length} disponíve${avail.length === 1 ? 'l' : 'is'}${fa ? ` · ${availSel.options.length} na busca` : ''}`;
+      orderCount.textContent = `${content.length} de ${named.length} no arquivo${fo ? ` · ${orderSel.options.length} na busca` : ''}`;
+      posInput.max = String(Math.max(1, content.length));
       drawSample();
     };
+    const change = (keepOrder, keepAvail) => { drawContent(keepOrder, keepAvail); dirty(); };
+    const add = (list, select = true) => { const n = list.filter((c) => !on(c)); if (!n.length) return; content = [...content, ...n]; change(new Set(select ? n.map(lower) : []), new Set()); };
+    const remove = (list) => { if (!list.length) return; const k = new Set(list.map(lower)); content = content.filter((c) => !k.has(lower(c))); change(new Set(), k); };
+    // move o bloco selecionado (mantém a ordem relativa entre os selecionados)
+    const moveTo = (pos) => {
+      const k = new Set(picked(orderSel).map(lower));
+      if (!k.size) return toast('Selecione na lista “Ordem” as colunas a mover.', 'error');
+      const sel = content.filter((c) => k.has(lower(c)));
+      const rest = content.filter((c) => !k.has(lower(c)));
+      const at = Math.max(0, Math.min(rest.length, pos));
+      content = [...rest.slice(0, at), ...sel, ...rest.slice(at)];
+      change(k);
+      orderSel.querySelector('option:checked')?.scrollIntoView({ block: 'nearest' });
+    };
+    const step = (d) => {
+      const k = new Set(picked(orderSel).map(lower));
+      if (!k.size) return;
+      const idx = content.map((c, i) => (k.has(lower(c)) ? i : -1)).filter((i) => i >= 0);
+      if (d < 0 ? idx[0] === 0 : idx[idx.length - 1] === content.length - 1) return;
+      for (const i of d < 0 ? idx : [...idx].reverse()) [content[i], content[i + d]] = [content[i + d], content[i]];
+      change(k);
+      orderSel.querySelector('option:checked')?.scrollIntoView({ block: 'nearest' });
+    };
+    const pasteOrder = () => {
+      const ta = h('textarea', { rows: 10, class: 'mono', style: 'width:100%', placeholder: 'CODIGO; NOME; CPF…\nou uma coluna por linha (como no layout)' });
+      const msg = h('div', { class: 'small' });
+      const apply = () => {
+        const names = ta.value.split(/[\r\n\t;,]+/).map((x) => x.trim().replace(/^\[|\]$/g, '')).filter(Boolean);
+        const found = []; const missing = [];
+        for (const n of names) { const c = named.find((x) => lower(x) === lower(n)); if (!c) missing.push(n); else if (!found.some((x) => lower(x) === lower(c))) found.push(c); }
+        if (!found.length) { msg.replaceChildren(h('div', { class: 'box bad small' }, 'Nenhum dos nomes colados existe no resultado.')); return; }
+        content = found; orderFilter.value = ''; change(new Set());
+        m.close();
+        toast(missing.length ? `${plural(found.length, 'coluna aplicada', 'colunas aplicadas')}; não existem no resultado: ${missing.slice(0, 8).join(', ')}${missing.length > 8 ? '…' : ''}` : `${plural(found.length, 'coluna aplicada', 'colunas aplicadas')} na ordem colada.`, missing.length ? 'error' : 'ok');
+      };
+      const m = openModal({ title: 'Colar ordem do layout', size: 'sm',
+        body: [h('p', { class: 'small muted', style: 'margin:0 0 8px' }, 'Cole os nomes das colunas na ordem do layout, separados por vírgula, ponto e vírgula, tabulação ou um por linha. A ordem atual é substituída; nomes que não existem no resultado são ignorados e avisados.'), ta, msg],
+        footer: [h('button', { class: 'btn', onclick: () => m.close() }, 'Cancelar'), h('button', { class: 'btn primary', onclick: apply }, 'Aplicar ordem')] });
+      ta.focus();
+    };
+    availFilter.addEventListener('input', () => drawContent());
+    orderFilter.addEventListener('input', () => drawContent());
+    availSel.addEventListener('dblclick', () => add(picked(availSel)));
+    orderSel.addEventListener('dblclick', () => remove(picked(orderSel)));
+    availSel.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(picked(availSel)); } });
+    orderSel.addEventListener('keydown', (e) => {
+      if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); remove(picked(orderSel)); }
+      if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); step(e.key === 'ArrowUp' ? -1 : 1); }
+    });
+    const btn = (label, title, onclick) => h('button', { class: 'btn sm', title, 'aria-label': title, onclick }, label);
+    contentBox.replaceChildren(
+      h('div', { class: 'dual-list' },
+        h('div', { class: 'stack', style: 'gap:4px;min-width:0' }, h('div', { class: 'stack', style: 'gap:0' }, h('span', { class: 'lbl' }, 'Disponíveis'), availCount), availFilter, availSel),
+        h('div', { class: 'dual-actions' },
+          btn('Incluir →', 'Incluir as selecionadas no fim da ordem (Enter ou duplo clique)', () => add(picked(availSel))),
+          btn('← Tirar', 'Tirar as selecionadas da ordem (Delete ou duplo clique)', () => remove(picked(orderSel))),
+          btn('Todas »', 'Incluir todas as colunas (as que faltam vão para o fim, na ordem do resultado)', () => add(named, false)),
+          btn('« Limpar', 'Tirar todas as colunas da ordem', () => remove([...content]))),
+        h('div', { class: 'stack', style: 'gap:4px;min-width:0' }, h('div', { class: 'stack', style: 'gap:0' }, h('span', { class: 'lbl' }, 'Ordem em cada linha do arquivo'), orderCount), orderFilter, orderSel,
+          h('div', { class: 'inline', style: 'gap:4px' },
+            btn('⤒', 'Mover as selecionadas para o topo', () => moveTo(0)),
+            btn('↑', 'Mover as selecionadas uma posição para cima (Alt+↑)', () => step(-1)),
+            btn('↓', 'Mover as selecionadas uma posição para baixo (Alt+↓)', () => step(1)),
+            btn('⤓', 'Mover as selecionadas para o fim', () => moveTo(content.length)),
+            h('span', { class: 'small muted' }, 'Posição'), posInput,
+            btn('Mover', 'Mover as selecionadas para a posição informada', () => { const n = Math.round(Number(posInput.value)); if (!(n >= 1)) return toast('Informe a posição (1, 2, 3…).', 'error'); moveTo(n - 1); })))),
+      h('div', { class: 'inline small' }, h('button', { class: 'btn sm ghost', onclick: pasteOrder }, 'Colar ordem do layout…'),
+        h('span', { class: 'muted' }, 'Ctrl/Shift + clique seleciona várias · duplo clique inclui/tira · Alt+↑/↓ move')));
     sepSel.addEventListener('change', () => { drawSample(); dirty(); if (sepSel.value === '*') sepInput.focus(); });
     sepInput.addEventListener('input', () => { drawSample(); dirty(); });
     nullSel.addEventListener('change', () => { drawSample(); dirty(); });

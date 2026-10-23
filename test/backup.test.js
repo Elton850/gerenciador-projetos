@@ -216,6 +216,25 @@ test('máquina nova (pasta vazia): importa tudo; documento cujo caminho não exi
   assert.ok(fs.existsSync(path.join(machineB, 'scripts', '.versoes', 'carga__20261001-120000.sql')));
 });
 
+test('backup de máquina que já recebeu documento restaurado (data/documentos + documentos/ no pacote): importa em outra sem EEXIST', async () => {
+  const machineB = path.join(tmp, 'maquinaB', 'data');
+  const sB = new Store(machineB);
+  const { buffer } = await B.createBackup({ dataDir: machineB, state: sB.data, unprotect });
+  const pkg = await B.readBackup(buffer);
+  assert.ok(pkg.files.has('data/documentos/d1/Manual.pdf') && pkg.files.has('documentos/d1/Manual.pdf'));
+  const machineC = path.join(tmp, 'maquinaC', 'data');
+  fs.renameSync(machineB, path.join(tmp, 'maquinaB', 'data-fora')); // na máquina C o caminho da máquina B não existe
+  try {
+    const { restoredDocs } = await B.stageAndSwap({ dataDir: machineC, pkg, protect: async () => assert.fail('sem senhas no pacote') });
+    assert.deepEqual(restoredDocs, ['d1']);
+    const s = new Store(machineC);
+    const doc = s.data.documents.find((d) => d.id === 'd1');
+    assert.equal(doc.source.path, path.join(machineC, 'documentos', 'd1', 'Manual.pdf'));
+    assert.equal(fs.readFileSync(doc.source.path, 'utf8'), 'conteudo-do-manual');
+    assert.deepEqual(B.compareAfterImport(machineC, s.data, pkg).diffs, []);
+  } finally { fs.renameSync(path.join(tmp, 'maquinaB', 'data-fora'), machineB); }
+});
+
 test('versão do backup: manifesto traz versão do app e do esquema; preferências da tela vão e voltam; backup de versão mais nova é recusado', async () => {
   const prefs = { 'gp-theme': 'dark', 'gp-ui': '{"menuMin":true}', 'gp-lastdir': '{"x":"C:\\pasta"}' };
   ok(await api('POST', '/api/backup/export', { path: out('prefs.gpbackup'), prefs }));

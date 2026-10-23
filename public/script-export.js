@@ -2,9 +2,12 @@
 // Scripts SQL → Gerar arquivos de importação (#/scripts/export).
 // Executar o script (transação sempre desfeita no final) → ver o resultado → escolher pastas (níveis), colunas do conteúdo (ordem, separador, NULL) e
 // nome do arquivo → prévia (nada é escrito) → gerar. A configuração pode ser salva no próprio script.
+// Origem: script cadastrado ou consulta livre (uma consulta SELECT/WITH digitada aqui; o servidor só aceita leitura). A consulta livre e a
+// última organização usada com ela ficam só nesta sessão do app (para reaproveitar, cadastre a consulta como script).
 // Reaproveita: resultGrid/runPref/fmtMs (checklist.js), choiceDialog (workspace.js), pathField/lastDir (app.js).
 
 let exportScriptId = null; // script pré-selecionado ao vir da lista de scripts
+const exportFree = { on: false, query: '', config: null }; // consulta livre (memória da sessão)
 const XP_ROWS = [1000, 5000, 20000, 50000, 200000];
 
 async function renderScriptExport(main) {
@@ -14,13 +17,15 @@ async function renderScriptExport(main) {
   if (route().name !== 'scripts' || route().id !== 'export') return;
   const scripts = scriptsCache.filter((s) => s.exists);
   const head = h('div', { class: 'page-head' }, h('div', { class: 'grow' }, h('h1', null, 'Gerar arquivos de importação'),
-    h('div', { class: 'muted' }, 'Executa um script cadastrado, mostra o resultado e grava um arquivo por grupo de linhas, organizado em pastas pelas colunas que você escolher.')),
+    h('div', { class: 'muted' }, 'Executa um script cadastrado ou uma consulta livre, mostra o resultado e grava um arquivo por grupo de linhas, organizado em pastas pelas colunas que você escolher.')),
   h('div', { class: 'inline' }, h('button', { class: 'btn', onclick: () => (location.hash = '#/scripts') }, '← Scripts SQL')));
-  if (!scripts.length || !info.targets.length) {
+  if (!info.targets.length) {
     return main.replaceChildren(h('div', { class: 'page' }, head, h('div', { class: 'card' }, h('div', { class: 'card-body' },
-      !scripts.length ? h('div', null, 'Nenhum script cadastrado. ', h('a', { href: '#/scripts' }, 'Cadastrar um script')) : null,
-      !info.targets.length ? h('div', null, 'Nenhuma conexão cadastrada. ', h('a', { href: '#/settings/conexoes' }, 'Cadastrar em Configurações → Conexões')) : null))));
+      h('div', null, 'Nenhuma conexão cadastrada. ', h('a', { href: '#/settings/conexoes' }, 'Cadastrar em Configurações → Conexões'))))));
   }
+  if (exportScriptId && scripts.some((s) => s.id === exportScriptId)) exportFree.on = false; // veio do “Gerar arquivos” de um script
+  if (!scripts.length) exportFree.on = true;
+  const free = () => exportFree.on;
 
   let result = null; // resposta de /run
   let setIdx = 0;
@@ -30,7 +35,19 @@ async function renderScriptExport(main) {
 
   // ---------- Executar ----------
   const scriptSel = h('select', { 'aria-label': 'Script' }, scripts.map((s) => h('option', { value: s.id }, s.name)));
-  scriptSel.value = scripts.some((s) => s.id === exportScriptId) ? exportScriptId : scripts[0].id;
+  scriptSel.value = scripts.some((s) => s.id === exportScriptId) ? exportScriptId : scripts[0]?.id || '';
+  const queryTa = h('textarea', { class: 'dbx-editor', rows: 10, spellcheck: 'false', 'aria-label': 'Consulta livre', value: exportFree.query,
+    placeholder: 'SELECT … (Ctrl+Enter executa). Uma consulta SELECT ou WITH que monta a tabela com as colunas dos arquivos; nada é gravado no banco.',
+    oninput: (e) => { exportFree.query = e.target.value; },
+    onkeydown: (e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); if (!runBtn.disabled) exec(); } if (e.key === 'Tab') { e.preventDefault(); queryTa.setRangeText('    ', queryTa.selectionStart, queryTa.selectionEnd, 'end'); exportFree.query = queryTa.value; } } });
+  const scriptRow = h('div', { class: 'run-bar' }, h('label', { class: 'inline', style: 'gap:6px' }, h('span', { class: 'lbl' }, 'Script'), scriptSel));
+  const queryRow = h('div', { class: 'stack' }, queryTa,
+    h('div', { class: 'small muted' }, 'Somente leitura: uma única consulta SELECT ou WITH, sem GO, variáveis {{…}}, EXEC, INSERT/UPDATE/DELETE, SELECT … INTO etc. Para reutilizar, cadastre a consulta como script.'));
+  const modeRadio = (v, title) => h('label', { class: 'check row', style: 'gap:6px' },
+    h('input', { type: 'radio', name: 'xp-source', checked: free() === v, disabled: !v && !scripts.length, onchange: () => { exportFree.on = v; syncMode(); clearAfterRun(); } }), h('span', null, title));
+  const modeRow = h('div', { class: 'inline' }, h('span', { class: 'lbl' }, 'Origem'), modeRadio(false, 'Script cadastrado'), modeRadio(true, 'Consulta livre'),
+    !scripts.length ? h('span', { class: 'small muted' }, 'Nenhum script cadastrado.') : null);
+  const syncMode = () => { for (const [el, show] of [[scriptRow, !free()], [varsBox, !free()], [queryRow, free()]]) el.style.display = show ? '' : 'none'; };
   const connSel = h('select', { 'aria-label': 'Conexão' }, info.targets.map((t) => h('option', { value: t.key }, `${t.label} — ${t.envLabel}`)));
   const saved = runPref('script-export');
   connSel.value = info.targets.some((t) => t.key === saved) ? saved : info.defaultKey;
@@ -47,13 +64,14 @@ async function renderScriptExport(main) {
   const varsBox = h('div', { class: 'inline' });
   let varInputs = {};
   const loadVars = async () => {
+    if (!scriptSel.value) return;
     const v = await api('GET', `/api/scripts/${scriptSel.value}/variables`).catch(() => ({ user: [] }));
     varInputs = Object.fromEntries(v.user.map((n) => [n, h('input', { type: 'text', maxlength: 128, placeholder: n, style: 'width:180px' })]));
     varsBox.replaceChildren(...(v.user.length ? [h('span', { class: 'small muted' }, 'Variáveis:'), ...v.user.map((n) => h('label', { class: 'inline small', style: 'gap:4px' }, h('span', { class: 'mono' }, `{{${n}}}`), varInputs[n]))] : []));
   };
   const runBtn = h('button', { class: 'btn primary' }, '▶ Executar');
   const stopBtn = h('button', { class: 'btn', style: 'display:none', title: 'Cancela a execução' }, 'Parar');
-  const status = h('div', { class: 'small muted' }, 'O script roda numa transação que é sempre desfeita no final: nada é gravado no banco. Nenhum arquivo é escrito antes de você confirmar.');
+  const status = h('div', { class: 'small muted' }, 'O script ou a consulta roda numa transação que é sempre desfeita no final: nada é gravado no banco. Nenhum arquivo é escrito antes de você confirmar.');
   const resultBox = h('div', { class: 'stack' });
   const configBox = h('div', { class: 'stack' });
   const previewBox = h('div', { class: 'stack' });
@@ -64,11 +82,12 @@ async function renderScriptExport(main) {
   let ctrl = null; let timer = null;
   const exec = async (confirmToken) => {
     runPref('script-export', connSel.value);
-    const body = { scriptId: scriptSel.value, target: connSel.value, database: dbInput.value, vars: Object.fromEntries(Object.entries(varInputs).map(([n, el]) => [n, el.value])), confirmToken };
+    const body = free() ? { query: queryTa.value, target: connSel.value, database: dbInput.value }
+      : { scriptId: scriptSel.value, target: connSel.value, database: dbInput.value, vars: Object.fromEntries(Object.entries(varInputs).map(([n, el]) => [n, el.value])), confirmToken };
     ctrl = new AbortController();
     const t0 = Date.now();
     clearAfterRun();
-    runBtn.disabled = true; stopBtn.style.display = ''; scriptSel.disabled = true; connSel.disabled = true;
+    runBtn.disabled = true; stopBtn.style.display = ''; scriptSel.disabled = true; queryTa.disabled = true; connSel.disabled = true;
     status.textContent = 'Executando script… 0 s';
     timer = setInterval(() => { status.textContent = `Executando script… ${Math.round((Date.now() - t0) / 1000)} s`; }, 500);
     try {
@@ -96,7 +115,7 @@ async function renderScriptExport(main) {
       status.textContent = e.name === 'AbortError' ? 'Execução cancelada.' : '';
       if (e.name !== 'AbortError') resultBox.replaceChildren(h('div', { class: 'box bad small' }, e.message));
     } finally {
-      clearInterval(timer); ctrl = null; runBtn.disabled = false; stopBtn.style.display = 'none'; scriptSel.disabled = false; connSel.disabled = false;
+      clearInterval(timer); ctrl = null; runBtn.disabled = false; stopBtn.style.display = 'none'; scriptSel.disabled = false; queryTa.disabled = false; connSel.disabled = false;
     }
   };
   runBtn.addEventListener('click', () => exec());
@@ -138,7 +157,7 @@ async function renderScriptExport(main) {
 
   // ---------- Organização ----------
   function showConfig(rs) {
-    const cfg = script()?.exportConfig || result.config || {};
+    const cfg = (free() ? exportFree.config : script()?.exportConfig || result.config) || {};
     const cols = rs.columns;
     const has = (n) => cols.some((c) => c.toLowerCase() === String(n).toLowerCase());
     const colSelect = (value, empty) => {
@@ -314,6 +333,7 @@ async function renderScriptExport(main) {
       const s = script(); if (s) s.exportConfig = r.exportConfig;
       toast('Configuração salva no script.');
     }) }, 'Salvar configuração no script');
+    if (free()) saveBtn.style.display = 'none'; // consulta livre: a organização fica só na memória da sessão (guardada na prévia)
     const previewBtn = h('button', { class: 'btn primary', onclick: (e) => busy(e.target, preview, 'Montando prévia…') }, 'Pré-visualizar');
 
     async function preview() {
@@ -321,6 +341,7 @@ async function renderScriptExport(main) {
       if (dir.get()) lastDir('script-export', dir.get());
       const p = await api('POST', '/api/script-export/preview', { resultId: result.resultId, set: setIdx, config: config(), outDir: dir.get() });
       previewOk = true;
+      if (free()) exportFree.config = config();
       showPreview(p, config(), dir.get());
     }
     configBox.replaceChildren(card('Organização dos arquivos', null,
@@ -397,9 +418,10 @@ async function renderScriptExport(main) {
   const stat = (label, value, sub) => h('div', { class: 'hr-stat' }, h('span', { class: 'lbl' }, label), h('strong', null, typeof value === 'number' ? value.toLocaleString('pt-BR') : value), sub ? h('span', { class: 'small muted' }, sub) : null);
 
   await loadVars();
+  syncMode();
   main.replaceChildren(h('div', { class: 'page' }, head,
     card('Executar', null,
-      h('div', { class: 'run-bar' }, h('label', { class: 'inline', style: 'gap:6px' }, h('span', { class: 'lbl' }, 'Script'), scriptSel)),
+      modeRow, scriptRow, queryRow,
       h('div', { class: 'run-bar' }, h('label', { class: 'inline', style: 'gap:6px' }, h('span', { class: 'lbl' }, 'Conexão'), connSel), dbInput, runBtn, stopBtn), targetInfo, varsBox, status, resultBox),
     configBox, previewBox));
 }

@@ -4,6 +4,8 @@
 // A geração usa exatamente o resultado mostrado (o SQL não roda de novo). Nunca sobrescreve sem decisão do usuário:
 // arquivo existente → 409 EXPORT_EXISTS (substituir = o antigo vai para a Lixeira; ou gerar novo nome);
 // grupos diferentes no mesmo arquivo → 409 EXPORT_DUPLICATES (juntar ou gerar novo nome).
+// Consulta livre: em vez de um script cadastrado, a tela envia UMA consulta de leitura (SELECT/WITH), conferida pela mesma trava do Console
+// do Explorador de Banco (readonly.js) aqui e de novo no processo-filho; também roda na transação sempre desfeita.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -13,12 +15,25 @@ const { httpError, str } = require('./util');
 const { EXPORT_MAX } = require('./db-core');
 const { buildPlan, cleanConfig, fileText, encode, ENCODINGS } = require('./script-export');
 const { isInside, sendToRecycleBin, freeName } = require('./workspace-files');
+const { prepareScript } = require('./sqlscan');
+const { checkReadOnly } = require('./tools/db-explorer/readonly');
 
 const RESULT_TTL_MS = 20 * 60 * 1000;
 const MAX_RESULTS = 3; // resultados em memória (cada um pode ter até 200 mil linhas)
 const PREVIEW_ROWS = 1000; // linhas na grade logo após executar; a tela pede mais se o usuário quiser
 const PREVIEW_FILES = 2000; // arquivos listados na prévia
 const who = () => { try { return os.userInfo().username || null; } catch { return null; } };
+const sha = (t) => crypto.createHash('sha256').update(t).digest('hex');
+const FREE_QUERY = 'Consulta livre';
+
+// Consulta livre → um lote pronto para db.runScript (só leitura, sem variáveis {{…}}).
+function prepareQuery(raw) {
+  const chk = checkReadOnly(raw);
+  if (!chk.ok) throw httpError(400, `A consulta livre não pode ser executada: ${chk.errors.join(' ').replace('Bloqueado no Console', 'Bloqueado')}`, { code: 'EXPORT_QUERY' });
+  const { batches, analysis } = prepareScript(chk.sql);
+  if (analysis.variables.length) throw httpError(400, `A consulta livre não usa variáveis (${analysis.variables.map((n) => `{{${n}}}`).join(', ')}): escreva o valor direto na consulta.`, { code: 'EXPORT_QUERY' });
+  return { batches, textSha: sha(chk.sql) };
+}
 
 let trash = sendToRecycleBin; // testes trocam por uma função simulada (nunca a Lixeira real)
 const setTrash = (fn) => { trash = fn || sendToRecycleBin; };
@@ -72,10 +87,11 @@ function mount(app, { store, audit, db, connPassword, scriptRun, dataDir, SYS })
 
   // ---------- Executar ----------
   app.post('/api/script-export/run', async (req, res) => {
-    const scriptId = str(req.body.scriptId, 40);
+    const free = typeof req.body.query === 'string'; // consulta livre (só leitura) em vez de script cadastrado
     if (!String(req.body.target || '').startsWith('conn:')) throw httpError(400, 'Escolha uma conexão cadastrada.');
     const t = scriptRun.resolveTarget(null, req.body.target, req.body.database);
-    const { s, batches, destructive, textSha } = scriptRun.prepareRun({ scriptId, t, body: req.body, kind: 'export-v1' });
+    const { s, batches, destructive, textSha } = free ? { s: { id: null, name: FREE_QUERY, exportConfig: null }, destructive: [], ...prepareQuery(req.body.query) }
+      : scriptRun.prepareRun({ scriptId: str(req.body.scriptId, 40), t, body: req.body, kind: 'export-v1' });
 
     const ac = new AbortController();
     res.on('close', () => { if (!res.writableEnded) ac.abort(); });
@@ -83,13 +99,13 @@ function mount(app, { store, audit, db, connPassword, scriptRun, dataDir, SYS })
     const started = Date.now();
     let out; let error = null;
     try {
-      out = await db.runScript(t.conn, password, { name: s.name, batches, allowDestructiveScripts: destructive.length > 0, limits: EXPORT_MAX, rollback: true }, { signal: ac.signal });
+      out = await db.runScript(t.conn, password, { name: s.name, batches, allowDestructiveScripts: destructive.length > 0, limits: EXPORT_MAX, rollback: true, readOnly: free }, { signal: ac.signal });
     } catch (e) {
       error = e.cancelled ? e.message : db.friendly(e);
       out = e.scriptOutput || null;
     }
     const ms = Date.now() - started;
-    audit.log({ action: error ? 'exportacao-script-falhou' : 'exportacao-script-executado', by: who(), detalhe: `${s.name} em ${t.label} (gerar arquivos; transação desfeita no final)`,
+    audit.log({ action: error ? 'exportacao-script-falhou' : 'exportacao-script-executado', by: who(), detalhe: `${s.name} em ${t.label} (gerar arquivos;${free ? ' somente leitura;' : ''} transação desfeita no final)`,
       env: t.local ? 'local' : 'prod', server: db.label(t.conn), database: t.conn.database, ms, resultado: error ? error.slice(0, 200) : `${out.returned} linha(s) retornada(s)`, sha256: textSha });
     if (ac.signal.aborted) return;
     const base = { ok: !error, error, ms, target: t.label, identity: out?.identity || null, messages: out?.messages || [], errorInfo: out?.error || null, config: s.exportConfig || null };

@@ -276,3 +276,47 @@ test('API: executar (transação desfeita), prévia sem gravar, gerar, conflitos
   assert.deepEqual([back.contentColumns, back.separator, back.nullAs], [['LINHA_IMPORTACAO', 'TABELA'], '\t', 'null'], 'várias colunas, separador e NULL voltam ao executar');
   assert.equal((await api('PUT', `/api/scripts/${sid}/export-config`, { config: { contentColumns: [], fileName: 'a.txt' } })).status, 400);
 });
+
+// Consulta livre: só UMA consulta de leitura (trava do Console do Explorador), conferida no servidor e de novo no processo-filho.
+test('consulta livre: recusa o que não é leitura, GO, variáveis e vazio — antes de conectar', async () => {
+  const conn = await api('POST', '/api/connections', { name: 'Livre teste', env: 'local', server: 'localhost', database: 'tempdb', auth: 'windows' });
+  assert.equal(conn.status, 200, JSON.stringify(conn.json));
+  const target = `conn:${conn.json.id}`;
+  for (const query of ['', 'DELETE FROM dbo.X', 'SELECT 1 AS A INTO dbo.Y', 'SELECT 1 AS A\nGO\nSELECT 2 AS B', "SELECT 1 AS A; UPDATE dbo.X SET A = 1", 'EXEC dbo.Proc', 'SELECT {{TABELA}} AS A']) {
+    const r = await api('POST', '/api/script-export/run', { query, target });
+    assert.equal(r.status, 400, query);
+    assert.equal(r.json.code, 'EXPORT_QUERY', query);
+  }
+  assert.equal((await api('POST', '/api/script-export/run', { query: 'SELECT 1 AS A', target: 'base:x:prod' })).status, 400, 'só conexões cadastradas');
+  // processo-filho (db-core): readOnly revalida e exige transação desfeita, sem chegar a conectar
+  const core = require('../src/db-core');
+  const c = { server: 'localhost', database: 'tempdb', auth: 'windows' };
+  await assert.rejects(core.runScript(c, '', { name: 'x', batches: [{ sql: 'DELETE FROM dbo.X' }], readOnly: true, rollback: true }), /somente leitura/);
+  await assert.rejects(core.runScript(c, '', { name: 'x', batches: [{ sql: 'SELECT 1 AS A' }], readOnly: true, rollback: false }), /somente leitura/);
+  await assert.rejects(core.runScript(c, '', { name: 'x', batches: [{ sql: 'SELECT 1 AS A' }, { sql: 'SELECT 2 AS B' }], readOnly: true, rollback: true }), /somente leitura/);
+});
+
+test('API: consulta livre executa (transação desfeita), gera os arquivos e não usa configuração de script', async (t) => {
+  if (!sqlOk) return t.skip('SQL Server localhost indisponível');
+  const conn = await api('POST', '/api/connections', { name: 'Livre local', env: 'local', server: 'localhost', database: 'tempdb', auth: 'windows' });
+  const target = `conn:${conn.json.id}`;
+  const run = await api('POST', '/api/script-export/run', { query: `${SQL};`, target });
+  assert.equal(run.status, 200, JSON.stringify(run.json));
+  assert.equal(run.json.ok, true, run.json.error);
+  assert.equal(run.json.config, null, 'consulta livre não tem configuração salva');
+  assert.deepEqual(run.json.sets[0].columns, ['TABELA', 'COLIGADA', 'LINHA_IMPORTACAO']);
+  assert.equal(run.json.sets[0].total, 5);
+  const out = path.join(tmp, 'ImportacaoLivre');
+  fs.mkdirSync(out);
+  const config = { levels: ['TABELA'], contentColumns: ['LINHA_IMPORTACAO'], fileName: '{COLIGADA}.txt', encoding: 'utf8' };
+  const pv = await api('POST', '/api/script-export/preview', { resultId: run.json.resultId, config, outDir: out });
+  assert.equal(pv.status, 200, JSON.stringify(pv.json));
+  assert.deepEqual(listFiles(out), [], 'prévia não grava');
+  const gen = await api('POST', '/api/script-export/generate', { resultId: run.json.resultId, config, outDir: out });
+  assert.equal(gen.status, 200, JSON.stringify(gen.json));
+  assert.deepEqual(listFiles(out), ['PFFINANC', 'PFFINANC/1.txt', 'PFFINANC/2.txt', 'PFUNC', 'PFUNC/1.txt', 'PFUNC/2.txt']);
+  assert.equal(fs.readFileSync(path.join(out, 'PFUNC', '1.txt'), 'utf8'), 'linha A\r\nlinha B\r\n');
+  // WITH … SELECT também é leitura
+  const cte = await api('POST', '/api/script-export/run', { query: 'WITH x AS (SELECT 1 AS A) SELECT A FROM x', target });
+  assert.equal(cte.json.ok, true, cte.json.error);
+});

@@ -299,9 +299,18 @@ async function stageAndSwap({ dataDir, pkg, protect, now = new Date() }) {
     for (const d of pkg.manifest.documents || []) {
       const doc = (state.documents || []).find((x) => x.id === d.id);
       if (!doc || !d.entry || fs.existsSync(d.original)) continue;
+      const buf = pkg.files.get(d.entry);
       const rel = d.entry.split('/');
       fs.mkdirSync(path.join(staging, ...rel.slice(0, -1)), { recursive: true });
-      fs.writeFileSync(path.join(staging, ...rel), pkg.files.get(d.entry), { flag: 'wx' });
+      // o mesmo arquivo pode já ter vindo em data/documentos (documento restaurado numa importação anterior): reaproveita;
+      // se for outro conteúdo com o mesmo nome, grava ao lado com sufixo
+      const name = rel[rel.length - 1]; const ext = path.extname(name); const stem = name.slice(0, name.length - ext.length);
+      for (let i = 2; ; i++) {
+        const target = path.join(staging, ...rel);
+        if (!fs.existsSync(target)) { fs.writeFileSync(target, buf, { flag: 'wx' }); break; }
+        if (sha256(fs.readFileSync(target)) === sha256(buf)) break;
+        rel[rel.length - 1] = `${stem} (${i})${ext}`;
+      }
       doc.source = { ...doc.source, path: path.join(dir, ...rel) };
       restoredDocs.push(d.id);
     }
@@ -340,7 +349,9 @@ function rollbackImport(dataDir, previous, now = new Date()) {
 
 // Depois de recarregado: o que está na pasta de dados confere com o pacote? (diferenças por seção + arquivos)
 function compareAfterImport(dataDir, state, pkg) {
-  const files = ['data/projects.json', ...walk(dataDir).filter((f) => !f.startsWith('documentos/')).map((f) => `data/${f}`)];
+  // <dados>\documentos: conta só o que veio como data/ no pacote (o restaurado de documentos/ entra em docFiles)
+  const fromData = new Set(pkg.manifest.files.map((f) => f.path));
+  const files = ['data/projects.json', ...walk(dataDir).map((f) => `data/${f}`).filter((f) => !f.startsWith('data/documentos/') || fromData.has(f))];
   const docFiles = (pkg.manifest.documents || []).filter((d) => d.entry).map((d) => d.entry);
   const now = sections(state, [...files, ...docFiles]);
   const diffs = Object.keys(pkg.manifest.sections).filter((k) => now[k] !== pkg.manifest.sections[k]).map((k) => ({ section: k, expected: pkg.manifest.sections[k], found: now[k] }));

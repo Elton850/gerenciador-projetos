@@ -4,6 +4,7 @@
 // O servidor web usa src/db.js, que orquestra o processo-filho com timeouts.
 const { httpError } = require('./util');
 const { assertStatementSafe } = require('./sqlplan');
+const { checkReadOnly } = require('./tools/db-explorer/readonly');
 
 const SERVER_RE = /^[\p{L}\p{N}_.\-\\() ]+$/u; // sem ';' '{' '}' '=' para não injetar na connection string
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '::1', '.', '(local)', '(localdb)']);
@@ -184,9 +185,14 @@ async function executePlan(conn, password, plan, { dryRun = false, allowDestruct
 // Opcional (Gerar arquivos de importação): `limits` maiores (até EXPORT_MAX) e `rollback: true` = desfaz no final mesmo sem erro.
 const RUN_LIMITS = { sets: 20, rows: 1000, cols: 100, cell: 2000, messages: 500 };
 const EXPORT_MAX = { rows: 200000, cell: 1000000, cols: 4096 }; // 4096 = máximo de colunas de um SELECT no SQL Server
-async function runScript(conn, password, { name, batches, allowDestructiveScripts = false, limits = null, rollback = false }) {
+// `readOnly: true` (consulta livre): só UMA consulta SELECT/WITH, revalidada aqui (processo-filho) pela trava do Console (readonly.js).
+async function runScript(conn, password, { name, batches, allowDestructiveScripts = false, limits = null, rollback = false, readOnly = false }) {
   const L = { ...RUN_LIMITS };
   if (limits) for (const k of ['rows', 'cell', 'cols']) if (Number(limits[k]) > 0) L[k] = Math.min(Number(limits[k]), EXPORT_MAX[k]);
+  if (readOnly) {
+    const chk = batches.length === 1 ? checkReadOnly(batches[0].sql) : { ok: false, errors: ['Use uma única consulta (sem GO).'] };
+    if (!chk.ok || !rollback) throw httpError(400, `Consulta recusada (somente leitura): ${chk.errors.join(' ') || 'precisa de transação desfeita.'}`);
+  }
   batches.forEach((b, i) => assertStatementSafe({ kind: 'userscript', sql: b.sql, script: name, batch: i + 1, of: batches.length }, { allowDestructiveScripts }));
   return withPool(conn, password, async (h) => {
     const who = await identity(h);

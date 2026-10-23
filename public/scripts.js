@@ -131,7 +131,7 @@ async function renderScripts(main) {
     h('div', { class: 'inline' },
       h('button', { class: 'btn', onclick: () => api('POST', '/api/scripts-folder/open').catch(fail) }, 'Abrir pasta'),
       h('button', { class: 'btn', onclick: importScriptFile }, 'Importar .sql…'),
-      h('button', { class: 'btn', title: 'Executar um script e gravar o resultado em arquivos de importação', onclick: () => { exportScriptId = null; location.hash = '#/scripts/export'; } }, 'Gerar arquivos de importação'),
+      h('button', { class: 'btn', title: 'Executar um script ou uma consulta livre e gravar o resultado em arquivos de importação', onclick: () => { exportScriptId = null; location.hash = '#/scripts/export'; } }, 'Gerar arquivos de importação'),
       h('button', { class: 'btn primary', onclick: () => scriptForm() }, '+ Novo script'))),
     h('div', { class: 'box' }, h('strong', null, 'Como funciona a segurança'),
       h('ul', null,

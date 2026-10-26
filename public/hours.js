@@ -655,49 +655,77 @@ function historyCard() {
     f.projectId ? h('div', { class: 'hint' }, 'Com um projeto escolhido, o total e o status de cada dia continuam sendo os do dia inteiro (todos os projetos).') : null);
 }
 
-// Exportação: mês (como antes) ou período de/até, com filtro opcional por coordenador ou projeto (opções = os do período escolhido;
-// coordenador pela mesma regra do e-mail). A escolha fica em HR.exp para não se perder quando a página recarrega.
+// Exportação: mês (como antes) ou período de/até, com filtro opcional por coordenador (mesma regra do e-mail) ou pelos projetos
+// escolhidos numa lista (os do período, com coordenador e horas). A escolha fica em HR.exp para não se perder quando a página recarrega;
+// ao trocar o período, continuam marcados só os projetos que ainda têm apontamentos nele.
 function exportCard() {
   const today = HR.st.today;
   const [cy, cm] = (HR.monthSel || today.slice(0, 7)).split('-').map(Number);
-  const ex = HR.exp || (HR.exp = { mode: 'month', year: cy, month: cm, ...monthBounds(cy, cm), filter: '' });
+  const ex = HR.exp || (HR.exp = { mode: 'month', year: cy, month: cm, ...monthBounds(cy, cm), filter: '', projects: new Set() });
   const modeSel = h('select', null, [['month', 'Mês'], ['range', 'Período (de/até)']].map(([v, t]) => h('option', { value: v, selected: ex.mode === v }, t)));
   const year = h('input', { type: 'number', min: 2000, max: 2100, value: ex.year, style: 'width:100px' });
   const month = h('select', null, MONTH_NAME.map((n, i) => h('option', { value: i + 1, selected: i + 1 === ex.month }, n)));
   const fromIn = h('input', { type: 'date', value: ex.from });
   const toIn = h('input', { type: 'date', value: ex.to });
-  const filterSel = h('select', { onchange: () => { ex.filter = filterSel.value; } }, h('option', { value: '' }, 'Todos os apontamentos'));
+  const filterSel = h('select', { onchange: () => { ex.filter = filterSel.value; paintProjects(); } }, h('option', { value: '' }, 'Todos os apontamentos'));
   const monthFields = h('div', { class: 'inline' }, field('Mês', month), field('Ano', year));
   const rangeFields = h('div', { class: 'inline' }, field('De', fromIn), field('Até', toIn));
+  const projBox = h('div', { class: 'box small stack' });
+  const exportBtn = h('button', { class: 'btn primary' }, 'Exportar Excel');
   const params = () => (ex.mode === 'month' ? { year: ex.year, month: ex.month } : { from: ex.from, to: ex.to });
+  let ctx = null;
   let seq = 0;
+  function paintProjects() {
+    const picking = ex.filter === 'pick';
+    projBox.style.display = picking ? '' : 'none';
+    exportBtn.disabled = picking && !ex.projects.size;
+    if (!picking) return;
+    const list = ctx?.projects || [];
+    const quick = (label, fn) => h('button', { class: 'btn sm ghost', type: 'button', onclick: fn }, label);
+    projBox.replaceChildren(...[
+      h('div', { class: 'inline' }, h('strong', { class: 'grow' }, `${plural(ex.projects.size, 'projeto escolhido', 'projetos escolhidos')} de ${list.length}`),
+        list.length > 1 ? quick('Marcar todos', () => { ex.projects = new Set(list.map((p) => p.id)); paintProjects(); }) : null,
+        ex.projects.size ? quick('Desmarcar todos', () => { ex.projects = new Set(); paintProjects(); }) : null),
+      ...list.map((p) => h('label', { class: 'check' },
+        h('input', { type: 'checkbox', checked: ex.projects.has(p.id), onchange: (e) => { if (e.target.checked) ex.projects.add(p.id); else ex.projects.delete(p.id); paintProjects(); } }),
+        h('span', null, h('strong', null, p.name), h('span', { class: 'muted' }, ` · ${p.coordinatorName || 'sem coordenador'} · ${p.hoursText}`)))),
+      list.length ? null : h('div', { class: 'muted' }, 'Nenhum projeto com apontamentos neste período.'),
+    ].filter(Boolean));
+  }
   async function loadFilters() {
     monthFields.style.display = ex.mode === 'month' ? '' : 'none';
     rangeFields.style.display = ex.mode === 'range' ? '' : 'none';
     const mine = ++seq;
-    let ctx = null;
-    try { ctx = await api('GET', `/api/hours/month-context?${new URLSearchParams(params())}`); } catch { /* período inválido: só “Todos” */ }
+    let next = null;
+    try { next = await api('GET', `/api/hours/month-context?${new URLSearchParams(params())}`); } catch { /* período inválido: só “Todos” */ }
     if (mine !== seq) return; // outra troca já começou
+    ctx = next;
     const opts = [h('option', { value: '' }, 'Todos os apontamentos')];
     if (ctx?.coordinators.length) opts.push(h('optgroup', { label: 'Coordenador' }, ctx.coordinators.map((c) => h('option', { value: `c:${c.id}` }, c.name))));
-    if (ctx?.projects.length) opts.push(h('optgroup', { label: 'Projeto' }, ctx.projects.map((p) => h('option', { value: `p:${p.id}` }, p.name))));
+    if (ctx?.projects.length) opts.push(h('option', { value: 'pick' }, 'Escolher projetos…'));
     filterSel.replaceChildren(...opts);
     filterSel.value = [...filterSel.options].some((o) => o.value === ex.filter) ? ex.filter : '';
     ex.filter = filterSel.value;
+    ex.projects = new Set((ctx?.projects || []).filter((p) => ex.projects.has(p.id)).map((p) => p.id));
+    paintProjects();
   }
   modeSel.onchange = () => { ex.mode = modeSel.value; loadFilters(); };
   year.onchange = () => { ex.year = Number(year.value); loadFilters(); };
   month.onchange = () => { ex.month = Number(month.value); loadFilters(); };
   fromIn.onchange = () => { ex.from = fromIn.value; if (ex.to < ex.from) { ex.to = ex.from; toIn.value = ex.to; } loadFilters(); };
   toIn.onchange = () => { ex.to = toIn.value; if (ex.from > ex.to) { ex.from = ex.to; fromIn.value = ex.from; } loadFilters(); };
+  exportBtn.onclick = (e) => busy(e.target, () => {
+    const f = ex.filter;
+    if (f === 'pick' && !ex.projects.size) throw new Error('Escolha ao menos um projeto.');
+    return hoursDownload({ ...params(), coordinatorId: f.startsWith('c:') ? f.slice(2) : '', projectIds: f === 'pick' ? [...ex.projects].join(',') : '' });
+  }, 'Gerando planilha…');
+  paintProjects();
   loadFilters();
   return card('Exportar apontamentos', null,
     h('div', { class: 'inline' }, field('Período', modeSel), monthFields, rangeFields, field('Filtro', filterSel),
-      h('div', { class: 'field' }, h('label', null, ' '), h('button', { class: 'btn primary', onclick: (e) => busy(e.target, () => {
-        const f = ex.filter;
-        return hoursDownload({ ...params(), coordinatorId: f.startsWith('c:') ? f.slice(2) : '', projectId: f.startsWith('p:') ? f.slice(2) : '' });
-      }, 'Gerando planilha…') }, 'Exportar Excel'))),
-    h('div', { class: 'hint' }, 'Mês: Apontamentos_AAAA_MM.xlsx · período: Apontamentos_AAAA-MM-DD_a_AAAA-MM-DD.xlsx (com o filtro no fim do nome). Abas: o período no formato PSA, Apontamentos, Resumo Mensal/do Período, Resumo por Projeto e Observações (sem imagens: só a contagem e os nomes dos arquivos). Com filtro de coordenador (projetos dele no período, a mesma regra do e-mail) ou de projeto, entram só esses apontamentos, as observações deles e as gerais; o resumo diário de meta sai, porque a meta é do dia inteiro. A exportação só lê os dados e a planilha nunca é a fonte dos apontamentos.'));
+      h('div', { class: 'field' }, h('label', null, ' '), exportBtn)),
+    projBox,
+    h('div', { class: 'hint' }, 'Mês: Apontamentos_AAAA_MM.xlsx · período: Apontamentos_AAAA-MM-DD_a_AAAA-MM-DD.xlsx (com o filtro no fim do nome; mais de 3 projetos = “N projetos”). Abas: o período no formato PSA, Apontamentos, Resumo Mensal/do Período, Resumo por Projeto e Observações (sem imagens: só a contagem e os nomes dos arquivos). Com filtro de coordenador (projetos dele no período, a mesma regra do e-mail) ou de projetos escolhidos, entram só esses apontamentos, as observações deles e as gerais; o resumo diário de meta sai, porque a meta é do dia inteiro. A exportação só lê os dados e a planilha nunca é a fonte dos apontamentos.'));
 }
 
 function hoursPageBody() {

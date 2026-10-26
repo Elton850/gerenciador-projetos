@@ -394,6 +394,82 @@ class GitRepo {
     return { ok: true, output: `${r.stdout}\n${r.stderr}`.trim(), setUpstream: !st.upstream };
   }
 
+  // ---- Conta do remoto (login) e autor dos commits, por repositório ----
+  // Tudo fica no .git/config DESTE repositório (git config --local): outra conta em outro repositório não é afetada, e o
+  // mesmo vale no terminal. O app não guarda usuário, senha nem token; só diz ao Git qual conta pedir ao mecanismo de login.
+  async mainRemoteUrl() {
+    const rem = await this.remotes();
+    const main = rem.find((x) => x.name === 'origin') || rem[0] || null;
+    if (!main) return null;
+    const r = await run(this.root, ['config', '--get', `remote.${main.name}.url`]);
+    return { name: main.name, safe: main.fetchUrl, raw: r.code === 0 ? r.stdout.trim() : '' };
+  }
+  async account() {
+    const scoped = async (key) => {
+      const r = await run(this.root, ['config', '--show-scope', '--get', key]);
+      if (r.code !== 0) return { value: null, scope: null };
+      const [scope, ...v] = r.stdout.trim().split('\t');
+      return { value: v.join('\t'), scope };
+    };
+    const get = async (args) => { const r = await run(this.root, ['config', ...args]); return r.code === 0 ? r.stdout.trim() : null; };
+    const [name, email, localUser] = await Promise.all([scoped('user.name'), scoped('user.email'), get(['--local', '--get', 'credential.username'])]);
+    const main = await this.mainRemoteUrl();
+    let remote = null;
+    if (main) {
+      const info = remoteInfo(main.raw);
+      remote = { name: main.name, url: main.safe, protocol: info.protocol, host: info.host || null, owner: info.owner || null, username: info.urlUser || null, usernameFrom: info.urlUser ? 'url' : null, helper: null, appLogin: false };
+      if (info.protocol === 'https') {
+        if (!remote.username) {
+          remote.username = await get(['--get-urlmatch', 'credential.username', main.raw]);
+          remote.usernameFrom = remote.username ? (localUser ? 'local' : 'global') : null;
+        }
+        const local = await get(['--local', '--get-all', `credential.${info.base}.helper`]);
+        remote.appLogin = local !== null && local.split(/\r?\n/).map((s) => s.trim()).includes('manager');
+        remote.helper = helperKind(await get(['--get-urlmatch', 'credential.helper', main.raw]));
+      }
+    }
+    return { identity: { name: name.value, nameScope: name.scope, email: email.value, emailScope: email.scope }, remote };
+  }
+  // username/name/email vazios = remove do repositório (volta a valer a configuração global). login: 'default' (mecanismo
+  // da máquina) | 'manager' (Git Credential Manager só neste repositório, ignorando o helper global de github.com).
+  async setAccount({ username, name, email, login } = {}) {
+    const u = String(username ?? '').trim();
+    const n = String(name ?? '').trim();
+    const e = String(email ?? '').trim();
+    if (u && !/^[A-Za-z0-9][A-Za-z0-9._@+-]{0,99}$/.test(u)) throw httpError(400, 'Conta inválida: use o nome de usuário do GitHub (ex.: meuusuario).');
+    if (n && (n.length > 100 || /[\0-\x1f<>]/.test(n))) throw httpError(400, 'Nome do autor inválido.');
+    if (e && (e.length > 200 || !/^[^\s@<>"]+@[^\s@<>"]+$/.test(e))) throw httpError(400, 'E-mail do autor inválido.');
+    if (login !== undefined && !['default', 'manager'].includes(login)) throw httpError(400, 'Forma de login inválida.');
+    const unset = async (key) => { const r = await run(this.root, ['config', '--local', '--unset-all', key]); if (r.code !== 0 && r.code !== 5) throw gitError(r); };
+    const set = (key, val) => (val ? ok(this.root, ['config', '--local', key, val]) : unset(key));
+    let key = null;
+    if (login !== undefined) {
+      const main = await this.mainRemoteUrl();
+      const info = main ? remoteInfo(main.raw) : null;
+      if (login === 'manager' && info?.protocol !== 'https') throw httpError(400, 'O login pelo Git Credential Manager só vale para remoto HTTPS (https://…). Com SSH, a conta é a da chave SSH.', { code: 'GIT_NO_REMOTE' });
+      if (info?.protocol === 'https') key = `credential.${info.base}.helper`;
+    }
+    await set('credential.username', u);
+    await set('user.name', n);
+    await set('user.email', e);
+    if (key) {
+      await unset(key);
+      if (login === 'manager') { // valor vazio zera a lista de helpers herdada (ex.: gh do ~/.gitconfig) e então usa o GCM
+        await ok(this.root, ['config', '--local', '--add', key, '']);
+        await ok(this.root, ['config', '--local', '--add', key, 'manager']);
+      }
+    }
+    return this.account();
+  }
+  // Confere o acesso ao remoto com a conta configurada (git ls-remote): não altera nada, nem as referências locais.
+  async testAccess() {
+    const main = await this.mainRemoteUrl();
+    if (!main) throw httpError(400, 'Nenhum remote configurado.', { code: 'GIT_NO_REMOTE' });
+    const r = await run(this.root, ['ls-remote', '--heads', main.name], { timeoutMs: NETWORK_TIMEOUT });
+    if (r.code !== 0) throw friendlyNetwork(r, 'teste de acesso');
+    return { ok: true, remote: main.name, branches: r.stdout.split('\n').filter(Boolean).length };
+  }
+
   async createBranch(name, { checkout = true } = {}) {
     const n = await checkBranchName(this.root, name);
     await ok(this.root, checkout ? ['switch', '-c', n] : ['branch', n]);
@@ -459,7 +535,9 @@ function friendlyNetwork(r, op) {
   const raw = `${r.stdout}\n${r.stderr}`.trim();
   let msg;
   if (/\[rejected\]|non-fast-forward|fetch first|rejeitad/i.test(raw)) msg = 'Push rejeitado: o remoto tem commits que você ainda não tem. Faça Pull, resolva conflitos se houver, e tente o Push de novo.';
-  else if (/Authentication failed|could not read Username|Permission denied|403|autentica/i.test(raw)) msg = 'Falha de autenticação no remoto. Verifique seu acesso ao repositório (o login é feito pelo Git Credential Manager).';
+  else if (/Authentication failed|could not read (Username|Password)|Invalid username or (password|token)|Permission denied|403|autentica|Repository not found|repositório não encontrado/i.test(raw)) {
+    return httpError(400, 'Falha de autenticação no remoto: a conta usada pelo Git não tem acesso a este repositório (ou não há login salvo para ela). Confira em “Conta do GitHub” qual conta este repositório usa e, se preciso, escolha outra.', { code: 'GIT_AUTH', gitOutput: raw.slice(0, 20000) });
+  }
   else if (/Could not resolve host|unable to access|Failed to connect|timed out/i.test(raw)) msg = 'Não foi possível acessar o remoto (rede/VPN/URL).';
   else if (/unrelated histories|históricos não relacionados/i.test(raw)) msg = 'O repositório local e o remoto têm históricos independentes (foram criados separadamente); o Git não os junta automaticamente. Para trabalhar com o repositório do GitHub, clone-o numa pasta nova (“Clonar do GitHub”).';
   else if (/Need to specify how to reconcile divergent branches|divergent/i.test(raw)) msg = 'As branches local e remota divergiram. Configure como o pull deve reconciliar (git config pull.rebase false) e tente de novo.';
@@ -513,6 +591,26 @@ function parseNumstat(out) {
 
 // URL para exibir: nunca mostra senha/token embutido (https://usuario:token@host/...).
 function safeUrl(u) { return String(u || '').replace(/^(https?:\/\/[^/@:]+):[^/@]+@/i, '$1:***@'); }
+// URL do remote → protocolo, servidor, dono (usuário/organização) e usuário embutido. base = chave do credential.<url>.helper.
+function remoteInfo(u) {
+  const s = String(u || '').trim();
+  if (/^file:/i.test(s) || /^[a-zA-Z]:[\\/]/.test(s) || s.startsWith('/') || s.startsWith('.')) return { protocol: 'local' };
+  let m = s.match(/^(https?):\/\/(?:([^/@:]+)(?::[^/@]*)?@)?([^/:@]+)(?::\d+)?\/([^/]+)/i);
+  if (m) {
+    let user = null;
+    try { user = m[2] ? decodeURIComponent(m[2]) : null; } catch { user = m[2]; }
+    return { protocol: 'https', urlUser: user, host: m[3].toLowerCase(), owner: m[4], base: `${m[1].toLowerCase()}://${m[3].toLowerCase()}` };
+  }
+  m = s.match(/^(?:ssh:\/\/)?(?:[^@/]+@)?([^/:]+)(?::\d+)?[:/]([^/]+)\//i);
+  return m ? { protocol: 'ssh', host: m[1].toLowerCase(), owner: m[2] } : { protocol: 'other' };
+}
+// Helper de credenciais efetivo para o remoto (só o tipo; nunca o conteúdo).
+function helperKind(v) {
+  if (v === null || v === undefined || v === '') return 'none';
+  if (/gh(\.exe)?['"]?\s+auth\s+git-credential/i.test(v)) return 'gh';
+  if (/^(manager|manager-core)$|git-credential-manager/i.test(v.trim())) return 'manager';
+  return 'other';
+}
 // Página web do repositório (GitHub via https ou SSH), para o botão "Abrir no GitHub".
 function webUrlOf(u) {
   const s = String(u || '').replace(/^(https?:\/\/)[^/@]+@/i, '$1');
@@ -543,4 +641,4 @@ async function toplevel(dir) {
   return r.code === 0 ? path.resolve(r.stdout.trim()) : null;
 }
 
-module.exports = { GitRepo, version, toplevel, clone, run, ok, gitError, friendlyNetwork, checkHash, checkBranchName, checkRemoteName, checkRemoteUrl, safeUrl, webUrlOf, findGit, NETWORK_TIMEOUT };
+module.exports = { GitRepo, version, toplevel, clone, run, ok, gitError, friendlyNetwork, checkHash, checkBranchName, checkRemoteName, checkRemoteUrl, safeUrl, webUrlOf, remoteInfo, helperKind, findGit, NETWORK_TIMEOUT };

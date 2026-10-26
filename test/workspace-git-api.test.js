@@ -199,3 +199,90 @@ test('API: .gitignore do repositório — detectar, criar, mesclar sem sobrescre
   assert.equal(fs.existsSync(path.join(tmp, 'x.txt')), false);
   assert.equal(fs.readFileSync(path.join(wsRoot, 'Cliente_A', '.gitignore'), 'utf8'), 'a\n');
 });
+
+// ---------- Conta do GitHub por repositório (duas contas na mesma máquina sem uma afetar a outra) ----------
+test('remoteInfo/helperKind: dono, servidor e usuário embutido; tipo do helper sem expor conteúdo', () => {
+  assert.deepEqual(git.remoteInfo('https://github.com/OrgExemplo/corp-a.git'), { protocol: 'https', urlUser: null, host: 'github.com', owner: 'OrgExemplo', base: 'https://github.com' });
+  assert.equal(git.remoteInfo('https://usuario-exemplo:segredo@github.com/usuario-exemplo/p.git').urlUser, 'usuario-exemplo');
+  assert.deepEqual(git.remoteInfo('git@github.com:OrgExemplo/corp-a.git'), { protocol: 'ssh', host: 'github.com', owner: 'OrgExemplo' });
+  assert.equal(git.remoteInfo('file:///C:/tmp/r.git').protocol, 'local');
+  assert.equal(git.helperKind("!'C:\Program Files\GitHub CLI\gh.exe' auth git-credential"), 'gh');
+  assert.equal(git.helperKind('manager'), 'manager');
+  assert.equal(git.helperKind(null), 'none');
+});
+
+test('falha de login no remoto → GIT_AUTH (inclusive “terminal prompts disabled” e “Repository not found”)', () => {
+  for (const stderr of ["fatal: could not read Username for 'https://github.com': terminal prompts disabled", "remote: Repository not found.\nfatal: repository 'https://github.com/OrgExemplo/x.git/' not found"]) {
+    const e = git.friendlyNetwork({ stdout: '', stderr }, 'pull');
+    assert.equal(e.code, 'GIT_AUTH');
+    assert.match(e.message, /Conta do GitHub/);
+    assert.ok(e.gitOutput.includes(stderr.split('\n')[0]));
+  }
+});
+
+test('conta por repositório: grava só no .git/config dele, GCM só nele, e aplica aos repositórios do mesmo dono', async () => {
+  const corpA = await mkRepo(path.join(wsRoot, 'Corp_A'));
+  await corpA.addRemote('origin', 'https://github.com/OrgExemplo/corp-a.git');
+  const corpB = await mkRepo(path.join(wsRoot, 'Corp_B'));
+  await corpB.addRemote('origin', 'https://github.com/orgexemplo/corp-b.git');
+  const pess = await mkRepo(path.join(wsRoot, 'Pessoal'));
+  await pess.addRemote('origin', 'https://github.com/usuario-exemplo/pessoal.git');
+
+  let a = (await api('GET', '/api/wsm/git/account?project=Corp_A')).json;
+  assert.equal(a.remote.owner, 'OrgExemplo');
+  assert.equal(a.remote.appLogin, false);
+
+  const r = await api('POST', '/api/wsm/git/account', { project: 'Corp_A', username: 'conta-corp', name: 'Fulano Corp', email: 'fulano@empresa.test', login: 'manager', also: ['Corp_B'] });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.json.updated, ['Corp_A', 'Corp_B']);
+  for (const repo of [corpA, corpB]) {
+    const acc = await repo.account();
+    assert.equal(acc.remote.username, 'conta-corp');
+    assert.equal(acc.remote.usernameFrom, 'local');
+    assert.equal(acc.remote.appLogin, true);
+    assert.equal(acc.remote.helper, 'manager', 'o helper global de github.com (ex.: gh) é zerado só neste repositório');
+    assert.equal(acc.identity.email, 'fulano@empresa.test'); assert.equal(acc.identity.emailScope, 'local');
+    const helpers = await git.run(repo.root, ['config', '--local', '--get-all', 'credential.https://github.com.helper']);
+    assert.deepEqual(helpers.stdout.split('\n').filter((l, i, arr) => i < arr.length - 1), ['', 'manager']);
+  }
+  // o repositório pessoal não muda
+  const p = await pess.account();
+  assert.equal(p.remote.appLogin, false);
+  assert.notEqual(p.remote.username, 'conta-corp');
+  assert.equal(p.identity.email, 'teste@exemplo.com');
+
+  // visão geral de todos os repositórios do Workspace
+  const all = (await api('GET', '/api/wsm/git/accounts')).json.repos;
+  assert.equal(all.find((x) => x.project === 'Corp_B').remote.username, 'conta-corp');
+  assert.ok(all.some((x) => x.project === 'Pessoal'));
+
+  // voltar ao padrão: remove só o que o app gravou neste repositório
+  await api('POST', '/api/wsm/git/account', { project: 'Corp_B', username: '', name: '', email: '', login: 'default' });
+  const b = await corpB.account();
+  assert.equal(b.remote.appLogin, false);
+  assert.notEqual(b.remote.username, 'conta-corp');
+  assert.notEqual(b.identity.emailScope, 'local');
+  assert.equal((await git.run(corpB.root, ['config', '--local', '--get-all', 'credential.https://github.com.helper'])).code, 1);
+  assert.equal((await corpA.account()).remote.username, 'conta-corp', 'o outro repositório continua com a conta');
+
+  // validações e auditoria
+  assert.equal((await api('POST', '/api/wsm/git/account', { project: 'Corp_A', username: '-c core.x=1' })).status, 400);
+  assert.equal((await api('POST', '/api/wsm/git/account', { project: 'Corp_A', email: 'sem-arroba' })).status, 400);
+  assert.equal((await api('POST', '/api/wsm/git/account', { project: 'Corp_A', login: 'qualquer' })).status, 400);
+  assert.equal((await api('POST', '/api/wsm/git/account', { project: 'Corp_A', also: ['..'] })).status, 400);
+  assert.equal((await api('POST', '/api/wsm/git/account', { project: 'Documentos' })).status, 400, 'pasta sem Git');
+  const audit = JSON.stringify((await api('GET', '/api/audit')).json);
+  assert.ok(audit.includes('git-conta'));
+});
+
+test('conta: GCM só para remoto HTTPS; testar acesso confere o remoto sem alterar nada', async () => {
+  const url = await bareUrl('remoto-conta.git');
+  const loc = await mkRepo(path.join(wsRoot, 'Local_Remoto'), { commit: { 'a.sql': 'SELECT 1\n' } });
+  await loc.addRemote('origin', url);
+  await loc.push();
+  assert.equal((await api('POST', '/api/wsm/git/account', { project: 'Local_Remoto', login: 'manager' })).status, 400);
+  const t = await api('POST', '/api/wsm/git/account/test', { project: 'Local_Remoto' });
+  assert.equal(t.status, 200); assert.equal(t.json.branches, 1);
+  await mkRepo(path.join(wsRoot, 'Sem_Remote'));
+  assert.equal((await api('POST', '/api/wsm/git/account/test', { project: 'Sem_Remote' })).json.code, 'GIT_NO_REMOTE');
+});

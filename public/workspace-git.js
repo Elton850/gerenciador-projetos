@@ -46,8 +46,10 @@ async function afterGitChange(project = gitProject()) {
 function gitError(e, title = 'Erro do Git') {
   const out = e.details?.gitOutput;
   if (!out) return fail(e);
+  const project = gitProject();
   const m = openModal({ title, wide: true, body: [h('div', { class: 'box bad' }, e.message), h('div', { class: 'lbl' }, 'Saída do Git'), h('pre', { class: 'code' }, out)],
-    footer: [h('button', { class: 'btn primary', onclick: () => m.close() }, 'Fechar')] });
+    footer: [e.code === 'GIT_AUTH' && project ? h('button', { class: 'btn', onclick: () => { m.close(); accountDialog(project); } }, 'Conta do GitHub deste repositório…') : null,
+      h('button', { class: 'btn primary', onclick: () => m.close() }, 'Fechar')] });
 }
 function gitOutputDialog(title, text, extra) {
   const m = openModal({ title, wide: true, body: [extra, text ? h('pre', { class: 'code' }, text) : null], footer: [h('button', { class: 'btn primary', onclick: () => m.close() }, 'Fechar')] });
@@ -128,6 +130,7 @@ function renderGitChanges(body, project, g) {
       { label: 'Merge de outra branch na atual…', run: () => wsGitBranchesDialog('merge') },
       { label: 'Histórico (lista simples)…', run: () => gitLogDialog() },
       { label: 'Repositório e GitHub (remote)…', run: () => repoDialog() },
+      { label: 'Conta do GitHub (login e autor dos commits)…', run: () => accountDialog(project) },
       '-',
       { label: 'Abrir o projeto no VS Code', disabled: !WM.info.vscode, run: () => openExternal(project, 'vscode') },
       { label: 'Abrir a pasta do repositório', run: () => openExternal(project, 'explorer') },
@@ -180,6 +183,7 @@ function repoCard(g) {
       h('span', null, 'Branch'), h('span', { class: 'mono' }, st.branch || '(HEAD destacado)', st.upstream ? h('span', { class: 'muted' }, ` → ${st.upstream}`) : null),
       h('span', null, 'Remote'), rem ? h('span', { class: 'mono', title: rem.fetchUrl }, `${rem.name}: ${rem.fetchUrl.replace(/^https?:\/\//, '')}`, rem.webUrl ? [' ', h('a', { href: rem.webUrl, target: '_blank', rel: 'noopener noreferrer' }, 'abrir no GitHub')] : null)
         : h('span', null, h('a', { href: '#', onclick: (e) => { e.preventDefault(); repoDialog(); } }, 'associar repositório do GitHub…')),
+      rem ? [h('span', null, 'Conta'), accountLine(g)] : null,
       h('span', null, 'Status'), h('span', { class: 'ws-sync' }, syncSummary(g).map((x, i) => [i ? ' · ' : '', h('span', { class: x.k }, x.t)])),
       h('span', null, 'GitIgnore'), h('span', { class: 'ws-sync' }, g.gitignore
         ? [h('span', { class: 'ok' }, '✓ configurado'), ' ', h('a', { href: '#', title: 'Editar <raiz do repositório>\\.gitignore', onclick: (e) => { e.preventDefault(); gitignoreDialog(g.project); } }, 'editar')]
@@ -429,6 +433,89 @@ function repoDialog() {
         toast(r.replaced ? `URL do remote “${r.name}” substituída.` : `Remote “${r.name}” adicionado. Use Pull para trazer o que já existe nele, ou Push para publicar a branch.`);
       }) }, 'Salvar remote')] });
   url.focus();
+}
+
+// ---------- Conta do GitHub (login no remoto + autor dos commits), por repositório ----------
+// Cada repositório guarda a sua conta no próprio .git/config (git config --local): a conta pessoal de um não afeta a
+// corporativa de outro. O app não guarda senha nem token: o login continua com o mecanismo escolhido (GCM ou gh).
+const HELPER_LABEL = { gh: 'GitHub CLI (gh)', manager: 'Git Credential Manager', none: 'nenhum mecanismo de login', other: 'outro mecanismo de login' };
+const SCOPE_LABEL = { local: 'deste repositório', global: 'padrão da máquina', system: 'do sistema', worktree: 'desta pasta' };
+function loginLabel(rem) {
+  if (!rem || rem.protocol === 'ssh') return 'chave SSH';
+  if (rem.protocol !== 'https') return 'sem login (remoto local)';
+  return rem.appLogin ? 'Git Credential Manager (só deste repositório)' : `${HELPER_LABEL[rem.helper] || rem.helper} (padrão da máquina)`;
+}
+function accountLine(g) {
+  const a = g.account;
+  if (!a?.remote) return h('span', { class: 'muted' }, '—');
+  const rem = a.remote;
+  const who = rem.username
+    ? h('span', { class: 'mono', title: rem.usernameFrom === 'url' ? 'Usuário embutido na URL do remote' : `Conta ${SCOPE_LABEL[rem.usernameFrom] || ''}` }, rem.username)
+    : rem.protocol === 'https' ? h('span', { class: 'warn', title: 'Sem conta definida: o Git usa a conta que o mecanismo de login tiver (ex.: a conta ativa do gh).' }, '⚠ não definida') : null;
+  return h('span', { class: 'ws-sync' }, who, [who ? ' · ' : '', h('span', { class: 'muted' }, loginLabel(rem))],
+    a.identity.email ? [' · ', h('span', { class: 'muted', title: `Autor dos commits (${SCOPE_LABEL[a.identity.emailScope] || a.identity.emailScope}): ${a.identity.name || ''} <${a.identity.email}>` }, `autor ${a.identity.email}`)] : null,
+    ' ', h('a', { href: '#', onclick: (e) => { e.preventDefault(); accountDialog(g.project); } }, 'alterar'));
+}
+async function accountDialog(project) {
+  const g = WM.git.get(project);
+  if (!g?.repo) return;
+  const cur = g.account || {};
+  const rem = cur.remote;
+  let all = [];
+  try { all = (await gitApi('GET', '/accounts', null, project)).repos || []; } catch { /* lista dos outros é opcional */ }
+  const user = h('input', { type: 'text', value: rem?.usernameFrom === 'local' ? rem.username : '', placeholder: rem?.usernameFrom === 'global' ? `${rem.username} (padrão da máquina)` : 'ex.: meuusuario' });
+  const name = h('input', { type: 'text', value: cur.identity?.nameScope === 'local' ? cur.identity.name : '', placeholder: cur.identity?.name ? `${cur.identity.name} (padrão da máquina)` : 'Seu Nome' });
+  const email = h('input', { type: 'text', value: cur.identity?.emailScope === 'local' ? cur.identity.email : '', placeholder: cur.identity?.email ? `${cur.identity.email} (padrão da máquina)` : 'voce@exemplo.com' });
+  const https = rem?.protocol === 'https';
+  const login = h('select', { disabled: !https },
+    h('option', { value: 'default' }, rem?.appLogin || !https ? 'Padrão da máquina (mecanismo configurado no Git)' : `Padrão da máquina — hoje: ${HELPER_LABEL[rem.helper] || rem.helper}`),
+    h('option', { value: 'manager' }, 'Git Credential Manager só neste repositório (janela de login; guarda cada conta separada)'));
+  login.value = rem?.appLogin ? 'manager' : 'default';
+  // Contas já usadas em outros repositórios do Workspace → preencher com um clique.
+  const known = new Map();
+  for (const r of all) {
+    const u = r.remote?.usernameFrom === 'local' ? r.remote.username : '';
+    const em = r.identity?.emailScope === 'local' ? r.identity.email : '';
+    if (!u && !em) continue;
+    const k = `${u}|${em}|${!!r.remote?.appLogin}`;
+    if (!known.has(k)) known.set(k, { username: u, name: r.identity.nameScope === 'local' ? r.identity.name : '', email: em, login: r.remote?.appLogin ? 'manager' : 'default' });
+  }
+  const chips = [...known.values()].map((k) => h('button', { class: 'btn sm ghost', title: `${k.name || ''} <${k.email || ''}> · ${k.login === 'manager' ? 'Git Credential Manager' : 'login padrão'}`, onclick: () => {
+    user.value = k.username; name.value = k.name; email.value = k.email; if (https) login.value = k.login;
+  } }, k.username || k.email));
+  // Outros repositórios do mesmo dono (ex.: a organização da empresa) para aplicar a mesma conta de uma vez.
+  const same = rem?.owner ? all.filter((r) => r.project !== project && r.remote?.protocol === rem.protocol && r.remote?.host === rem.host && r.remote?.owner?.toLowerCase() === rem.owner.toLowerCase()) : [];
+  const alsoBox = h('input', { type: 'checkbox' });
+  const md = openModal({ title: `Conta do GitHub — ${displayName(projectByPath(project))}`, wide: true,
+    body: [
+      h('dl', { class: 'kv', style: 'margin:0;grid-template-columns:150px minmax(0,1fr)' },
+        h('dt', null, 'Remote'), h('dd', { class: 'mono' }, rem ? `${rem.name}: ${rem.url}` : '(sem remote)'),
+        h('dt', null, 'Dono no GitHub'), h('dd', { class: 'mono' }, rem?.owner || '—'),
+        h('dt', null, 'Conta usada agora'), h('dd', null, rem?.username ? h('span', { class: 'mono' }, rem.username) : h('span', { class: 'warn' }, 'não definida (o mecanismo de login escolhe)'), ` · ${loginLabel(rem)}`),
+        h('dt', null, 'Autor dos commits'), h('dd', null, cur.identity?.email ? `${cur.identity.name || ''} <${cur.identity.email}> (${SCOPE_LABEL[cur.identity.emailScope] || cur.identity.emailScope})` : h('span', { class: 'warn' }, 'não configurado'))),
+      rem?.usernameFrom === 'url' ? h('div', { class: 'box warn' }, `A URL do remote já traz o usuário “${rem.username}”; ele vale mais que a conta abaixo. Para trocar, altere a URL em “Repositório e GitHub”.`) : null,
+      chips.length ? h('div', null, h('div', { class: 'lbl' }, 'Usar uma conta já configurada em outro repositório'), h('div', { class: 'inline' }, chips)) : null,
+      h('div', { class: 'cols2' }, field('Conta do GitHub (usuário)', user, 'Vazio = o mecanismo de login escolhe a conta (ex.: a conta ativa do gh).'),
+        field('Login', login, https ? 'Use o Git Credential Manager quando a conta não for a do gh: ele abre a janela de login uma vez e guarda essa conta à parte.' : 'Só para remoto HTTPS; com SSH a conta é a da chave.')),
+      h('div', { class: 'cols2' }, field('Nome do autor dos commits', name, 'Vazio = padrão da máquina (git config --global).'), field('E-mail do autor dos commits', email)),
+      same.length ? h('label', { class: 'check' }, alsoBox, ` Aplicar também ${same.length === 1 ? 'ao outro repositório' : `aos outros ${same.length} repositórios`} de ${rem.owner} neste Workspace (${same.map((r) => r.project).join(', ')})`) : null,
+      h('div', { class: 'hint' }, 'Grava só no .git/config deste repositório (git config --local): vale também no terminal e não muda os outros repositórios. O app não guarda senha nem token.'),
+    ],
+    footer: [h('button', { class: 'btn', onclick: () => md.close() }, 'Fechar'),
+      rem && rem.protocol !== 'local' ? h('button', { class: 'btn', title: 'git ls-remote: confere o acesso ao remoto com a conta salva (não altera nada)', onclick: (e) => gitAction(e.target, async () => {
+        toast('Testando o acesso… (pode abrir a janela de login do GitHub)');
+        const r = await gitApi('POST', '/account/test', {}, project);
+        toast(`Acesso OK ao remoto “${r.remote}” com a conta salva (${plural(r.branches, 'branch', 'branches')}).`);
+      }) }, 'Testar acesso') : null,
+      h('button', { class: 'btn primary', onclick: (e) => gitAction(e.target, async () => {
+        const body = { username: user.value.trim(), name: name.value.trim(), email: email.value.trim(), ...(https ? { login: login.value } : {}), also: alsoBox.checked ? same.map((r) => r.project) : [] };
+        const r = await gitApi('POST', '/account', body, project);
+        md.close();
+        for (const p of r.updated) if (p !== project) WM.git.delete(p);
+        await loadGit(project);
+        toast(r.updated.length > 1 ? `Conta salva em ${r.updated.length} repositórios. Use “Testar acesso” para conferir o login.` : 'Conta salva neste repositório. Use “Testar acesso” para conferir o login.');
+      }) }, 'Salvar')] });
+  user.focus();
 }
 
 // Clonar um repositório existente (ex.: do GitHub) como um NOVO projeto dentro da raiz do Workspace.

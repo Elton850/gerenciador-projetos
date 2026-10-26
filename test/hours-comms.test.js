@@ -229,3 +229,39 @@ test('API: e-mail por coordenador e por dia/período, e planilha filtrada por co
   assert.equal((await fetch(`${base}/api/hours/export?from=2025-05-05&to=2025-05-05&coordinatorId=ninguem`)).status, 400);
   assert.equal((await fetch(`${base}/api/hours/export?year=2025&month=5&projectId=ninguem`)).status, 400);
 });
+
+test('API: planilha só dos projetos escolhidos (vários), interseção com coordenador, nomes e validação', async () => {
+  const caio = ok(await api('POST', '/api/coordinators', { name: 'Caio Coordenador', email: 'caio@exemplo.test' }));
+  const duda = ok(await api('POST', '/api/coordinators', { name: 'Duda Coordenadora', email: 'duda@exemplo.test' }));
+  const mk = async (name, c) => ok(await api('POST', '/api/projects', { name, coordinatorId: c.id }));
+  const [P1, P2, P3, P4] = [await mk('Cliente Um', caio), await mk('Cliente Dois', duda), await mk('Cliente Três', caio), await mk('Cliente Quatro', duda)];
+  const entry = (p, date, start, end) => api('POST', '/api/hours/entries', { date, projectId: p.id, activity: 'Migração', start, end });
+  ok(await entry(P1, '2025-06-02', '08:00', '09:00'));
+  ok(await entry(P2, '2025-06-02', '09:00', '10:00'));
+  ok(await entry(P3, '2025-06-03', '08:00', '09:00'));
+  ok(await entry(P4, '2025-06-04', '08:00', '09:00'));
+
+  const ExcelJS = require('exceljs');
+  const sheet = async (qs) => {
+    const r = await fetch(`${base}/api/hours/export?${qs}`);
+    assert.equal(r.status, 200, qs);
+    const wb = new ExcelJS.Workbook(); await wb.xlsx.load(Buffer.from(await r.arrayBuffer()));
+    const clients = []; wb.worksheets[0].eachRow((row, n) => { if (n > 1 && row.getCell(8).value) clients.push(row.getCell(7).value); });
+    const filterRow = []; wb.getWorksheet('Resumo por Projeto').eachRow((row) => { const v = row.getCell(1).value; if (typeof v === 'string' && v.startsWith('Filtro:')) filterRow.push(v); });
+    return { name: decodeURIComponent(/filename\*=UTF-8''(.+)$/.exec(r.headers.get('content-disposition'))[1]), clients, filterRow };
+  };
+  const two = await sheet(`from=2025-06-01&to=2025-06-15&projectIds=${P1.id},${P2.id}`);
+  assert.deepEqual(two.clients, ['Cliente Um', 'Cliente Dois']);
+  assert.equal(two.name, 'Apontamentos_2025-06-01_a_2025-06-15_Cliente_Um+Cliente_Dois.xlsx');
+  assert.deepEqual(two.filterRow, ['Filtro: Projetos: Cliente Um, Cliente Dois · 01/06/2025 a 15/06/2025']);
+  const four = await sheet(`year=2025&month=6&projectIds=${[P1, P2, P3, P4].map((p) => p.id).join(',')}`);
+  assert.equal(four.clients.length, 4);
+  assert.equal(four.name, 'Apontamentos_2025_06_4_projetos.xlsx', 'mais de 3 projetos: nome curto, lista completa na planilha');
+  assert.match(four.filterRow[0], /Projetos: Cliente Um, Cliente Dois, Cliente Três, Cliente Quatro/);
+  // coordenador + projetos = interseção; projectId antigo continua valendo e soma com projectIds
+  const inter = await sheet(`year=2025&month=6&coordinatorId=${caio.id}&projectIds=${P1.id},${P2.id}`);
+  assert.deepEqual(inter.clients, ['Cliente Um']);
+  const mixed = await sheet(`year=2025&month=6&projectId=${P3.id}&projectIds=${P4.id}`);
+  assert.deepEqual(mixed.clients, ['Cliente Três', 'Cliente Quatro']);
+  assert.equal((await fetch(`${base}/api/hours/export?year=2025&month=6&projectIds=${P1.id},ninguem`)).status, 400);
+});

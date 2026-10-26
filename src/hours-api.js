@@ -391,7 +391,8 @@ function mount(app, { store, audit, dataDir, SYS }) {
 
   // ---------- Exportação (só leitura: nada é alterado) ----------
   // ?year&month = mês inteiro (como antes) ou ?from&to = um dia/intervalo. Filtros opcionais: coordinatorId (projetos do coordenador no
-  // período, MESMA regra do e-mail: cadastro atual do projeto) e/ou projectId (pode ser o Interno). Sem filtro = tudo, como antes.
+  // período, MESMA regra do e-mail: cadastro atual do projeto) e/ou projectId / projectIds (vários, separados por vírgula; pode ser o
+  // Interno). Com os dois, vale a interseção. Sem filtro = tudo, como antes.
   app.get('/api/hours/export', async (req, res) => {
     const q = req.query;
     let period;
@@ -401,19 +402,25 @@ function mount(app, { store, audit, dataDir, SYS }) {
       if (!Number.isInteger(y) || y < 2000 || y > 2100 || !Number.isInteger(m) || m < 1 || m > 12) throw httpError(400, 'Informe o mês e o ano.');
       period = H.cleanPeriod({ year: y, month: m });
     }
-    const coordinatorId = str(q.coordinatorId, 40); const projectId = str(q.projectId, 40);
+    const coordinatorId = str(q.coordinatorId, 40);
+    const picked = [...new Set([q.projectId, ...String(q.projectIds || '').split(',')].map((x) => str(x, 40)).filter(Boolean))];
+    if (picked.length > 200) throw httpError(400, 'Escolha no máximo 200 projetos.');
     const coord = coordinatorId ? data().coordinators.find((c) => c.id === coordinatorId) || (() => { throw httpError(400, 'Coordenador não encontrado no cadastro de pessoas.'); })() : null;
-    let projectIds = null; const parts = [];
-    if (coord) { projectIds = H.coordinatorProjectIds(data(), period, coord.id); parts.push(coord.name); }
-    if (projectId) {
-      const removed = data().timeEntries.find((e) => e.projectId === projectId); // projeto removido: o nome gravado no apontamento
-      const name = projectId === H.INTERNAL.id ? H.INTERNAL.name : data().projects.find((x) => x.id === projectId)?.name || removed?.projectName;
-      if (!name) throw httpError(400, 'Projeto não encontrado.');
-      projectIds = projectIds ? projectIds.filter((id) => id === projectId) : [projectId];
-      parts.push(name);
+    let projectIds = null; const parts = []; const details = [];
+    if (coord) { projectIds = H.coordinatorProjectIds(data(), period, coord.id); parts.push(coord.name); details.push(`Coordenador: ${coord.name}`); }
+    if (picked.length) {
+      const names = picked.map((id) => {
+        const removed = data().timeEntries.find((e) => e.projectId === id); // projeto removido: o nome gravado no apontamento
+        const name = id === H.INTERNAL.id ? H.INTERNAL.name : data().projects.find((x) => x.id === id)?.name || removed?.projectName;
+        if (!name) throw httpError(400, 'Projeto não encontrado.');
+        return name;
+      });
+      projectIds = projectIds ? projectIds.filter((id) => picked.includes(id)) : picked;
+      parts.push(names.length <= 3 ? names.join(', ') : `${names.length} projetos`); // nome do arquivo curto; a lista completa vai na planilha
+      details.push(`${names.length === 1 ? 'Projeto' : 'Projetos'}: ${names.join(', ')}`);
     }
     const today = H.localParts(nowMs()).date;
-    const out = await buildWorkbook(data(), period.year, period.month, today, { period, projectIds, filterLabel: parts.join(' — ') });
+    const out = await buildWorkbook(data(), period.year, period.month, today, { period, projectIds, filterLabel: parts.join(' — '), filterDetail: details.join(' · ') });
     log('horas-exportada', { detalhe: `${out.label}${out.filter ? ` (${out.filter})` : ''}: ${out.count} apontamento(s), ${out.notes} observação(ões)`, arquivo: out.name });
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${out.name.replace(/[^\x20-\x7e]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(out.name)}`);

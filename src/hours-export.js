@@ -118,9 +118,10 @@ function psaSheet(wb, data, entries, days, period) {
 }
 
 // opts.period = período de src/hours.js cleanPeriod (padrão: o mês year/month, como antes). opts.projectIds = só esses projetos
-// (filtro por coordenador ou projeto; filterLabel vai no nome do arquivo). Com filtro, a aba de resumo diário (meta × apontado) sai:
-// a meta é do dia inteiro e não se divide por coordenador/projeto. Observações: as dos projetos filtrados e as gerais (sem projeto).
-async function buildWorkbook(data, year, month, today, { period: per = null, projectIds = null, filterLabel = '' } = {}) {
+// (filtro por coordenador e/ou projetos escolhidos; filterLabel vai no nome do arquivo e filterDetail — a lista completa — na planilha).
+// Com filtro, a aba de resumo diário (meta × apontado) sai: a meta é do dia inteiro e não se divide por coordenador/projeto.
+// Observações: as dos projetos filtrados e as gerais (sem projeto).
+async function buildWorkbook(data, year, month, today, { period: per = null, projectIds = null, filterLabel = '', filterDetail = '' } = {}) {
   const cfg = data.hours;
   const period = per || H.cleanPeriod({ year, month });
   const { from, to } = period;
@@ -237,7 +238,7 @@ async function buildWorkbook(data, year, month, today, { period: per = null, pro
   gridRows(rp, 6);
   if (filtered) {
     rp.addRow([]);
-    rp.addRow([`Filtro: ${filterLabel || 'projetos escolhidos'} · ${period.label}`]).getCell(1).font = { italic: true };
+    rp.addRow([`Filtro: ${filterDetail || filterLabel || 'projetos escolhidos'} · ${period.label}`]).getCell(1).font = { italic: true };
   }
   // ---- Observações (uma linha por observação; as evidências ficam no app — aqui só a contagem e os nomes dos arquivos) ----
   const notes = (data.timeNotes || []).filter((n) => H.datesOfNote(n).some((d) => d >= from && d <= to) && (!filtered || !n.projectId || projectIds.includes(n.projectId))).sort((a, b) => a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt));
@@ -258,7 +259,7 @@ async function buildWorkbook(data, year, month, today, { period: per = null, pro
   if (ro.rowCount > 1) ro.autoFilter = { from: { row: 1, column: 1 }, to: { row: ro.rowCount, column: 10 } };
   // Nome: mês = Apontamentos_AAAA_MM (como antes); dia = Apontamentos_AAAA-MM-DD; intervalo = Apontamentos_AAAA-MM-DD_a_AAAA-MM-DD; + _<filtro>.
   const base = period.kind === 'month' ? `Apontamentos_${period.year}_${pad2(period.month)}` : period.kind === 'day' ? `Apontamentos_${from}` : `Apontamentos_${from}_a_${to}`;
-  const suffix = filterLabel ? `_${sanitizeFileName(filterLabel, '').replace(/\s+/g, '_')}` : '';
+  const suffix = filterLabel ? `_${sanitizeFileName(filterLabel, '').replace(/\s*,\s*/g, '+').replace(/\s+/g, '_')}` : '';
   return { buffer: Buffer.from(await wb.xlsx.writeBuffer()), name: `${base}${suffix}.xlsx`, label: period.label, filter: filterLabel || '', count: entries.length, notes: notes.length };
 }
 

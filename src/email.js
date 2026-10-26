@@ -57,14 +57,18 @@ const VARIABLES = [
   { key: 'project.stakeholders', group: 'Pessoas', label: 'Nomes dos stakeholders do projeto', miss: 'Projeto sem stakeholder definido.', get: (c) => contactsOf(c, 'stakeholder').map((x) => x.name).join(', ') },
   { key: 'checklist.item', group: 'Checklist', label: 'Item do checklist (quando gerado a partir de um item)', miss: 'Variável de checklist usada fora de um item do checklist.', get: (c) => c.item?.title },
   { key: 'checklist.stage', group: 'Checklist', label: 'Etapa do item do checklist', miss: 'Variável de checklist usada fora de um item do checklist.', get: (c) => c.stageName },
-  // Controle de Horas (contexto do mês: src/hours.js monthContext). Fora dele ficam faltando, com aviso.
-  { key: 'hours.period', group: 'Controle de horas', label: 'Mês/ano do controle (ex.: Outubro/2026)', miss: HOURS_MISS, get: (c) => c.hours?.label },
-  { key: 'hours.month', group: 'Controle de horas', label: 'Mês do controle (ex.: Outubro)', miss: HOURS_MISS, get: (c) => c.hours?.monthName },
+  // Controle de Horas (contexto do período — mês, dia ou intervalo —, opcionalmente só de alguns coordenadores: src/hours.js hoursContext).
+  // Fora dele ficam faltando, com aviso.
+  { key: 'hours.period', group: 'Controle de horas', label: 'Período do controle (ex.: Outubro/2026, 05/10/2026 ou 01/10/2026 a 15/10/2026)', miss: HOURS_MISS, get: (c) => c.hours?.label },
+  { key: 'hours.start_date', group: 'Controle de horas', label: 'Data inicial do período (dd/mm/aaaa)', miss: HOURS_MISS, get: (c) => c.hours?.fromText },
+  { key: 'hours.end_date', group: 'Controle de horas', label: 'Data final do período (dd/mm/aaaa)', miss: HOURS_MISS, get: (c) => c.hours?.toText },
+  { key: 'hours.month', group: 'Controle de horas', label: 'Mês do controle (ex.: Outubro; num intervalo, o mês da data inicial)', miss: HOURS_MISS, get: (c) => c.hours?.monthName },
   { key: 'hours.year', group: 'Controle de horas', label: 'Ano do controle', miss: HOURS_MISS, get: (c) => c.hours?.year },
-  { key: 'hours.project_count', group: 'Controle de horas', label: 'Quantidade de projetos com apontamentos no mês', miss: HOURS_MISS, get: (c) => (c.hours ? String(c.hours.projects.length) : '') },
-  { key: 'hours.projects', group: 'Controle de horas', label: 'Projetos com apontamentos no mês', miss: 'Nenhum projeto com apontamentos neste mês.', get: (c) => c.hours?.projects.map((x) => x.name).join(', ') },
-  { key: 'hours.total_hours', group: 'Controle de horas', label: 'Total de horas apontadas no mês (hh:mm)', miss: HOURS_MISS, get: (c) => c.hours?.totalText },
-  { key: 'hours.coordinators', group: 'Controle de horas', label: 'Coordenadores dos projetos do mês', miss: 'Nenhum coordenador nos projetos do mês.', get: (c) => c.hours?.coordinators.map((x) => x.name).join(', ') },
+  { key: 'hours.project_count', group: 'Controle de horas', label: 'Quantidade de projetos com apontamentos no período', miss: HOURS_MISS, get: (c) => (c.hours ? String(c.hours.projects.length) : '') },
+  { key: 'hours.projects', group: 'Controle de horas', label: 'Projetos com apontamentos no período', miss: 'Nenhum projeto com apontamentos neste período.', get: (c) => c.hours?.projects.map((x) => x.name).join(', ') },
+  { key: 'hours.projects_hours', group: 'Controle de horas', label: 'Projetos com as horas de cada um (ex.: Projeto A (02:00), Projeto B (01:30))', miss: 'Nenhum projeto com apontamentos neste período.', get: (c) => c.hours?.projects.map((x) => `${x.name} (${x.hoursText})`).join(', ') },
+  { key: 'hours.total_hours', group: 'Controle de horas', label: 'Total de horas apontadas no período (hh:mm; por coordenador = só os projetos dele)', miss: HOURS_MISS, get: (c) => c.hours?.totalText },
+  { key: 'hours.coordinators', group: 'Controle de horas', label: 'Coordenadores dos projetos do período (por coordenador = o destinatário)', miss: 'Nenhum coordenador nos projetos do período.', get: (c) => c.hours?.coordinators.map((x) => x.name).join(', ') },
   { key: 'today', group: 'Geral', label: 'Data de hoje', miss: '', get: (c) => nowOf(c).toLocaleDateString('pt-BR') },
   { key: 'greeting', group: 'Geral', label: 'Saudação pelo horário da geração (Bom dia / Boa tarde / Boa noite)', miss: '', get: (c) => greetingFor(nowOf(c)) },
 ];

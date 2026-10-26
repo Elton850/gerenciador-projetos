@@ -309,9 +309,11 @@ function emailHistoryCard() {
 // src = { templateId } (a partir do projeto) ou { stepId, itemId } (item do checklist).
 // Fluxo único: modelo (HTML sanitizado) → variáveis resolvidas no servidor → d.html (prévia) = o que vai para a área de transferência.
 // p = projeto (geração do projeto) ou null com opts.url = outra rota de geração do MESMO gerador (ex.: Controle de Horas do mês).
+// opts.subtitle (vai no título), opts.extra (elemento acima da prévia) e opts.onClose (ao fechar a janela) servem para encadear
+// várias gerações (ex.: um e-mail por coordenador). Retorna false se a geração falhou (nenhuma janela foi aberta).
 async function emGenerate(p, src, opts = {}) {
   let d;
-  try { d = await api('POST', opts.url || `/api/projects/${p.id}/emails/generate`, src); } catch (e) { return fail(e); }
+  try { d = await api('POST', opts.url || `/api/projects/${p.id}/emails/generate`, src); } catch (e) { fail(e); return false; }
   if (p) commsRefresh(p.id);
   const st = { to: [...d.to], cc: [...d.cc], bcc: [...d.bcc], subject: d.subject, bodyHtml: d.bodyHtml, html: d.html };
   const first = JSON.stringify([st.to, st.cc, st.bcc, st.subject]);
@@ -321,7 +323,7 @@ async function emGenerate(p, src, opts = {}) {
   let pending = null;
   const content = h('div', { class: 'em-compose' });
   const foot = h('div', { class: 'em-foot' });
-  const m = openModal({ title: d.template.name, size: 'md', body: [content], footer: [foot] });
+  const m = openModal({ title: opts.subtitle ? `${d.template.name} — ${opts.subtitle}` : d.template.name, size: 'md', body: [opts.extra, content].filter(Boolean), footer: [foot], onClose: opts.onClose });
   const edited = () => bodyDirty || JSON.stringify([st.to, st.cc, st.bcc, st.subject]) !== first;
   const join = (list) => list.join(emSep());
   let renderTimer = null;

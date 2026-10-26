@@ -72,3 +72,47 @@ test('mês sem apontamentos: só cabeçalho e TOTAL zerado', async () => {
   assert.equal(frac(ws.getCell('F2').value), 0);
   assert.equal(ws.getCell('L2').value, 'Total Geral');
 });
+
+test('período de/até atravessando meses e filtro por projetos: aba PERÍODO, competência por linha, sem resumo diário, observações filtradas, nome do arquivo', async () => {
+  const data = { projects: [{ id: 'p1', name: 'Cliente Alfa' }, { id: 'p2', name: 'Cliente Beta' }], coordinators: [], hours: H.defaultHours(),
+    timeNotes: [
+      { id: 'n1', date: '2026-09-30', dates: ['2026-09-30'], projectId: 'p1', title: 'Da Alfa', category: 'info', evidences: [], createdAt: '2026-09-30T10:00:00.000Z' },
+      { id: 'n2', date: '2026-10-01', dates: ['2026-10-01'], projectId: 'p2', title: 'Da Beta', category: 'info', evidences: [], createdAt: '2026-10-01T10:00:00.000Z' },
+      { id: 'n3', date: '2026-10-01', dates: ['2026-10-01'], projectId: null, title: 'Geral', category: 'info', evidences: [], createdAt: '2026-10-01T11:00:00.000Z' },
+    ],
+    timeEntries: [entry('a', '2026-09-29', '08:00', '09:00'), entry('b', '2026-09-30', '08:00', '10:00'),
+      entry('c', '2026-10-01', '08:00', '11:00', { projectId: 'p2', projectName: 'Cliente Beta' }), entry('d', '2026-10-01', '13:00', '14:00'), entry('e', '2026-10-05', '08:00', '09:00')] };
+  const period = H.cleanPeriod({ from: '2026-09-30', to: '2026-10-02' });
+  assert.equal(period.kind, 'range');
+  assert.equal(period.label, '30/09/2026 a 02/10/2026');
+
+  // sem filtro: tudo do período (inclui o resumo do período)
+  let out = await buildWorkbook(data, period.year, period.month, '2026-10-26', { period });
+  let wb = new ExcelJS.Workbook(); await wb.xlsx.load(out.buffer);
+  assert.deepEqual(wb.worksheets.map((w) => w.name), ['PERÍODO', 'Apontamentos', 'Resumo do Período', 'Resumo por Projeto', 'Observações']);
+  assert.equal(out.name, 'Apontamentos_2026-09-30_a_2026-10-02.xlsx');
+  assert.equal(out.count, 3);
+  const ws = wb.getWorksheet('PERÍODO');
+  assert.equal(ws.getCell('A2').value, 'Setembro/2026', 'competência = mês de cada linha');
+  assert.equal(ws.getCell('A3').value, 'Outubro/2026');
+  assert.equal(ws.getCell('L2').value, '30/09/2026 a 02/10/2026');
+
+  // filtro: só o projeto p1 → sem a Beta e sem o resumo diário de meta; observações da Alfa + gerais
+  out = await buildWorkbook(data, period.year, period.month, '2026-10-26', { period, projectIds: ['p1'], filterLabel: 'Carla Coord' });
+  wb = new ExcelJS.Workbook(); await wb.xlsx.load(out.buffer);
+  assert.deepEqual(wb.worksheets.map((w) => w.name), ['PERÍODO', 'Apontamentos', 'Resumo por Projeto', 'Observações']);
+  assert.equal(out.name, 'Apontamentos_2026-09-30_a_2026-10-02_Carla_Coord.xlsx');
+  assert.equal(out.count, 2);
+  const clients = []; wb.getWorksheet('PERÍODO').eachRow((r, n) => { if (n > 1 && r.getCell(8).value) clients.push(r.getCell(7).value); });
+  assert.deepEqual(clients, ['Cliente Alfa', 'Cliente Alfa']);
+  const titles = []; wb.getWorksheet('Observações').eachRow((r, n) => { if (n > 1) titles.push(r.getCell(5).value); });
+  assert.deepEqual(titles, ['Da Alfa', 'Geral']);
+
+  // um dia e o mês inteiro pelo período = mesmos nomes de antes
+  assert.equal((await buildWorkbook(data, 2026, 10, '2026-10-26', { period: H.cleanPeriod({ from: '2026-10-01', to: '2026-10-01' }) })).name, 'Apontamentos_2026-10-01.xlsx');
+  const whole = await buildWorkbook(data, 2026, 10, '2026-10-26', { period: H.cleanPeriod({ from: '2026-10-01', to: '2026-10-31' }) });
+  assert.equal(whole.name, 'Apontamentos_2026_10.xlsx');
+  wb = new ExcelJS.Workbook(); await wb.xlsx.load(whole.buffer);
+  assert.equal(wb.worksheets[0].name, 'OUTUBRO');
+  assert.equal(wb.worksheets[2].name, 'Resumo Mensal');
+});

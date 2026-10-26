@@ -143,12 +143,13 @@ function mount(app, { store, audit, dataDir, SYS }) {
     log('horas-links', { detalhe: [data().hours.links.psaUrl ? 'PSA' : null, data().hours.links.sheetUrl ? 'planilha' : null].filter(Boolean).join(' e ') || 'links removidos' });
     res.json({ links: data().hours.links });
   });
-  // Contexto do mês para comunicações: projetos com apontamentos, total, coordenadores (e quem está sem e-mail).
+  // Contexto para comunicações e filtros da planilha: projetos com apontamentos no período (mês, ou ?from&to = dia/intervalo), total,
+  // coordenadores de cada projeto (e quem está sem e-mail).
   app.get('/api/hours/month-context', (req, res) => {
     const [ty, tm] = H.localParts(nowMs()).date.split('-').map(Number);
-    const y = Number(req.query.year) || ty; const m = Number(req.query.month) || tm;
-    if (!Number.isInteger(y) || y < 2000 || y > 2100 || !Number.isInteger(m) || m < 1 || m > 12) throw httpError(400, 'Mês inválido.');
-    res.json({ ...H.monthContext(data(), y, m), links: data().hours.links, emailTemplateId: data().hours.emailTemplateId });
+    const q = req.query;
+    const period = H.cleanPeriod(q.from || q.to ? { from: q.from, to: q.to } : { year: Number(q.year) || ty, month: Number(q.month) || tm });
+    res.json({ ...H.hoursContext(data(), period), links: data().hours.links, emailTemplateId: data().hours.emailTemplateId });
   });
   app.post('/api/hours/overrides', (req, res) => {
     const o = H.cleanOverride(req.body || {});
@@ -389,14 +390,33 @@ function mount(app, { store, audit, dataDir, SYS }) {
   });
 
   // ---------- Exportação (só leitura: nada é alterado) ----------
+  // ?year&month = mês inteiro (como antes) ou ?from&to = um dia/intervalo. Filtros opcionais: coordinatorId (projetos do coordenador no
+  // período, MESMA regra do e-mail: cadastro atual do projeto) e/ou projectId (pode ser o Interno). Sem filtro = tudo, como antes.
   app.get('/api/hours/export', async (req, res) => {
-    const y = Number(req.query.year); const m = Number(req.query.month);
-    if (!Number.isInteger(y) || y < 2000 || y > 2100 || !Number.isInteger(m) || m < 1 || m > 12) throw httpError(400, 'Informe o mês e o ano.');
+    const q = req.query;
+    let period;
+    if (q.from || q.to) period = H.cleanPeriod({ from: q.from, to: q.to });
+    else {
+      const y = Number(q.year); const m = Number(q.month);
+      if (!Number.isInteger(y) || y < 2000 || y > 2100 || !Number.isInteger(m) || m < 1 || m > 12) throw httpError(400, 'Informe o mês e o ano.');
+      period = H.cleanPeriod({ year: y, month: m });
+    }
+    const coordinatorId = str(q.coordinatorId, 40); const projectId = str(q.projectId, 40);
+    const coord = coordinatorId ? data().coordinators.find((c) => c.id === coordinatorId) || (() => { throw httpError(400, 'Coordenador não encontrado no cadastro de pessoas.'); })() : null;
+    let projectIds = null; const parts = [];
+    if (coord) { projectIds = H.coordinatorProjectIds(data(), period, coord.id); parts.push(coord.name); }
+    if (projectId) {
+      const removed = data().timeEntries.find((e) => e.projectId === projectId); // projeto removido: o nome gravado no apontamento
+      const name = projectId === H.INTERNAL.id ? H.INTERNAL.name : data().projects.find((x) => x.id === projectId)?.name || removed?.projectName;
+      if (!name) throw httpError(400, 'Projeto não encontrado.');
+      projectIds = projectIds ? projectIds.filter((id) => id === projectId) : [projectId];
+      parts.push(name);
+    }
     const today = H.localParts(nowMs()).date;
-    const out = await buildWorkbook(data(), y, m, today);
-    log('horas-exportada', { detalhe: `${out.label}: ${out.count} apontamento(s), ${out.notes} observação(ões)`, arquivo: out.name });
+    const out = await buildWorkbook(data(), period.year, period.month, today, { period, projectIds, filterLabel: parts.join(' — ') });
+    log('horas-exportada', { detalhe: `${out.label}${out.filter ? ` (${out.filter})` : ''}: ${out.count} apontamento(s), ${out.notes} observação(ões)`, arquivo: out.name });
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="${out.name}"; filename*=UTF-8''${encodeURIComponent(out.name)}`);
+    res.setHeader('Content-Disposition', `attachment; filename="${out.name.replace(/[^\x20-\x7e]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(out.name)}`);
     res.setHeader('Cache-Control', 'no-store');
     res.send(out.buffer);
   });

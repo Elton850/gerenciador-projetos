@@ -199,18 +199,22 @@ function mount(app, { store, audit, getProject, getIn, publicProject, dataDir })
     res.json({ ...g, warnings: [...g.warnings, ...extra], generationId: rec.id, template: brief(src.t), checklist: src.checklist, attachments, html: out.html, text: out.text });
   });
 
-  // Comunicação do Controle de Horas (mês): o MESMO gerador, sem projeto único — contexto = projetos com apontamentos no mês.
-  // Só modelos globais e ativos. Destinatários dinâmicos via role:context_coordinators; histórico com a origem “Controle de Horas — Mês/Ano”.
+  // Comunicação do Controle de Horas: o MESMO gerador, sem projeto único — contexto = projetos com apontamentos no período
+  // ({year, month} = mês inteiro, como antes; {from, to} = um dia ou intervalo) e, com coordinatorIds, só os projetos desses coordenadores
+  // (a tela chama uma vez por coordenador para e-mails separados). Só modelos globais e ativos. Destinatários dinâmicos via
+  // role:context_coordinators; histórico com a origem “Controle de Horas — <período>[ — <coordenadores>]”.
   app.post('/api/hours/emails/generate', (req, res) => {
     const H = require('./hours');
+    const b = req.body || {};
     const now = new Date();
-    const y = Number(req.body.year) || now.getFullYear(); const m = Number(req.body.month) || now.getMonth() + 1;
-    if (!Number.isInteger(y) || y < 2000 || y > 2100 || !Number.isInteger(m) || m < 1 || m > 12) throw httpError(400, 'Mês inválido.');
-    const t = tplOrThrow(str(req.body.templateId, 40));
+    const period = H.cleanPeriod(b.from || b.to ? { from: b.from, to: b.to } : { year: Number(b.year) || now.getFullYear(), month: Number(b.month) || now.getMonth() + 1 });
+    const coordinatorIds = H.cleanCoordinatorIds(data(), b.coordinatorIds);
+    const t = tplOrThrow(str(b.templateId, 40));
     if (!t.active) throw httpError(409, `O modelo “${t.name}” está desativado.`, { code: 'EMAIL_TEMPLATE_UNAVAILABLE' });
     if (t.scope !== 'global') throw httpError(409, `O modelo “${t.name}” é específico de um projeto; use um modelo global.`, { code: 'EMAIL_TEMPLATE_UNAVAILABLE' });
-    const mc = H.monthContext(data(), y, m);
-    const context = `Controle de Horas — ${mc.label}`;
+    const mc = H.hoursContext(data(), period, { coordinatorIds });
+    const who = coordinatorIds ? coordinatorIds.map((id) => data().coordinators.find((c) => c.id === id)?.name).filter(Boolean).join(', ') : '';
+    const context = `Controle de Horas — ${mc.label}${who ? ` — ${who}` : ''}`;
     const g = M.generate(t, M.contextFor(data(), null, { projects: mc.projects.map((p) => ({ name: p.name, coordinatorId: p.coordinatorId })), hours: mc }));
     const attachments = resolveAttachments(t.attachments);
     const out = outFor(g.bodyHtml);
@@ -221,7 +225,7 @@ function mount(app, { store, audit, getProject, getIn, publicProject, dataDir })
     if (data().hours) data().hours.emailTemplateId = t.id; // lembra o último modelo usado no Controle de Horas
     store.save();
     log('email-gerado', null, { detalhe: `${t.name} — ${context}` });
-    res.json({ ...g, warnings: [...g.warnings, ...extra], generationId: rec.id, template: brief(t), checklist: null, context, month: { label: mc.label, projects: mc.projects.length, total: mc.totalText },
+    res.json({ ...g, warnings: [...g.warnings, ...extra], generationId: rec.id, template: brief(t), checklist: null, context, month: { label: mc.label, projects: mc.projects.length, total: mc.totalText }, period: { from: mc.from, to: mc.to, kind: mc.kind, label: mc.label },
       attachments, html: out.html, text: out.text });
   });
 

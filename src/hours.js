@@ -91,11 +91,35 @@ function cleanLinks(b) {
   return { psaUrl: one(b?.psaUrl, 'Link do PSA'), sheetUrl: one(b?.sheetUrl, 'Link da planilha de controle de horas') };
 }
 
-// Contexto do mês para comunicações (src/email.js): projetos com apontamentos (sem o Interno), total apontado e coordenadores.
-// Coordenador = cadastro ATUAL do projeto; se o projeto foi removido, o gravado no apontamento mais recente (fotografia).
+// Período do controle (comunicação e planilha): o mês inteiro ({year, month}) ou um intervalo de datas ({from, to}; from = to é um dia).
+// kind = 'month' quando o intervalo é exatamente um mês inteiro (mesmo rótulo e planilha de antes); senão 'day' ou 'range'. Máx. 366 dias.
 const MONTH_NAMES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
-function monthContext(data, y, m) {
-  const { from, to } = monthRange(y, m);
+const MAX_PERIOD_DAYS = 366;
+const brDate = (s) => `${s.slice(8, 10)}/${s.slice(5, 7)}/${s.slice(0, 4)}`;
+function cleanPeriod(q = {}) {
+  let from; let to;
+  if (q.from || q.to) {
+    from = String(q.from || ''); to = String(q.to || q.from || '');
+    if (!isDate(from) || !isDate(to)) throw httpError(400, 'Período inválido: informe as datas inicial e final.');
+    if (to < from) throw httpError(400, 'Período inválido: a data final é anterior à inicial.');
+    if (addDays(from, MAX_PERIOD_DAYS - 1) < to) throw httpError(400, `O período pode ter no máximo ${MAX_PERIOD_DAYS} dias.`);
+  } else {
+    const y = Number(q.year); const m = Number(q.month);
+    if (!Number.isInteger(y) || y < 2000 || y > 2100 || !Number.isInteger(m) || m < 1 || m > 12) throw httpError(400, 'Mês inválido.');
+    ({ from, to } = monthRange(y, m));
+  }
+  const [y, m] = from.split('-').map(Number);
+  const whole = from.endsWith('-01') && to === monthRange(y, m).to;
+  const kind = whole ? 'month' : from === to ? 'day' : 'range';
+  const label = whole ? `${MONTH_NAMES[m - 1]}/${y}` : kind === 'day' ? brDate(from) : `${brDate(from)} a ${brDate(to)}`;
+  return { from, to, kind, year: y, month: m, label };
+}
+
+// Contexto para comunicações (src/email.js): projetos com apontamentos no período (sem o Interno), total apontado e coordenadores.
+// Coordenador = cadastro ATUAL do projeto; se o projeto foi removido, o gravado no apontamento mais recente (fotografia).
+// coordinatorIds (opcional) = só os projetos desses coordenadores (e-mail por coordenador); aí o total é só desses projetos.
+function hoursContext(data, period, { coordinatorIds = null } = {}) {
+  const { from, to } = period;
   const entries = (data.timeEntries || []).filter((e) => e.date >= from && e.date <= to);
   const byProject = new Map();
   for (const e of [...entries].sort((a, b) => a.date.localeCompare(b.date) || a.startMin - b.startMin)) {
@@ -106,16 +130,31 @@ function monthContext(data, y, m) {
     byProject.set(e.projectId, cur);
   }
   const people = data.coordinators || [];
-  const projects = [...byProject.values()].map((x) => {
+  let projects = [...byProject.values()].map((x) => {
     const p = (data.projects || []).find((q) => q.id === x.id);
     const coordinatorId = p ? p.coordinatorId || null : x.snapshotCoordinatorId;
-    return { id: x.id, name: p ? p.name : x.name, minutes: x.minutes, exists: !!p, coordinatorId, coordinatorName: people.find((c) => c.id === coordinatorId)?.name || null };
+    return { id: x.id, name: p ? p.name : x.name, minutes: x.minutes, hoursText: fmtHM(x.minutes), exists: !!p, coordinatorId, coordinatorName: people.find((c) => c.id === coordinatorId)?.name || null };
   }).sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+  const filtered = Array.isArray(coordinatorIds);
+  if (filtered) projects = projects.filter((p) => coordinatorIds.includes(p.coordinatorId));
   const coordinators = [];
   for (const x of projects) { const c = people.find((q) => q.id === x.coordinatorId); if (c && !coordinators.some((k) => k.id === c.id)) coordinators.push({ id: c.id, name: c.name, email: c.email || '' }); }
-  const totalMin = entries.reduce((n, e) => n + netMin(e), 0);
-  return { year: String(y), month: m, monthName: MONTH_NAMES[m - 1], label: `${MONTH_NAMES[m - 1]}/${y}`, projects, coordinators, totalMin, totalText: fmtHM(totalMin) };
+  const totalMin = filtered ? projects.reduce((n, p) => n + p.minutes, 0) : entries.reduce((n, e) => n + netMin(e), 0);
+  return { year: String(period.year), month: period.month, monthName: MONTH_NAMES[period.month - 1], label: period.label, kind: period.kind, from, to,
+    fromText: brDate(from), toText: brDate(to), projects, coordinators, totalMin, totalText: fmtHM(totalMin), coordinatorIds: filtered ? [...coordinatorIds] : null };
 }
+// Coordenadores escolhidos na tela: vazio/ausente = todos (sem filtro); cada id precisa existir no cadastro de pessoas.
+function cleanCoordinatorIds(data, list) {
+  if (list === undefined || list === null || list === '') return null;
+  const ids = [...new Set((Array.isArray(list) ? list : String(list).split(',')).map((x) => str(x, 40)).filter(Boolean))];
+  if (!ids.length) return null;
+  if (ids.length > 100) throw httpError(400, 'Escolha no máximo 100 coordenadores.');
+  for (const id of ids) if (!(data.coordinators || []).some((c) => c.id === id)) throw httpError(400, 'Coordenador não encontrado no cadastro de pessoas.');
+  return ids;
+}
+const monthContext = (data, y, m) => hoursContext(data, cleanPeriod({ year: y, month: m }));
+// Projetos de um coordenador no período, pela MESMA regra do e-mail (planilha filtrada por coordenador = projetos do e-mail dele).
+const coordinatorProjectIds = (data, period, coordinatorId) => hoursContext(data, period, { coordinatorIds: [coordinatorId] }).projects.map((p) => p.id);
 
 function cleanConfig(body, prev) {
   const s = body.schedule || {};
@@ -218,6 +257,11 @@ function pendingDays(data, today, { lookback = 30 } = {}) {
 
 function monthSummary(data, y, m, today) {
   const { from, to } = monthRange(y, m);
+  const s = periodSummary(data, from, to, today);
+  return { year: y, month: m, days: s.days, targetMonth: s.targetPeriod, targetAccum: s.targetAccum, confirmed: s.confirmed, diff: s.diff, counts: s.counts };
+}
+// Mesmo resumo do mês para qualquer intervalo de datas (planilha de um período).
+function periodSummary(data, from, to, today) {
   const by = groupByDate(data.timeEntries);
   const days = eachDate(from, to).map((d) => daySummary(data.hours, d, by.get(d) || []));
   const start = [from, trackingFrom(data, today)].sort().pop();
@@ -227,7 +271,7 @@ function monthSummary(data, y, m, today) {
   const confirmed = sum(days, 'confirmed');
   const targetAccum = sum(counted, 'target');
   return {
-    year: y, month: m, days, targetMonth: sum(days, 'target'), targetAccum, confirmed, diff: confirmed - targetAccum,
+    from, to, days, targetPeriod: sum(days, 'target'), targetAccum, confirmed, diff: confirmed - targetAccum,
     // Hoje ainda está em andamento: só entra na contagem se já estiver completo ou excedente (não vira "pendente" antes de o dia acabar).
     counts: (() => {
       const closed = counted.filter((d) => d.date < today || d.status === 'completo' || d.status === 'excedente');
@@ -398,4 +442,5 @@ module.exports = {
   INTERNAL, DAY_MIN, MAX_TIMERS, STATUS_LABEL, isDate, parseDate, addDays, dowOf, parseHM, fmtHM, localParts, monthRange, eachDate, defaultHours, ensureHours, calcTarget,
   cleanConfig, cleanOverride, targetFor, endMinFor, netMin, segments, overlaps, findOverlaps, dayStatus, daySummary, groupByDate, trackingFrom, pendingDays, monthSummary,
   alertFor, timerNetSec, draftFromTimer, cleanEntry, assertNoOverlap, dateOfMs, uid, cleanLinks, monthContext, MONTH_NAMES,
+  MAX_PERIOD_DAYS, cleanPeriod, hoursContext, cleanCoordinatorIds, coordinatorProjectIds, periodSummary,
 };

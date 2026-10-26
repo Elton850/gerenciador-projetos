@@ -3,6 +3,7 @@
 // Durações vão como fração de dia (passa de 24 h sem reiniciar), datas como datas e percentuais como percentuais.
 const ExcelJS = require('exceljs');
 const H = require('./hours');
+const { sanitizeFileName } = require('./util');
 
 const WEEKDAYS = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
 const MONTHS = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
@@ -54,9 +55,11 @@ const PSA_COLS = ['MÊS DA COMPETÊNCIA', 'DATA', 'DIA', 'HORA INICIO', 'HORA FI
 const PSA_WIDTHS = [21.71, 10.71, 13.86, 12.29, 10, 16, 14, 68.43, 15.14, 9.14, 9.14, 19.29, 24.29, 17.43, 24.29];
 const PSA_DAY = WEEKDAYS.map((w) => w.replace('-feira', '-Feira')); // igual ao =PRÓPRIO(TEXTO(DIA.DA.SEMANA(…);"DDDD")) da planilha
 const SUM_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4472C4' } };
-function psaSheet(wb, data, entries, days, year, month) {
-  const ws = wb.addWorksheet(MONTHS[month - 1].toUpperCase());
-  const label = `${MONTHS[month - 1]}/${year}`;
+// Período que não é um mês inteiro (dia/intervalo, pode atravessar meses): aba “PERÍODO”; MÊS DA COMPETÊNCIA continua sendo o mês de cada linha.
+function psaSheet(wb, data, entries, days, period) {
+  const ws = wb.addWorksheet(period.kind === 'month' ? MONTHS[period.month - 1].toUpperCase() : 'PERÍODO');
+  const label = period.label;
+  const monthOf = (date) => `${MONTHS[Number(date.slice(5, 7)) - 1]}/${date.slice(0, 4)}`;
   PSA_WIDTHS.forEach((w, i) => { ws.getColumn(i + 1).width = w; });
   const head = ws.getRow(1);
   PSA_COLS.forEach((t, i) => { const c = head.getCell(i + 1); c.value = t; c.font = HEAD_FONT; c.fill = PSA_FILL; c.border = BOX; c.alignment = CENTER; });
@@ -70,7 +73,7 @@ function psaSheet(wb, data, entries, days, year, month) {
     const row = ws.getRow(r);
     const proj = e.off ? null : data.projects.find((p) => p.id === e.projectId);
     const pause = e.off ? 0 : e.pausedMin || 0;
-    row.values = [label, excelDate(e.date), PSA_DAY[H.dowOf(e.date)], e.off ? 0 : frac(e.startMin), e.off ? 0 : frac(e.endMin),
+    row.values = [monthOf(e.date), excelDate(e.date), PSA_DAY[H.dowOf(e.date)], e.off ? 0 : frac(e.startMin), e.off ? 0 : frac(e.endMin),
       { formula: `E${r}-D${r}${pause ? `-TIME(0,${pause},0)` : ''}`, result: e.off ? 0 : frac(H.netMin(e)) },
       e.off || (proj ? proj.name : e.projectName), e.off || e.activity, e.off || e.coordinatorName || '-'];
     for (let c = 1; c <= 9; c++) { const cell = row.getCell(c); cell.border = BOX; cell.alignment = c >= 3 && c <= 6 ? { ...CENTER, wrapText: true } : CENTER; }
@@ -114,20 +117,26 @@ function psaSheet(wb, data, entries, days, year, month) {
   for (let c = 12; c <= 15; c++) { const cell = gt.getCell(c); cell.font = BOLD_FONT; cell.border = { top: { style: 'thin', color: { argb: 'FF4472C4' } } }; }
 }
 
-async function buildWorkbook(data, year, month, today) {
+// opts.period = período de src/hours.js cleanPeriod (padrão: o mês year/month, como antes). opts.projectIds = só esses projetos
+// (filtro por coordenador ou projeto; filterLabel vai no nome do arquivo). Com filtro, a aba de resumo diário (meta × apontado) sai:
+// a meta é do dia inteiro e não se divide por coordenador/projeto. Observações: as dos projetos filtrados e as gerais (sem projeto).
+async function buildWorkbook(data, year, month, today, { period: per = null, projectIds = null, filterLabel = '' } = {}) {
   const cfg = data.hours;
-  const { from, to } = H.monthRange(year, month);
-  const entries = data.timeEntries.filter((e) => e.date >= from && e.date <= to).sort((a, b) => a.date.localeCompare(b.date) || a.startMin - b.startMin);
+  const period = per || H.cleanPeriod({ year, month });
+  const { from, to } = period;
+  const filtered = Array.isArray(projectIds);
+  const entries = data.timeEntries.filter((e) => e.date >= from && e.date <= to && (!filtered || projectIds.includes(e.projectId)))
+    .sort((a, b) => a.date.localeCompare(b.date) || a.startMin - b.startMin);
   const by = H.groupByDate(data.timeEntries);
   const summary = (d) => H.daySummary(cfg, d, by.get(d) || []);
-  const period = `${pad2(month)}/${year}`;
+  const competence = (d) => `${d.slice(5, 7)}/${d.slice(0, 4)}`;
 
   const wb = new ExcelJS.Workbook();
   wb.creator = 'Gerenciador de Projetos';
   wb.created = new Date();
 
-  const sm = H.monthSummary(data, year, month, today);
-  psaSheet(wb, data, entries, sm.days, year, month);
+  const sm = H.periodSummary(data, from, to, today);
+  psaSheet(wb, data, entries, sm.days, period);
 
   // ---- Apontamentos (detalhado: pausas, meta e observação de cada apontamento) ----
   const ws = wb.addWorksheet('Apontamentos');
@@ -140,7 +149,7 @@ async function buildWorkbook(data, year, month, today) {
     const d = summary(e.date);
     const proj = data.projects.find((p) => p.id === e.projectId);
     const row = ws.addRow([
-      period, excelDate(e.date), WEEKDAYS[d.dow], proj ? proj.name : e.projectName, e.coordinatorName || '-', e.analystName || '-', e.activity,
+      competence(e.date), excelDate(e.date), WEEKDAYS[d.dow], proj ? proj.name : e.projectName, e.coordinatorName || '-', e.analystName || '-', e.activity,
       frac(e.startMin), frac(e.endMin), frac(e.pausedMin || 0), frac(H.netMin(e)), frac(d.target),
       d.target ? H.netMin(e) / d.target : null, frac(d.confirmed), d.target ? d.confirmed / d.target : null, frac(d.remaining), frac(d.over), e.note || '-',
     ]);
@@ -164,36 +173,38 @@ async function buildWorkbook(data, year, month, today) {
   }
   gridRows(ws, 18);
 
-  // ---- Resumo Mensal ----
-  const tracking = H.trackingFrom(data, today);
-  const rs = wb.addWorksheet('Resumo Mensal');
-  rs.columns = [{ header: 'Data' }, { header: 'Dia da semana' }, { header: 'Meta' }, { header: 'Apontado' }, { header: 'Diferença' }, { header: 'Status' }, { header: 'Observações' }];
-  const noteCount = new Map();
-  for (const n of data.timeNotes || []) for (const d of H.datesOfNote(n)) noteCount.set(d, (noteCount.get(d) || 0) + 1);
-  for (const d of sm.days) {
-    if (d.target === 0 && d.confirmed === 0 && !noteCount.get(d.date)) continue; // dia sem meta, sem horas e sem observação não polui o resumo // fins de semana e dias sem meta e sem horas não poluem o resumo
-    const future = d.date > today && d.confirmed === 0;
-    const before = d.date < tracking && d.confirmed === 0; // antes de o controle começar: não conta como pendência (mesma regra da meta acumulada)
-    const row = rs.addRow([excelDate(d.date), WEEKDAYS[d.dow], frac(d.target), frac(d.confirmed), future || before ? '-' : signed(d.confirmed - d.target),
-      future ? 'A vencer' : before ? 'Antes do controle' : H.STATUS_LABEL[d.status] + (d.reason ? ` (${d.reason})` : ''), noteCount.get(d.date) || 0]);
-    row.getCell(7).alignment = { horizontal: 'center' };
-    row.getCell(1).numFmt = 'dd/mm/yyyy';
-    row.getCell(3).numFmt = DUR; row.getCell(4).numFmt = DUR;
-    [1, 3, 4, 5, 6].forEach((c) => { row.getCell(c).alignment = { horizontal: 'center' }; });
-    if (d.status === 'pendente' || d.status === 'sem_apontamento') { if (!future && !before) row.getCell(6).font = { color: { argb: 'FFB45309' }, bold: true }; }
-    if (d.status === 'excedente') row.getCell(6).font = { color: { argb: 'FF0E7D66' }, bold: true };
+  // ---- Resumo Mensal (ou do Período) — só sem filtro ----
+  if (!filtered) {
+    const tracking = H.trackingFrom(data, today);
+    const rs = wb.addWorksheet(period.kind === 'month' ? 'Resumo Mensal' : 'Resumo do Período');
+    rs.columns = [{ header: 'Data' }, { header: 'Dia da semana' }, { header: 'Meta' }, { header: 'Apontado' }, { header: 'Diferença' }, { header: 'Status' }, { header: 'Observações' }];
+    const noteCount = new Map();
+    for (const n of data.timeNotes || []) for (const d of H.datesOfNote(n)) noteCount.set(d, (noteCount.get(d) || 0) + 1);
+    for (const d of sm.days) {
+      if (d.target === 0 && d.confirmed === 0 && !noteCount.get(d.date)) continue; // dia sem meta, sem horas e sem observação não polui o resumo // fins de semana e dias sem meta e sem horas não poluem o resumo
+      const future = d.date > today && d.confirmed === 0;
+      const before = d.date < tracking && d.confirmed === 0; // antes de o controle começar: não conta como pendência (mesma regra da meta acumulada)
+      const row = rs.addRow([excelDate(d.date), WEEKDAYS[d.dow], frac(d.target), frac(d.confirmed), future || before ? '-' : signed(d.confirmed - d.target),
+        future ? 'A vencer' : before ? 'Antes do controle' : H.STATUS_LABEL[d.status] + (d.reason ? ` (${d.reason})` : ''), noteCount.get(d.date) || 0]);
+      row.getCell(7).alignment = { horizontal: 'center' };
+      row.getCell(1).numFmt = 'dd/mm/yyyy';
+      row.getCell(3).numFmt = DUR; row.getCell(4).numFmt = DUR;
+      [1, 3, 4, 5, 6].forEach((c) => { row.getCell(c).alignment = { horizontal: 'center' }; });
+      if (d.status === 'pendente' || d.status === 'sem_apontamento') { if (!future && !before) row.getCell(6).font = { color: { argb: 'FFB45309' }, bold: true }; }
+      if (d.status === 'excedente') row.getCell(6).font = { color: { argb: 'FF0E7D66' }, bold: true };
+    }
+    styleHeader(rs, [13, 16, 11, 11, 12, 30, 13]);
+    gridRows(rs, 7);
+    rs.addRow([]);
+    const lines = [[period.kind === 'month' ? 'Meta do mês' : 'Meta do período', frac(sm.targetPeriod), null], ['Meta acumulada (até hoje)', frac(sm.targetAccum), null], ['Apontado', frac(sm.confirmed), null], ['Diferença (apontado − acumulada)', null, signed(sm.confirmed - sm.targetAccum)]];
+    for (const [label, v, text] of lines) {
+      const r = rs.addRow([label, null, v, null, text]);
+      r.getCell(3).numFmt = DUR; r.getCell(3).alignment = { horizontal: 'center' }; r.getCell(5).alignment = { horizontal: 'center' };
+      r.getCell(1).font = { bold: true };
+    }
+    rs.addRow([]);
+    rs.addRow([`Dias completos: ${sm.counts.completo}  ·  Dias pendentes: ${sm.counts.pendente}  ·  Dias excedentes: ${sm.counts.excedente}`]).getCell(1).font = { italic: true };
   }
-  styleHeader(rs, [13, 16, 11, 11, 12, 30, 13]);
-  gridRows(rs, 7);
-  rs.addRow([]);
-  const lines = [['Meta do mês', frac(sm.targetMonth), null], ['Meta acumulada (até hoje)', frac(sm.targetAccum), null], ['Apontado', frac(sm.confirmed), null], ['Diferença (apontado − acumulada)', null, signed(sm.confirmed - sm.targetAccum)]];
-  for (const [label, v, text] of lines) {
-    const r = rs.addRow([label, null, v, null, text]);
-    r.getCell(3).numFmt = DUR; r.getCell(3).alignment = { horizontal: 'center' }; r.getCell(5).alignment = { horizontal: 'center' };
-    r.getCell(1).font = { bold: true };
-  }
-  rs.addRow([]);
-  rs.addRow([`Dias completos: ${sm.counts.completo}  ·  Dias pendentes: ${sm.counts.pendente}  ·  Dias excedentes: ${sm.counts.excedente}`]).getCell(1).font = { italic: true };
 
   // ---- Resumo por Projeto ----
   const rp = wb.addWorksheet('Resumo por Projeto');
@@ -224,8 +235,12 @@ async function buildWorkbook(data, year, month, today) {
     boldRow(t);
   }
   gridRows(rp, 6);
+  if (filtered) {
+    rp.addRow([]);
+    rp.addRow([`Filtro: ${filterLabel || 'projetos escolhidos'} · ${period.label}`]).getCell(1).font = { italic: true };
+  }
   // ---- Observações (uma linha por observação; as evidências ficam no app — aqui só a contagem e os nomes dos arquivos) ----
-  const notes = (data.timeNotes || []).filter((n) => H.datesOfNote(n).some((d) => d >= from && d <= to)).sort((a, b) => a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt));
+  const notes = (data.timeNotes || []).filter((n) => H.datesOfNote(n).some((d) => d >= from && d <= to) && (!filtered || !n.projectId || projectIds.includes(n.projectId))).sort((a, b) => a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt));
   const ro = wb.addWorksheet('Observações');
   ro.columns = [{ header: 'Data' }, { header: 'Dia da semana' }, { header: 'Projeto' }, { header: 'Categoria' }, { header: 'Título' }, { header: 'Observação' }, { header: 'Qtd. evidências' }, { header: 'Evidências (arquivos)' }, { header: 'Registrada em' }, { header: 'Dias da observação' }];
   // Uma linha por observação E por dia (dá para filtrar por data); “Dias da observação” mostra todos os dias que ela cobre.
@@ -241,7 +256,10 @@ async function buildWorkbook(data, year, month, today) {
   styleHeader(ro, [12, 15, 24, 17, 32, 70, 11, 34, 17, 26]);
   gridRows(ro, 10);
   if (ro.rowCount > 1) ro.autoFilter = { from: { row: 1, column: 1 }, to: { row: ro.rowCount, column: 10 } };
-  return { buffer: Buffer.from(await wb.xlsx.writeBuffer()), name: `Apontamentos_${year}_${pad2(month)}.xlsx`, label: `${MONTHS[month - 1]}/${year}`, count: entries.length, notes: notes.length };
+  // Nome: mês = Apontamentos_AAAA_MM (como antes); dia = Apontamentos_AAAA-MM-DD; intervalo = Apontamentos_AAAA-MM-DD_a_AAAA-MM-DD; + _<filtro>.
+  const base = period.kind === 'month' ? `Apontamentos_${period.year}_${pad2(period.month)}` : period.kind === 'day' ? `Apontamentos_${from}` : `Apontamentos_${from}_a_${to}`;
+  const suffix = filterLabel ? `_${sanitizeFileName(filterLabel, '').replace(/\s+/g, '_')}` : '';
+  return { buffer: Buffer.from(await wb.xlsx.writeBuffer()), name: `${base}${suffix}.xlsx`, label: period.label, filter: filterLabel || '', count: entries.length, notes: notes.length };
 }
 
 module.exports = { buildWorkbook, WEEKDAYS };

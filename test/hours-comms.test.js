@@ -134,3 +134,98 @@ test('API: links, geração do mês com coordenadores únicos e projeto sem coor
   const back = ok(await api('GET', '/api/reminders?filter=all')).items.find((x) => x.key === hr.key);
   assert.deepEqual([back.times, back.action], [['09:00', '17:00'], { kind: 'hours', templateId: t.id }]);
 });
+
+test('período (mês, dia, de/até) e filtro por coordenador: rótulos, validação, total só dos projetos do coordenador', () => {
+  assert.deepEqual(H.cleanPeriod({ year: 2025, month: 3 }), { from: '2025-03-01', to: '2025-03-31', kind: 'month', year: 2025, month: 3, label: 'Março/2025' });
+  assert.equal(H.cleanPeriod({ from: '2025-03-01', to: '2025-03-31' }).kind, 'month', 'de/até cobrindo o mês inteiro = mês');
+  assert.equal(H.cleanPeriod({ from: '2025-03-05', to: '2025-03-05' }).label, '05/03/2025');
+  assert.equal(H.cleanPeriod({ from: '2025-03-05' }).kind, 'day', 'só a data inicial = um dia');
+  assert.equal(H.cleanPeriod({ from: '2025-02-26', to: '2025-03-25' }).label, '26/02/2025 a 25/03/2025');
+  assert.throws(() => H.cleanPeriod({ from: '2025-03-10', to: '2025-03-01' }), /anterior/);
+  assert.throws(() => H.cleanPeriod({ from: '2025-02-30', to: '2025-03-01' }), /Período inválido/);
+  assert.throws(() => H.cleanPeriod({ from: '2024-01-01', to: '2025-01-01' }), /366 dias/);
+  assert.equal(H.cleanPeriod({ from: '2024-01-01', to: '2024-12-31' }).kind, 'range', '366 dias (ano bissexto) é aceito');
+  assert.throws(() => H.cleanPeriod({ year: 2025, month: 13 }), /Mês inválido/);
+
+  const data = {
+    coordinators: [{ id: 'joao', name: 'João', email: 'joao@exemplo.test' }, { id: 'maria', name: 'Maria', email: 'maria@exemplo.test' }],
+    projects: [{ id: 'A', name: 'Projeto A', coordinatorId: 'joao' }, { id: 'B', name: 'Projeto B', coordinatorId: 'maria' }, { id: 'C', name: 'Projeto C', coordinatorId: 'joao' }],
+    timeEntries: [
+      { projectId: 'A', projectName: 'Projeto A', date: '2025-03-03', startMin: 540, endMin: 600, pausedMin: 0 },
+      { projectId: 'B', projectName: 'Projeto B', date: '2025-03-03', startMin: 600, endMin: 720, pausedMin: 0 },
+      { projectId: 'internal', projectName: 'Interno / Administrativo', date: '2025-03-03', startMin: 720, endMin: 750, pausedMin: 0 },
+      { projectId: 'C', projectName: 'Projeto C', date: '2025-03-04', startMin: 480, endMin: 510, pausedMin: 0 },
+    ],
+  };
+  const day = H.hoursContext(data, H.cleanPeriod({ from: '2025-03-03', to: '2025-03-03' }));
+  assert.deepEqual(day.projects.map((p) => [p.name, p.hoursText]), [['Projeto A', '01:00'], ['Projeto B', '02:00']], 'só o dia 03');
+  assert.equal(day.totalText, '03:30', 'sem filtro: total do dia com o Interno, como no mês');
+  const joao = H.hoursContext(data, H.cleanPeriod({ year: 2025, month: 3 }), { coordinatorIds: ['joao'] });
+  assert.deepEqual(joao.projects.map((p) => p.name), ['Projeto A', 'Projeto C']);
+  assert.deepEqual(joao.coordinators.map((c) => c.name), ['João']);
+  assert.equal(joao.totalText, '01:30', 'por coordenador: só os projetos dele (sem Interno)');
+  assert.deepEqual(H.coordinatorProjectIds(data, H.cleanPeriod({ from: '2025-03-03', to: '2025-03-03' }), 'joao'), ['A']);
+  assert.equal(H.cleanCoordinatorIds(data, []), null, 'vazio = todos');
+  assert.deepEqual(H.cleanCoordinatorIds(data, ['joao', 'joao', 'maria']), ['joao', 'maria']);
+  assert.throws(() => H.cleanCoordinatorIds(data, ['ninguem']), /não encontrado/);
+});
+
+test('API: e-mail por coordenador e por dia/período, e planilha filtrada por coordenador e por projeto', async () => {
+  const ana = ok(await api('POST', '/api/coordinators', { name: 'Ana Coordenadora', email: 'ana@exemplo.test' }));
+  const bia = ok(await api('POST', '/api/coordinators', { name: 'Bia Coordenadora', email: 'bia@exemplo.test' }));
+  const P1 = ok(await api('POST', '/api/projects', { name: 'Cliente Alfa', coordinatorId: ana.id }));
+  const P2 = ok(await api('POST', '/api/projects', { name: 'Cliente Beta', coordinatorId: bia.id }));
+  const P3 = ok(await api('POST', '/api/projects', { name: 'Cliente Gama', coordinatorId: ana.id }));
+  const entry = (p, date, start, end) => api('POST', '/api/hours/entries', { date, projectId: p.id, activity: 'Migração', start, end });
+  ok(await entry(P1, '2025-05-05', '08:00', '10:00'));
+  ok(await entry(P2, '2025-05-05', '10:00', '11:30'));
+  ok(await entry(P3, '2025-05-06', '08:00', '09:00'));
+  ok(await entry(P1, '2025-05-07', '08:00', '08:30'));
+
+  const ctx = ok(await api('GET', '/api/hours/month-context?from=2025-05-05&to=2025-05-05'));
+  assert.equal(ctx.label, '05/05/2025');
+  assert.deepEqual(ctx.projects.map((p) => [p.name, p.coordinatorName, p.hoursText]), [['Cliente Alfa', 'Ana Coordenadora', '02:00'], ['Cliente Beta', 'Bia Coordenadora', '01:30']]);
+  assert.equal((await api('GET', '/api/hours/month-context?from=2025-05-07&to=2025-05-01')).status, 400);
+
+  const t = ok(await api('POST', '/api/email-templates', { name: 'Horas do dia', subject: 'Horas {{hours.period}} — {{hours.coordinators}}', to: ['role:context_coordinators'],
+    body: 'De {{hours.start_date}} a {{hours.end_date}}: {{hours.projects_hours}}. Total {{hours.total_hours}}.' }));
+  // um e-mail por coordenador, num dia
+  const gA = ok(await api('POST', '/api/hours/emails/generate', { templateId: t.id, from: '2025-05-05', to: '2025-05-05', coordinatorIds: [ana.id] }));
+  assert.deepEqual(gA.to, ['ana@exemplo.test'], 'só a coordenadora escolhida');
+  assert.equal(gA.subject, 'Horas 05/05/2025 — Ana Coordenadora');
+  assert.match(gA.body, /De 05\/05\/2025 a 05\/05\/2025: Cliente Alfa \(02:00\)\. Total 02:00\./);
+  assert.equal(gA.context, 'Controle de Horas — 05/05/2025 — Ana Coordenadora');
+  const gB = ok(await api('POST', '/api/hours/emails/generate', { templateId: t.id, from: '2025-05-05', to: '2025-05-05', coordinatorIds: [bia.id] }));
+  assert.deepEqual(gB.to, ['bia@exemplo.test']);
+  assert.match(gB.body, /Cliente Beta \(01:30\)\. Total 01:30\./);
+  // período de/até para a Ana: os dois projetos dela
+  const gP = ok(await api('POST', '/api/hours/emails/generate', { templateId: t.id, from: '2025-05-05', to: '2025-05-07', coordinatorIds: [ana.id] }));
+  assert.equal(gP.subject, 'Horas 05/05/2025 a 07/05/2025 — Ana Coordenadora');
+  assert.match(gP.body, /Cliente Alfa \(02:30\), Cliente Gama \(01:00\)\. Total 03:30\./);
+  // vários coordenadores num único e-mail; coordenador inexistente; o mês continua igual
+  const gAll = ok(await api('POST', '/api/hours/emails/generate', { templateId: t.id, from: '2025-05-05', to: '2025-05-07', coordinatorIds: [ana.id, bia.id] }));
+  assert.deepEqual(gAll.to, ['ana@exemplo.test', 'bia@exemplo.test']);
+  assert.equal((await api('POST', '/api/hours/emails/generate', { templateId: t.id, year: 2025, month: 5, coordinatorIds: ['nao-existe'] })).status, 400);
+  assert.equal(ok(await api('POST', '/api/hours/emails/generate', { templateId: t.id, year: 2025, month: 5 })).subject, 'Horas Maio/2025 — Ana Coordenadora, Bia Coordenadora');
+
+  // planilha: período + coordenador e mês + projeto
+  const ExcelJS = require('exceljs');
+  const sheet = async (qs) => {
+    const r = await fetch(`${base}/api/hours/export?${qs}`);
+    assert.equal(r.status, 200, qs);
+    const wb = new ExcelJS.Workbook(); await wb.xlsx.load(Buffer.from(await r.arrayBuffer()));
+    const clients = []; wb.worksheets[0].eachRow((row, n) => { if (n > 1 && row.getCell(8).value) clients.push(row.getCell(7).value); });
+    return { name: decodeURIComponent(/filename\*=UTF-8''(.+)$/.exec(r.headers.get('content-disposition'))[1]), clients, sheets: wb.worksheets.map((w) => w.name) };
+  };
+  const sa = await sheet(`from=2025-05-05&to=2025-05-07&coordinatorId=${ana.id}`);
+  assert.deepEqual(sa.clients, ['Cliente Alfa', 'Cliente Gama', 'Cliente Alfa']);
+  assert.equal(sa.name, 'Apontamentos_2025-05-05_a_2025-05-07_Ana_Coordenadora.xlsx');
+  assert.ok(!sa.sheets.includes('Resumo do Período'));
+  const sp = await sheet(`year=2025&month=5&projectId=${P2.id}`);
+  assert.deepEqual(sp.clients, ['Cliente Beta']);
+  assert.equal(sp.name, 'Apontamentos_2025_05_Cliente_Beta.xlsx');
+  const sd = await sheet('from=2025-05-05&to=2025-05-05');
+  assert.deepEqual(sd.clients, ['Cliente Alfa', 'Cliente Beta']);
+  assert.equal((await fetch(`${base}/api/hours/export?from=2025-05-05&to=2025-05-05&coordinatorId=ninguem`)).status, 400);
+  assert.equal((await fetch(`${base}/api/hours/export?year=2025&month=5&projectId=ninguem`)).status, 400);
+});

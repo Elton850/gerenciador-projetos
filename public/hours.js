@@ -515,23 +515,120 @@ function hoursLinksDialog() {
     }) }, 'Salvar')] });
   psa.focus();
 }
-// Gerar e-mail do mês. Com modelo já definido (ex.: ação do lembrete), vai direto para a prévia; senão mostra o contexto e pede o modelo.
+// Baixa a planilha de apontamentos (mês ou período, com filtro opcional de coordenador/projeto). Pelo fetch para mostrar
+// "Gerando planilha…" enquanto o servidor monta o arquivo; o nome vem do servidor (inclui período e filtro).
+async function hoursDownload(params) {
+  const r = await fetch(`/api/hours/export?${new URLSearchParams(Object.entries(params).filter(([, v]) => v))}`);
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `Erro ${r.status}`);
+  const m = /filename\*=UTF-8''([^;]+)/.exec(r.headers.get('Content-Disposition') || '');
+  const name = m ? decodeURIComponent(m[1]) : 'Apontamentos.xlsx';
+  const url = URL.createObjectURL(await r.blob());
+  const a = h('a', { href: url, download: name });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+  toast(`Planilha gerada: ${name}`);
+}
+const monthBounds = (y, m) => ({ from: `${y}-${z2(m)}-01`, to: `${y}-${z2(m)}-${z2(new Date(y, m, 0).getDate())}` });
+
+// Gerar e-mail do controle de horas. Com modelo já definido (ex.: ação do lembrete), vai direto para a prévia do mês; senão mostra o
+// contexto do PERÍODO (mês inteiro, um dia ou de/até) com os coordenadores de cada projeto: escolhe um ou mais coordenadores e gera um
+// e-mail para cada um (só os projetos dele) ou um único e-mail para os escolhidos. Cada coordenador tem também a planilha só dele.
 async function hoursEmailDialog({ year, month, templateId } = {}) {
+  const today = todayStr_();
+  const [cy, cm] = year ? [Number(year), Number(month)] : today.split('-').map(Number);
+  const st = { ...monthBounds(cy, cm), picked: null, separate: true };
+  const ctxUrl = () => `/api/hours/month-context?${new URLSearchParams({ from: st.from, to: st.to })}`;
   let ctx; let cat;
-  try { [ctx, cat] = await Promise.all([api('GET', `/api/hours/month-context?${new URLSearchParams(year ? { year, month } : {})}`), emCatalog(true)]); } catch (e) { return fail(e); }
+  try { [ctx, cat] = await Promise.all([api('GET', ctxUrl()), emCatalog(true)]); } catch (e) { return fail(e); }
   const list = cat.templates.filter((t) => t.active && t.scope === 'global');
-  const go = (tid) => emGenerate(null, { templateId: tid, year: Number(ctx.year), month: ctx.month }, { url: '/api/hours/emails/generate' }).then(() => { if (HR.st?.config) HR.st.config.emailTemplateId = tid; });
-  if (templateId && list.some((t) => t.id === templateId)) return go(templateId);
+  const remember = (tid) => { if (HR.st?.config) HR.st.config.emailTemplateId = tid; };
+  if (templateId && list.some((t) => t.id === templateId)) {
+    return emGenerate(null, { templateId, year: cy, month: cm }, { url: '/api/hours/emails/generate' }).then((r) => { if (r !== false) remember(templateId); });
+  }
   if (!list.length) return toast('Nenhum modelo global ativo. Crie um em Configurações → Comunicações.', 'error');
   const sel = h('select', null, list.map((t) => h('option', { value: t.id }, t.name)));
   sel.value = list.some((t) => t.id === ctx.emailTemplateId) ? ctx.emailTemplateId : list[0].id;
-  const without = ctx.projects.filter((p) => !p.coordinatorId || !ctx.coordinators.find((c) => c.id === p.coordinatorId)?.email);
-  const md = openModal({ title: `Comunicação do controle de horas — ${ctx.label}`, size: 'md',
-    body: [h('div', { class: 'small muted' }, `${plural(ctx.projects.length, 'projeto com apontamentos', 'projetos com apontamentos')} · total ${ctx.totalText}`),
-      ctx.projects.length ? h('ul', { class: 'small', style: 'margin:0;padding-left:18px' }, ctx.projects.map((p) => h('li', null, `${p.name} — ${p.coordinatorName || 'sem coordenador'}`))) : h('div', { class: 'empty' }, 'Nenhum apontamento de projeto neste mês.'),
-      without.length ? h('div', { class: 'box warn small' }, `${plural(without.length, 'projeto não possui', 'projetos não possuem')} coordenador com e-mail cadastrado: ${without.map((p) => p.name).join(', ')}. A comunicação segue com os destinatários válidos.`) : null,
-      field('Modelo', sel, 'Use “Coordenadores dos projetos do contexto” nos destinatários do modelo e as variáveis do grupo “Controle de horas”.')],
-    footer: [h('button', { class: 'btn', onclick: () => md.close() }, 'Cancelar'), h('button', { class: 'btn primary', onclick: () => { md.close(); go(sel.value); } }, 'Gerar')] });
+
+  const fromIn = h('input', { type: 'date', value: st.from });
+  const toIn = h('input', { type: 'date', value: st.to });
+  const quick = (label, fn) => h('button', { class: 'btn sm ghost', type: 'button', onclick: fn }, label);
+  const setPeriod = (from, to) => { fromIn.value = from; toIn.value = to; reload(); };
+  const periodBox = h('div', { class: 'inline' }, field('De', fromIn), field('Até', toIn),
+    h('div', { class: 'field' }, h('label', null, ' '), h('div', { class: 'inline' },
+      quick('Mês inteiro', () => { const [y, m] = (fromIn.value || today).split('-').map(Number); const b = monthBounds(y, m); setPeriod(b.from, b.to); }),
+      quick('Hoje', () => setPeriod(today, today)),
+      quick('Ontem', () => { const d = addDaysStr(today, -1); setPeriod(d, d); }))));
+  fromIn.onchange = () => { if (fromIn.value && toIn.value < fromIn.value) toIn.value = fromIn.value; reload(); };
+  toIn.onchange = () => { if (toIn.value && fromIn.value > toIn.value) fromIn.value = toIn.value; reload(); };
+
+  const sepRadio = h('input', { type: 'radio', name: 'hr-em-mode', checked: true, onchange: () => { st.separate = true; paint(); } });
+  const oneRadio = h('input', { type: 'radio', name: 'hr-em-mode', onchange: () => { st.separate = false; paint(); } });
+  const modeBox = h('div', { class: 'stack' }, h('label', { class: 'check' }, sepRadio, 'Um e-mail para cada coordenador marcado (só os projetos dele)'),
+    h('label', { class: 'check' }, oneRadio, 'Um único e-mail para os coordenadores marcados'));
+  const info = h('div', { class: 'stack' });
+  const genBtn = h('button', { class: 'btn primary' }, 'Gerar');
+  const picked = () => ctx.coordinators.filter((c) => st.picked.has(c.id));
+  const sheet = (c) => (e) => busy(e.target, () => hoursDownload({ from: ctx.from, to: ctx.to, coordinatorId: c.id }), 'Gerando…');
+
+  function paint() {
+    // Primeira vez: todos marcados. Ao trocar o período, mantém a escolha de quem continua no período.
+    st.picked = new Set(ctx.coordinators.filter((c) => !st.picked || st.picked.has(c.id)).map((c) => c.id));
+    const orphan = ctx.projects.filter((p) => !ctx.coordinators.some((c) => c.id === p.coordinatorId));
+    const rows = ctx.coordinators.map((c) => {
+      const mine = ctx.projects.filter((p) => p.coordinatorId === c.id);
+      const box = h('input', { type: 'checkbox', checked: st.picked.has(c.id), onchange: (e) => { if (e.target.checked) st.picked.add(c.id); else st.picked.delete(c.id); paint(); } });
+      return h('div', { class: 'box small' },
+        h('div', { class: 'inline' }, h('label', { class: 'check', style: 'flex:1' }, box, h('strong', null, c.name), h('span', { class: c.email ? 'muted' : 'hr-warn' }, c.email ? ` · ${c.email}` : ' · sem e-mail cadastrado')),
+          h('span', { class: 'muted' }, hm(mine.reduce((n, p) => n + p.minutes, 0))),
+          h('button', { class: 'btn sm', type: 'button', title: 'Planilha só com os projetos deste coordenador no período', onclick: sheet(c) }, 'Planilha')),
+        h('ul', { style: 'margin:4px 0 0;padding-left:18px' }, mine.map((p) => h('li', null, `${p.name} — ${p.hoursText}`))));
+    });
+    const n = picked().length;
+    info.replaceChildren(...[
+      h('div', { class: 'small muted' }, `${ctx.label} · ${plural(ctx.projects.length, 'projeto com apontamentos', 'projetos com apontamentos')} · total ${ctx.totalText}`),
+      ctx.coordinators.length > 1 ? h('div', { class: 'inline small' }, quick('Marcar todos', () => { st.picked = null; paint(); }), quick('Desmarcar todos', () => { st.picked = new Set(); paint(); })) : null,
+      ...rows,
+      ctx.projects.length ? null : h('div', { class: 'empty' }, 'Nenhum apontamento de projeto neste período.'),
+      orphan.length ? h('div', { class: 'box warn small' }, `${plural(orphan.length, 'projeto sem coordenador cadastrado', 'projetos sem coordenador cadastrado')}: ${orphan.map((p) => p.name).join(', ')}. ${st.separate ? 'Fica(m) fora dos e-mails por coordenador.' : 'Só entra(m) no e-mail único com todos os coordenadores marcados.'}`) : null,
+    ].filter(Boolean));
+    genBtn.disabled = !n;
+    genBtn.textContent = st.separate && n > 1 ? `Gerar ${n} e-mails` : 'Gerar';
+  }
+  async function reload() {
+    if (!fromIn.value || !toIn.value) return;
+    st.from = fromIn.value; st.to = toIn.value;
+    try { ctx = { ...ctx, ...(await api('GET', ctxUrl())) }; paint(); } catch (e) { fail(e); }
+  }
+
+  // E-mails separados: um por vez — a prévia seguinte abre quando a anterior é fechada (cada uma é copiada/aberta no Gmail à parte).
+  async function generate() {
+    const tid = sel.value; const url = '/api/hours/emails/generate';
+    const base = { templateId: tid, from: ctx.from, to: ctx.to };
+    const chosen = picked();
+    if (!st.separate) {
+      const all = chosen.length === ctx.coordinators.length; // todos marcados = como antes (inclui os projetos sem coordenador)
+      if (await emGenerate(null, all ? base : { ...base, coordinatorIds: chosen.map((c) => c.id) }, { url, subtitle: ctx.label }) !== false) remember(tid);
+      return;
+    }
+    for (let i = 0; i < chosen.length; i++) {
+      const c = chosen[i];
+      const extra = h('div', { class: 'inline small' }, h('span', { class: 'grow muted' }, `${ctx.label} · e-mail ${i + 1} de ${chosen.length}${i + 1 < chosen.length ? ' (o próximo abre ao fechar esta janela)' : ''}`),
+        h('button', { class: 'btn sm', type: 'button', onclick: sheet(c) }, 'Baixar planilha deste coordenador'));
+      const ok = await new Promise((resolve) => {
+        emGenerate(null, { ...base, coordinatorIds: [c.id] }, { url, subtitle: `${c.name} (${i + 1}/${chosen.length})`, extra, onClose: () => resolve(true) })
+          .then((r) => { if (r === false) resolve(false); });
+      });
+      if (!ok) break;
+      remember(tid);
+    }
+  }
+  paint();
+  const md = openModal({ title: 'Comunicação do controle de horas', size: 'md',
+    body: [field('Período', periodBox, 'Um dia: a mesma data em “De” e “Até” (ou “Hoje”/“Ontem”). Projetos e coordenadores abaixo são os do período.'),
+      info, field('Como gerar', modeBox),
+      field('Modelo', sel, 'Use “Coordenadores dos projetos do contexto” nos destinatários do modelo e as variáveis do grupo “Controle de horas” (ex.: {{hours.period}}, {{hours.projects_hours}}).')],
+    footer: [h('button', { class: 'btn', onclick: () => md.close() }, 'Cancelar'), genBtn] });
+  genBtn.onclick = () => { md.close(); generate(); };
 }
 
 function historyCard() {
@@ -558,25 +655,49 @@ function historyCard() {
     f.projectId ? h('div', { class: 'hint' }, 'Com um projeto escolhido, o total e o status de cada dia continuam sendo os do dia inteiro (todos os projetos).') : null);
 }
 
+// Exportação: mês (como antes) ou período de/até, com filtro opcional por coordenador ou projeto (opções = os do período escolhido;
+// coordenador pela mesma regra do e-mail). A escolha fica em HR.exp para não se perder quando a página recarrega.
 function exportCard() {
   const today = HR.st.today;
   const [cy, cm] = (HR.monthSel || today.slice(0, 7)).split('-').map(Number);
-  const year = h('input', { type: 'number', min: 2000, max: 2100, value: cy, style: 'width:100px' });
-  const month = h('select', null, MONTH_NAME.map((n, i) => h('option', { value: i + 1, selected: i + 1 === cm }, n)));
+  const ex = HR.exp || (HR.exp = { mode: 'month', year: cy, month: cm, ...monthBounds(cy, cm), filter: '' });
+  const modeSel = h('select', null, [['month', 'Mês'], ['range', 'Período (de/até)']].map(([v, t]) => h('option', { value: v, selected: ex.mode === v }, t)));
+  const year = h('input', { type: 'number', min: 2000, max: 2100, value: ex.year, style: 'width:100px' });
+  const month = h('select', null, MONTH_NAME.map((n, i) => h('option', { value: i + 1, selected: i + 1 === ex.month }, n)));
+  const fromIn = h('input', { type: 'date', value: ex.from });
+  const toIn = h('input', { type: 'date', value: ex.to });
+  const filterSel = h('select', { onchange: () => { ex.filter = filterSel.value; } }, h('option', { value: '' }, 'Todos os apontamentos'));
+  const monthFields = h('div', { class: 'inline' }, field('Mês', month), field('Ano', year));
+  const rangeFields = h('div', { class: 'inline' }, field('De', fromIn), field('Até', toIn));
+  const params = () => (ex.mode === 'month' ? { year: ex.year, month: ex.month } : { from: ex.from, to: ex.to });
+  let seq = 0;
+  async function loadFilters() {
+    monthFields.style.display = ex.mode === 'month' ? '' : 'none';
+    rangeFields.style.display = ex.mode === 'range' ? '' : 'none';
+    const mine = ++seq;
+    let ctx = null;
+    try { ctx = await api('GET', `/api/hours/month-context?${new URLSearchParams(params())}`); } catch { /* período inválido: só “Todos” */ }
+    if (mine !== seq) return; // outra troca já começou
+    const opts = [h('option', { value: '' }, 'Todos os apontamentos')];
+    if (ctx?.coordinators.length) opts.push(h('optgroup', { label: 'Coordenador' }, ctx.coordinators.map((c) => h('option', { value: `c:${c.id}` }, c.name))));
+    if (ctx?.projects.length) opts.push(h('optgroup', { label: 'Projeto' }, ctx.projects.map((p) => h('option', { value: `p:${p.id}` }, p.name))));
+    filterSel.replaceChildren(...opts);
+    filterSel.value = [...filterSel.options].some((o) => o.value === ex.filter) ? ex.filter : '';
+    ex.filter = filterSel.value;
+  }
+  modeSel.onchange = () => { ex.mode = modeSel.value; loadFilters(); };
+  year.onchange = () => { ex.year = Number(year.value); loadFilters(); };
+  month.onchange = () => { ex.month = Number(month.value); loadFilters(); };
+  fromIn.onchange = () => { ex.from = fromIn.value; if (ex.to < ex.from) { ex.to = ex.from; toIn.value = ex.to; } loadFilters(); };
+  toIn.onchange = () => { ex.to = toIn.value; if (ex.from > ex.to) { ex.from = ex.to; fromIn.value = ex.from; } loadFilters(); };
+  loadFilters();
   return card('Exportar apontamentos', null,
-    h('div', { class: 'inline' }, field('Mês', month), field('Ano', year),
-      h('div', { class: 'field' }, h('label', null, '\u00a0'), h('button', { class: 'btn primary', onclick: (e) => busy(e.target, async () => {
-        // Baixa pelo fetch para mostrar "Gerando planilha…" enquanto o servidor monta o arquivo.
-        const name = `Apontamentos_${Number(year.value)}_${z2(month.value)}.xlsx`;
-        const r = await fetch(`/api/hours/export?year=${Number(year.value)}&month=${month.value}`);
-        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `Erro ${r.status}`);
-        const url = URL.createObjectURL(await r.blob());
-        const a = h('a', { href: url, download: name });
-        document.body.append(a); a.click(); a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 5000);
-        toast(`Planilha gerada: ${name}`);
+    h('div', { class: 'inline' }, field('Período', modeSel), monthFields, rangeFields, field('Filtro', filterSel),
+      h('div', { class: 'field' }, h('label', null, ' '), h('button', { class: 'btn primary', onclick: (e) => busy(e.target, () => {
+        const f = ex.filter;
+        return hoursDownload({ ...params(), coordinatorId: f.startsWith('c:') ? f.slice(2) : '', projectId: f.startsWith('p:') ? f.slice(2) : '' });
       }, 'Gerando planilha…') }, 'Exportar Excel'))),
-    h('div', { class: 'hint' }, 'Gera Apontamentos_AAAA_MM.xlsx com as abas Apontamentos, Resumo Mensal, Resumo por Projeto e Observações (sem imagens: só a contagem e os nomes dos arquivos). A exportação só lê os dados (você pode repetir quantas vezes quiser) e a planilha nunca é a fonte dos apontamentos.'));
+    h('div', { class: 'hint' }, 'Mês: Apontamentos_AAAA_MM.xlsx · período: Apontamentos_AAAA-MM-DD_a_AAAA-MM-DD.xlsx (com o filtro no fim do nome). Abas: o período no formato PSA, Apontamentos, Resumo Mensal/do Período, Resumo por Projeto e Observações (sem imagens: só a contagem e os nomes dos arquivos). Com filtro de coordenador (projetos dele no período, a mesma regra do e-mail) ou de projeto, entram só esses apontamentos, as observações deles e as gerais; o resumo diário de meta sai, porque a meta é do dia inteiro. A exportação só lê os dados e a planilha nunca é a fonte dos apontamentos.'));
 }
 
 function hoursPageBody() {

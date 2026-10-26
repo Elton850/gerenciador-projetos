@@ -219,10 +219,10 @@ function mount(app, { store, audit, SYS }) {
     const dir = projectDir(rel);
     if (!hasGit(dir)) return res.json({ available: true, version: gv.version, repo: false, project: rel });
     const r = new git.GitRepo(dir);
-    const [status, branches, remotes, remoteBranches] = await Promise.all([r.status(), r.branches(), r.remotes(), r.remoteBranches()]);
+    const [status, branches, remotes, remoteBranches, account] = await Promise.all([r.status(), r.branches(), r.remotes(), r.remoteBranches(), r.account()]);
     const prefix = files().rel(dir);
     for (const f of status.files) f.wsPath = prefix ? `${prefix}/${f.path}` : f.path; // caminho no Workspace (para marcar na árvore)
-    res.json({ available: true, version: gv.version, repo: true, project: rel, root: dir, status, branches, remotes, remoteBranches, fetchedAt: r.lastFetch(), gitignore: fs.existsSync(path.join(dir, '.gitignore')) });
+    res.json({ available: true, version: gv.version, repo: true, project: rel, root: dir, status, branches, remotes, remoteBranches, account, fetchedAt: r.lastFetch(), gitignore: fs.existsSync(path.join(dir, '.gitignore')) });
   });
 
   // ---------- .gitignore do repositório ----------
@@ -394,6 +394,35 @@ function mount(app, { store, audit, SYS }) {
     if (current) await r.setRemoteUrl(name, req.body.url); else await r.addRemote(name, req.body.url);
     logGit(req, current ? 'git-remote-alterado' : 'git-remote-adicionado', { repo: r.root, remote: name, url: git.safeUrl(str(req.body.url, 500)), anterior: current ? current.fetchUrl : undefined });
     res.json({ name, replaced: !!current });
+  }));
+
+  // ---------- Conta do GitHub por repositório (login no remoto + autor dos commits) ----------
+  // Grava só no .git/config de cada repositório (git config --local); "also" aplica a mesma conta a outros projetos do Workspace.
+  app.get('/api/wsm/git/account', gitRoute(async (req, res) => { res.json(await G(req).account()); }));
+  app.get('/api/wsm/git/accounts', gitRoute(async (req, res) => {
+    const ws = files();
+    const list = ws.projects().filter((p) => p.git);
+    const out = [];
+    await mapLimit(list, GIT_CONCURRENCY, async (p) => {
+      try { const a = await new git.GitRepo(ws.resolve(p.path)).account(); out.push({ project: p.path, ...a }); } catch { /* repositório ilegível: fica fora da lista */ }
+    });
+    out.sort((a, b) => a.project.localeCompare(b.project));
+    res.json({ repos: out });
+  }));
+  app.post('/api/wsm/git/account', gitRoute(async (req, res) => {
+    const body = { username: str(req.body.username, 100), name: str(req.body.name, 100), email: str(req.body.email, 200), login: req.body.login === undefined ? undefined : str(req.body.login, 20) };
+    const targets = [str(req.body.project, 1000), ...(Array.isArray(req.body.also) ? req.body.also.slice(0, 500).map((x) => str(x, 1000)) : [])];
+    const repos = [...new Set(targets)].map((rel) => ({ rel, repo: repoOf(rel) })); // valida todos antes de gravar
+    const done = [];
+    for (const { rel, repo } of repos) { await repo.setAccount(body); done.push(rel); }
+    logGit(req, 'git-conta', { conta: body.username || '(padrão)', login: body.login, repositorios: done.length });
+    res.json({ account: await repos[0].repo.account(), updated: done });
+  }));
+  app.post('/api/wsm/git/account/test', gitRoute(async (req, res) => {
+    const r = G(req);
+    const out = await r.testAccess();
+    logGit(req, 'git-teste-acesso', { repo: r.root });
+    res.json(out);
   }));
 }
 

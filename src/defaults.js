@@ -73,6 +73,9 @@ function applyDefaults(data) {
     // Pasta raiz: local (padrão, compatível com o que já existia) ou link de uma pasta do Google Drive.
     if (p.rootDirKind === undefined) p.rootDirKind = 'local';
     if (p.rootDriveUrl === undefined) p.rootDriveUrl = '';
+    // Analista de migração do projeto ('' = o padrão de src/team.js) e vínculo com o Hub de Dados (null = projeto só local). Ver src/hub.js.
+    if (p.migrationAnalyst === undefined) p.migrationAnalyst = '';
+    if (p.hub === undefined) p.hub = null;
     // Planilhas cadastradas antes desta versão sempre puderam ser importadas: continuam podendo.
     for (const d of p.deparas || []) if (d.importable === undefined) d.importable = true;
     // Origem da importação: planilhas antigas continuam no modo de arquivo único.

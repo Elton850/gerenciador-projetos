@@ -57,6 +57,7 @@ const ICONS = {
   download: ['M12 4v11', 'm7 10 5 5 5-5', 'M5 20h14'], upload: ['M12 20V9', 'm7 14 5-5 5 5', 'M5 4h14'],
   close: ['M6 6l12 12', 'M18 6 6 18'],
   more: [[5, 12, 1], [12, 12, 1], [19, 12, 1]],
+  cloud: ['M7 18a4.5 4.5 0 0 1-.6-9A6 6 0 0 1 18 8.5a4 4 0 0 1-.5 9.5z'],
 };
 function icon(name, size = 16) {
   const NS = 'http://www.w3.org/2000/svg';
@@ -248,7 +249,7 @@ function replaceProject(p) {
   render();
 }
 const route = () => {
-  const m = location.hash.match(/^#\/(project|audit|settings|docs|scripts|workspace|hours|reminders|schedule|tools)(?:\/([\w-]+))?/);
+  const m = location.hash.match(/^#\/(project|audit|settings|docs|scripts|workspace|hours|reminders|schedule|tools|hub)(?:\/([\w-]+))?/);
   return m ? { name: m[1], id: m[2] } : { name: 'home' };
 };
 window.addEventListener('hashchange', render);
@@ -273,6 +274,7 @@ function render() {
   if (r.name === 'reminders') return renderReminders(main);
   if (r.name === 'schedule') return renderSchedule(main);
   if (r.name === 'tools') return renderTools(main, r.id); // Ferramentas Auxiliares (public/tools.js)
+  if (r.name === 'hub') return renderHub(main, r.id); // Hub de Dados: página e projeto do banco ainda não baixado (public/hub.js)
   if (r.name === 'project') {
     const p = state.projects.find((x) => x.id === r.id);
     if (p) return renderProject(main, p);
@@ -293,6 +295,7 @@ function renderNav(r) {
         stageOf(p) ? h('div', null, stageTag(stageOf(p))) : null,
         projectProgressBar(p),
         p.schedule.next ? h('div', { class: 'hint' }, `${fmtDate(p.schedule.next.dueDate)} · ${daysText(p.schedule.next.days)}`) : null))),
+    ...(typeof hubNavItems === 'function' ? hubNavItems(r) : []), // projetos do banco que não estão nesta máquina (aspecto offline)
   ].filter(Boolean));
 
   // Menu do rodapé: aberto (ícone + nome) ou recolhido (só ícones, numa fileira) — a lista de projetos ganha espaço.
@@ -319,6 +322,7 @@ const NAV_MENU = [
   { hash: '#/workspace', name: 'workspace', icon: 'workspace', label: 'Workspace (arquivos e Git)' },
   { hash: '#/docs', name: 'docs', icon: 'docs', label: 'Documentos e Modelos' },
   { hash: '#/scripts', name: 'scripts', icon: 'scripts', label: 'Scripts SQL' },
+  { hash: '#/hub', name: 'hub', icon: 'cloud', label: 'Hub de Dados (banco)' },
   { hash: '#/tools', name: 'tools', icon: 'tools', label: 'Ferramentas Auxiliares' },
   { hash: '#/settings', name: 'settings', icon: 'settings', label: 'Configurações' },
   { hash: '#/audit', name: 'audit', icon: 'audit', label: 'Auditoria de execuções' },
@@ -488,6 +492,7 @@ function projectForm(p) {
     state.coordinators.map((c) => h('option', { value: c.id, selected: current === c.id }, c.role ? `${c.name} — ${c.role}` : c.name)));
   const coord = personSelect(p?.coordinatorId, '— Sem coordenador —');
   const analyst = personSelect(p?.analystId, '— Sem analista de implantação —');
+  const migAnalyst = h('input', { type: 'text', value: p?.migrationAnalyst || '', maxlength: 120, placeholder: state.migrationAnalyst ? `${state.migrationAnalyst.name} (padrão)` : '' });
   const tagSelect = (items, current, none) => h('select', null, h('option', { value: '' }, none), items.map((t) => h('option', { value: t.id, selected: current === t.id }, t.name)));
   const ptype = tagSelect(state.projectTypes, p?.projectTypeId, '— Sem tipo —');
   // Ciclo: segue o tipo escolhido (ciclo padrão do tipo) até a pessoa escolher outro à mão.
@@ -508,14 +513,15 @@ function projectForm(p) {
       field('Ciclo de migração', cycleSel, p ? 'Trocar o ciclo de um projeto em andamento pede confirmação; o histórico e os checklists já feitos ficam guardados.' : 'Vem do tipo do projeto (Configurações → Ciclos). O projeto recebe uma cópia das etapas e dos checklists.'),
       state.connections.length ? field('Conexão padrão do projeto', defConn, 'Pré-selecionada ao executar scripts pelo checklist deste projeto.') : null,
       h('div', { class: 'cols2' }, field('Coordenador', coord), field('Analista de implantação', analyst)),
-      h('div', { class: 'hint', style: 'margin-top:-8px' }, state.coordinators.length ? `Coordenador e analista de implantação vêm do mesmo cadastro de responsáveis (Configurações → Geral).${state.migrationAnalyst ? ` Analista de migração: ${state.migrationAnalyst.name} (fixo).` : ''}` : 'Nenhum responsável cadastrado ainda. Cadastre em Configurações → Geral.'),
+      h('div', { class: 'hint', style: 'margin-top:-8px' }, state.coordinators.length ? 'Coordenador e analista de implantação vêm do mesmo cadastro de responsáveis (Configurações → Geral).' : 'Nenhum responsável cadastrado ainda. Cadastre em Configurações → Geral.'),
+      field('Analista de migração', migAnalyst, `Quem faz a migração deste projeto. Vazio = ${state.migrationAnalyst ? state.migrationAnalyst.name : 'o padrão do app'}.${p?.hub ? ' Projeto do Hub de Dados: vem da planilha (coluna ANALISTA) e é atualizado quando mudar lá.' : ''}`),
       field('Pasta raiz — onde fica', rootKind, 'O diretório oficial do projeto. Pode ser local (ex.: o repositório) ou uma pasta compartilhada no Drive.'),
       rootLocalField, rootDriveField,
       field('Grupo do WhatsApp do projeto', waGroup, 'Opcional. Cole o link de convite do grupo (chat.whatsapp.com/…); aparece como botão no topo do projeto.'),
       field('Descrição', desc)],
     footer: [h('button', { class: 'btn', onclick: () => m.close() }, 'Cancelar'),
       h('button', { class: 'btn primary', onclick: (e) => busy(e.target, async () => {
-        const body = { name: name.value, description: desc.value, rootDirKind: rootKind.value, rootDir: root.get(), rootDriveUrl: driveUrl.value, whatsappGroupUrl: waGroup.value,
+        const body = { name: name.value, description: desc.value, rootDirKind: rootKind.value, rootDir: root.get(), rootDriveUrl: driveUrl.value, whatsappGroupUrl: waGroup.value, migrationAnalyst: migAnalyst.value,
           coordinatorId: coord.value || null, analystId: analyst.value || null, projectTypeId: ptype.value || null, originSystemId: origin.value || null, cycleId: cycleSel.value || null, defaultConnectionId: defConn.value || null };
         let saved;
         try { saved = p ? await api('PUT', `/api/projects/${p.id}`, body) : await api('POST', '/api/projects', body); } catch (err) {
@@ -566,7 +572,7 @@ function cancelledBanner(p) {
     }) }, 'Descancelar'));
 }
 
-const PROJECT_SECTIONS = [['observacoes', 'Observações'], ['ciclo', 'Ciclo'], ['checklist', 'Checklist'], ['horas', 'Horas'], ['ambientes', 'Ambientes RM'], ['comunicacoes', 'Comunicações'], ['bases', 'Bases'], ['planilhas', 'Planilhas'], ['arquivos', 'Pastas e Git'], ['cronograma', 'Cronograma'], ['correcoes', 'Correções'], ['documentos', 'Documentos']];
+const PROJECT_SECTIONS = [['observacoes', 'Observações'], ['hub', 'Hub de Dados'], ['ciclo', 'Ciclo'], ['checklist', 'Checklist'], ['horas', 'Horas'], ['ambientes', 'Ambientes RM'], ['comunicacoes', 'Comunicações'], ['bases', 'Bases'], ['planilhas', 'Planilhas'], ['arquivos', 'Pastas e Git'], ['cronograma', 'Cronograma'], ['correcoes', 'Correções'], ['documentos', 'Documentos']];
 function renderProject(main, p) {
   const s = p.schedule;
   main.append(h('div', { class: 'page' },
@@ -576,6 +582,7 @@ function renderProject(main, p) {
         h('div', { class: 'inline', style: 'margin-top:10px' }, pill(s.state, s.next ? `${STATE_LABEL[s.state]} · ${daysText(s.next.days)}` : undefined),
           stageOf(p) ? stageTag(stageOf(p)) : noStageTag(), projectTypeById(p.projectTypeId) ? stageTag(projectTypeById(p.projectTypeId)) : null,
           originSystemById(p.originSystemId) ? stageTag(originSystemById(p.originSystemId)) : null,
+          p.hub ? h('span', { class: 'pill hub-pill', title: `Vinculado ao Hub de Dados (${p.hub.nome}): recebe as atualizações do banco` }, icon('cloud', 12), 'Hub de Dados') : null,
           p.pendencies?.requiredPending ? h('span', { class: 'pill soon', title: 'Itens obrigatórios não concluídos em qualquer etapa até a atual (a conclusão do projeto exige todos)' }, `${plural(p.pendencies.requiredPending, 'obrigatório pendente', 'obrigatórios pendentes')}`) : null,
           p.pendencies?.inherited ? h('span', { class: 'pill soon', title: 'Pendências transferidas de etapas anteriores para a etapa atual' }, `⚠ ${plural(p.pendencies.inherited, 'herdada', 'herdadas')}`) : null),
         h('div', { style: 'margin-top:8px' }, coordinatorChip(p)),
@@ -591,6 +598,7 @@ function renderProject(main, p) {
         } }, 'Remover'))),
     h('nav', { class: 'section-nav', 'aria-label': 'Seções do projeto' }, PROJECT_SECTIONS.map(([id, label]) => h('a', { href: '#', onclick: (e) => { e.preventDefault(); document.querySelector(`[data-sec="${id}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, label))),
     h('div', { 'data-sec': 'observacoes' }, projectNotesCard(p)),
+    h('div', { 'data-slot': 'hub', 'data-sec': 'hub' }, typeof hubProjectCard === 'function' ? hubProjectCard(p) : null), // dados do banco + tarefas (public/hub.js)
     h('div', { 'data-slot': 'cycle', 'data-sec': 'ciclo' }, cycleCard(p)), h('div', { 'data-slot': 'checklist', 'data-sec': 'checklist' }, checklistCard(p)),
     h('div', { 'data-slot': 'hours-project', 'data-sec': 'horas' }, hoursProjectCard(p)),
     h('div', { 'data-sec': 'ambientes' }, rmEnvCard(p)),
@@ -874,6 +882,7 @@ const AUDIT_TYPES = [
   ['hours', 'Horas', /^(horas-|observacao-)/],
   ['comms', 'Comunicações', /^(email-|contato-|gmail-)/],
   ['config', 'Configuração e conexões', /^(ciclo-|conexao-|gitignore-)/],
+  ['hub', 'Hub de Dados', /^hub-/],
 ];
 const auditType = (a) => AUDIT_TYPES.find(([, , re]) => re.test(a.action || ''))?.[0] || 'other';
 function auditStatus(a) {

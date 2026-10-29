@@ -1620,3 +1620,17 @@ tr.dbx-hit > td { background: color-mix(in srgb, var(--accent) 14%, transparent)
 .dual-select option { padding: 2px 6px; border-radius: 4px; }
 .dual-select option:checked { background: var(--selection); color: var(--text); box-shadow: inset 3px 0 0 var(--accent); }
 @media (max-width: 760px) { .dual-list { grid-template-columns: minmax(0, 1fr); } .dual-actions { flex-direction: row; flex-wrap: wrap; padding-top: 0; } }
+
+/* Hub de Dados (public/hub.js): projetos do banco ainda não baixados ficam com aspecto offline (apagados, ícone de nuvem). */
+.nav-sep-btn { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; background: transparent; cursor: pointer; text-align: left; font: inherit; font-size: 10.5px; }
+.nav-sep-btn:hover { color: var(--text); }
+.nav-item.offline { opacity: .55; filter: grayscale(.7); }
+.nav-item.offline:hover, .nav-item.offline.active { opacity: .9; filter: none; }
+.nav-item.offline .ico, .nav-item.offline > svg { color: var(--muted); flex: none; }
+.hub-offline .page-head h1 { color: var(--muted); }
+.hub-offline > .box .inline { flex-wrap: wrap; }
+.hub-facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px 18px; }
+.hub-facts > div > div:last-child { overflow-wrap: anywhere; }
+table.hub-tasks td { white-space: normal; }
+tr.hub-off-row > td { color: var(--muted); }
+.pill.hub-pill { background: color-mix(in srgb, var(--cyan) 22%, var(--s1)); color: var(--text); }

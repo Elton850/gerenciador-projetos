@@ -38,7 +38,7 @@ const startedAt = (ctx) => fmtDate((ctx.project?.stageHistory || []).find((x) =>
 // Saudação pelo horário LOCAL do momento da geração (ctx.now); a regra (faixas) mora em src/greeting.js, compartilhada com o checklist.
 const { greetingFor } = require('./greeting');
 const nowOf = (c) => c.now || new Date();
-const { MIGRATION_ANALYST } = require('./team');
+const { migrationAnalystOf } = require('./team');
 const HOURS_MISS = 'Variável do Controle de Horas usada fora do Controle de Horas.';
 const VARIABLES = [
   { key: 'project.name', group: 'Projeto', label: 'Nome do projeto', miss: 'Projeto sem nome.', get: (c) => c.project?.name },
@@ -51,7 +51,7 @@ const VARIABLES = [
   { key: 'project.created_at', group: 'Projeto', label: 'Data de cadastro do projeto', miss: 'Projeto sem data de cadastro.', get: (c) => fmtDate(c.project?.createdAt) },
   { key: 'project.coordinator', group: 'Pessoas', label: 'Nome do coordenador', miss: 'Coordenador não cadastrado no projeto.', get: (c) => person(c, c.project?.coordinatorId)?.name },
   { key: 'project.coordinator_email', group: 'Pessoas', label: 'E-mail do coordenador', miss: 'Coordenador sem e-mail cadastrado.', get: (c) => person(c, c.project?.coordinatorId)?.email },
-  { key: 'project.migration_analyst', group: 'Pessoas', label: 'Nome do analista de migração (sempre o mesmo, fixo no app)', miss: '', get: () => MIGRATION_ANALYST.name },
+  { key: 'project.migration_analyst', group: 'Pessoas', label: 'Nome do analista de migração do projeto (sem um definido: o padrão do app)', miss: '', get: (c) => migrationAnalystOf(c.project) },
   { key: 'project.analyst', group: 'Pessoas', label: 'Nome do analista de implantação', miss: 'Analista de implantação não cadastrado no projeto.', get: (c) => person(c, c.project?.analystId)?.name },
   { key: 'project.analyst_email', group: 'Pessoas', label: 'E-mail do analista de implantação', miss: 'Analista de implantação sem e-mail cadastrado.', get: (c) => person(c, c.project?.analystId)?.email },
   { key: 'project.stakeholders', group: 'Pessoas', label: 'Nomes dos stakeholders do projeto', miss: 'Projeto sem stakeholder definido.', get: (c) => contactsOf(c, 'stakeholder').map((x) => x.name).join(', ') },

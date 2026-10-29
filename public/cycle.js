@@ -2,7 +2,7 @@
 // Tela do projeto: coordenador, ciclo de migração (barra de progresso), planilhas de Correções e documentos da etapa.
 
 // Responsáveis do projeto (coordenador e analista de implantação vêm do mesmo cadastro de pessoas), discretos, um por linha.
-// O Analista de Migração é fixo (vem do servidor em state.migrationAnalyst) e só informativo: sem link de editar nem contato.
+// O Analista de Migração é o do projeto (p.migrationAnalystName, calculado no servidor: o do Hub de Dados/cadastro ou o padrão) e só informativo.
 function personChip(label, c, p) {
   if (!c) return h('span', { class: 'coord muted small' }, `Sem ${label.toLowerCase()} `, h('a', { href: '#', onclick: (e) => { e.preventDefault(); projectForm(p); } }, 'definir'));
   return h('span', { class: 'coord' }, h('span', { class: 'muted small' }, `${label}:`), h('strong', null, c.name),
@@ -10,7 +10,7 @@ function personChip(label, c, p) {
 }
 function coordinatorChip(p) {
   return h('div', { class: 'people' }, personChip('Coordenador', coordinatorById(p.coordinatorId), p), personChip('Analista de implantação', coordinatorById(p.analystId), p),
-    state.migrationAnalyst ? h('span', { class: 'coord' }, h('span', { class: 'muted small' }, 'Analista de migração:'), h('strong', null, state.migrationAnalyst.name)) : null);
+    p.migrationAnalystName ? h('span', { class: 'coord' }, h('span', { class: 'muted small' }, 'Analista de migração:'), h('strong', null, p.migrationAnalystName)) : null);
 }
 
 // Barra de progresso do ciclo. Passos já concluídos ficam preenchidos com a cor do estágio, o atual é destacado.

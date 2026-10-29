@@ -17,9 +17,10 @@
   "dependencies": {
     "exceljs": "^4.4.0",
     "express": "^5.2.1",
+    "jszip": "^3.10.1",
     "msnodesqlv8": "^5.5.0",
     "mssql": "^12.7.2",
-    "jszip": "^3.10.1"
+    "pg": "^8.23.1"
   },
   "devDependencies": {
     "@electron/packager": "^20.3.0",

@@ -116,6 +116,7 @@ function publicProject(p) {
     pendencies: checklist.projectPendencies(p), // obrigatórios pendentes no projeto inteiro (inclui herdados), para não haver "falso 100%"
     progress: checklist.projectProgress(store.data, p), // % do ciclo inteiro (barra da lateral e da Visão Geral; única fonte)
     cycleUpdate: cycles.cycleDiff(store.data, p), // "nova versão do ciclo disponível" (nada muda até aplicar)
+    migrationAnalystName: migrationAnalystOf(p), // o do projeto (Hub de Dados/cadastro) ou o padrão fixo (src/team.js)
     // Pasta local: existe/não existe. Link do Drive: não dá para checar sem login no Google, então fica null (n/a).
     rootDirExists: p.rootDirKind === 'drive' ? null : dirOk(p.rootDir),
     schedule: p.cancelled ? { state: 'cancelled', next: null, counts: { overdue: 0, soon: 0, pending: 0, done: 0 } } : projectSchedule(p, todayStr(), warn), // cancelado não gera alerta de prazo
@@ -190,13 +191,15 @@ require('./src/schedule-api').mount(app, { store, getProject, publicProject });
 require('./src/backup-api').mount(app, { store, audit, dataDir: DATA_DIR, protect, unprotect, backupsDir: process.env.GP_BACKUP_DIR, appVersion: require('./package.json').version });
 // Atualizações do aplicativo e sincronização de configurações pelo canal de publicação (src/updates.js, src/config-sync.js)
 require('./src/updates-api').mount(app, { store, audit, dataDir: DATA_DIR, protect, unprotect, backupsDir: process.env.GP_BACKUP_DIR, appVersion: require('./package.json').version, onQuit: () => process.emit('gp-quit-for-update') });
+// Hub de Dados: planilha de gerenciamento → banco compartilhado (Postgres) e projetos do banco ↔ projetos locais (src/hub-api.js).
+require('./src/hub-api').mount(app, { store, audit, getProject: (id) => getProject(id), publicProject: (p) => publicProject(p), protect, unprotect, whoAmI: require('./src/evidence-http').whoAmI });
 const cleanCoordinatorId = (id) => {
   if (!id) return null;
   if (!store.data.coordinators.some((c) => c.id === id)) throw httpError(400, 'Coordenador inexistente.');
   return id;
 };
 // Analista de Implantação (analystId): vem do mesmo cadastro de pessoas (Configurações → Responsáveis), sem estrutura duplicada.
-// O Analista de Migração é fixo (src/team.js), só informativo.
+// O Analista de Migração é um nome por projeto (migrationAnalyst; vazio = o padrão fixo de src/team.js).
 const cleanAnalystId = (id) => {
   if (!id) return null;
   if (!store.data.coordinators.some((c) => c.id === id)) throw httpError(400, 'Analista inexistente.');
@@ -213,11 +216,12 @@ const cleanConnectionRef = cleanTagRef('connections', 'Conexão');
 const cleanOriginSystemId = cleanTagRef('originSystems', 'Sistema de origem');
 
 // ---------- Estado / Projetos ----------
-const { MIGRATION_ANALYST } = require('./src/team');
+const { MIGRATION_ANALYST, migrationAnalystOf } = require('./src/team');
 app.get('/api/state', (req, res) => {
   const projects = store.data.projects.map(publicProject);
   const live = projects.filter((p) => !p.cancelled).flatMap((p) => p.scheduleItems); // cancelado não entra nas contagens de prazos
-  res.json({ settings: store.data.settings, today: todayStr(), migrationAnalyst: MIGRATION_ANALYST, ...cfg.extras(), connections: store.data.connections.map(connectionsMod.publicSaved), projects, scheduleSummary: scheduleSummary(live, todayStr()) });
+  const { hub, ...settings } = store.data.settings; // Hub de Dados: a connection string (DPAPI) nunca vai para a tela; ela lê GET /api/hub
+  res.json({ settings, today: todayStr(), migrationAnalyst: MIGRATION_ANALYST, ...cfg.extras(), connections: store.data.connections.map(connectionsMod.publicSaved), projects, scheduleSummary: scheduleSummary(live, todayStr()) });
 });
 
 app.put('/api/settings', (req, res) => {
@@ -233,7 +237,8 @@ app.post('/api/projects', (req, res) => {
   if (!name) throw httpError(400, 'Informe o nome do projeto.');
   const p = { id: uid(), name, description: str(req.body.description, 1000), ...cleanRoot(req.body), createdAt: new Date().toISOString(), bases: [], deparas: [], milestones: [],
     coordinatorId: cleanCoordinatorId(req.body.coordinatorId), analystId: cleanAnalystId(req.body.analystId), projectTypeId: cleanProjectTypeId(req.body.projectTypeId), originSystemId: cleanOriginSystemId(req.body.originSystemId),
-    stepId: null, stageHistory: [], corrections: [], checklists: [], defaultConnectionId: cleanConnectionRef(req.body.defaultConnectionId), whatsappGroupUrl: cleanWaGroup(req.body.whatsappGroupUrl) };
+    stepId: null, stageHistory: [], corrections: [], checklists: [], defaultConnectionId: cleanConnectionRef(req.body.defaultConnectionId), whatsappGroupUrl: cleanWaGroup(req.body.whatsappGroupUrl),
+    migrationAnalyst: str(req.body.migrationAnalyst, 120), hub: null };
   // Ciclo: o escolhido, senão o padrão do tipo do projeto, senão o ciclo padrão. O projeto recebe uma CÓPIA dos passos.
   cycles.assignCycle(p, cycles.cycleFor(store.data, { cycleId: str(req.body.cycleId, 40), projectTypeId: p.projectTypeId }));
   store.data.projects.push(p);
@@ -249,6 +254,7 @@ app.put('/api/projects/:id', (req, res) => {
     coordinatorId: cleanCoordinatorId(req.body.coordinatorId), projectTypeId: cleanProjectTypeId(req.body.projectTypeId), originSystemId: cleanOriginSystemId(req.body.originSystemId),
     ...(req.body.defaultConnectionId !== undefined ? { defaultConnectionId: cleanConnectionRef(req.body.defaultConnectionId) } : {}),
     ...(req.body.whatsappGroupUrl !== undefined ? { whatsappGroupUrl: cleanWaGroup(req.body.whatsappGroupUrl) } : {}),
+    ...(req.body.migrationAnalyst !== undefined ? { migrationAnalyst: str(req.body.migrationAnalyst, 120) } : {}),
     ...(req.body.analystId !== undefined ? { analystId: cleanAnalystId(req.body.analystId) } : {}) }); // quem não envia o campo não apaga o analista
   // Trocar o ciclo de um projeto em andamento pede confirmação: a etapa atual só continua se existir no ciclo novo.
   const wantedCycle = str(req.body.cycleId, 40);

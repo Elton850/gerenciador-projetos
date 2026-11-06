@@ -87,7 +87,7 @@
       auth.checked = false;
       planHost.replaceChildren(
         h('div', { class: 'lv-facts' },
-          h('div', null, h('b', null, 'RM: '), `${p.rm.url} · usuário ${p.rm.user} · ${N(p.rm.consultas)} consultas SQL cadastradas`),
+          h('div', null, h('b', null, 'RM: '), `${p.rm.url} · usuário ${p.rm.user} · ${N(p.rm.consultas)} consulta(s) temporária(s) ZMV.* encontrada(s)`),
           h('div', null, h('b', null, 'Base: '), `${p.target.connectionName} · ${p.target.server} · ${p.target.database} · login ${p.target.login}`, ' ', pill(p.target.env === 'prod' ? 'prod' : p.target.env === 'local' ? 'local' : 'soon', p.target.env || '—')),
           h('div', null, h('b', null, 'Parâmetros: '), `coligada ${p.params.coligada}${p.params.periods.length ? ` · períodos ${p.params.periods.join(', ')}` : ' · todos os períodos'}`),
           h('div', null, h('b', null, 'Saída: '), h('span', { class: 'mono' }, p.outDir))),
@@ -136,7 +136,7 @@
         j.status === 'running' ? h('div', null, h('div', { class: 'progress' }, h('div', { style: `width:${pct}%` })), h('div', { class: 'muted small' }, j.current || '…')) : null,
         j.error ? h('p', { class: 'lv-bad' }, j.error) : null,
         res.dir ? h('p', { class: 'small' }, 'Arquivos em ', h('span', { class: 'mono' }, res.dir)) : null,
-        res.snapshot ? h('p', { class: 'small' }, `Consultas no RM: ${N(res.snapshot.before)} antes · ${N(res.snapshot.after)} depois · temporárias restantes: `, res.snapshot.leftovers.length ? pill('overdue', res.snapshot.leftovers.join(', ')) : pill('ok', 'nenhuma')) : null,
+        res.snapshot ? h('p', { class: 'small' }, `Consultas temporárias ZMV.* no RM: ${N(res.snapshot.before)} antes · ${N(res.snapshot.after)} depois · restantes: `, res.snapshot.leftovers.length ? pill('overdue', res.snapshot.leftovers.join(', ')) : pill('ok', 'nenhuma')) : null,
         res.extraction ? resultTable(['Tabela', 'Linhas do RM', 'Situação'], res.extraction.map((e) => [h('span', { class: 'mono' }, e.table), N(e.rows), e.status.startsWith('gravada') ? pill('ok', e.status) : pill('overdue', e.status)])) : null,
         res.validation ? resultTable(['Validação', 'Origem', 'Carga', 'Não subiu', '% no RM'], res.validation.map((v) => v.error ? [v.label, v.source, '—', pill('overdue', 'erro', v.error), v.error] : [v.label, h('span', { class: 'mono' }, v.source), N(v.carga), v.missing ? pill('overdue', N(v.missing)) : pill('ok', '0'), v.carga ? `${(100 * (v.carga - v.missing) / v.carga).toFixed(1)}%` : '—'])) : null,
         res.rows ? resultTable(['TXT', 'No RM', 'Linhas no TXT', 'A subir', 'Só no RM', 'Situação'], res.rows.map((r) => [h('span', { class: 'mono' }, r.table), N(r.inRm), N(r.txtLines), r.toLoad ? pill('soon', N(r.toLoad)) : N(r.toLoad), N(r.onlyRm), r.status])) : null,

@@ -224,7 +224,7 @@ function mount(app, deps, base) {
     const L = [`Validação de Carga — ${new Date().toLocaleString('pt-BR')}`, `Base: ${target.connectionName} · ${target.server} · ${target.database}`];
     if (partial) L.unshift(`EM ANDAMENTO (ou interrompida): ${partial.done} de ${partial.total} tabela(s) processada(s) na base. Se este aviso ficou, a execução não terminou.`, '');
     if (rm) L.push(`RM: ${rm.url} (usuário ${rm.user}) · coligada ${params.coligada}${params.periods.length ? ` · períodos ${params.periods.join(', ')}` : ''}`);
-    if (snapshot) L.push(`Consultas no RM: antes ${snapshot.before} · depois ${snapshot.after} · temporárias restantes ${snapshot.leftovers.length ? snapshot.leftovers.join(', ') : 'nenhuma'}`);
+    if (snapshot) L.push(`Consultas temporárias ZMV.* no RM: antes ${snapshot.before} · depois ${snapshot.after} · restantes ${snapshot.leftovers.length ? snapshot.leftovers.join(', ') : 'nenhuma'}`);
     if (extraction) { L.push('', 'EXTRAÇÃO (RM → base)'); for (const e of extraction) L.push(`  ${e.table.padEnd(22)} ${String(e.rows ?? '').padStart(8)}  ${e.status}`); }
     if (validation) {
       L.push('', 'VALIDAÇÃO (carga × RM)', `  ${'TABELA'.padEnd(32)} ${'ORIGEM'.padEnd(28)} ${'CARGA'.padStart(8)} ${'NÃO SUBIU'.padStart(10)} ${'% NO RM'.padStart(8)}`);
@@ -263,7 +263,7 @@ function mount(app, deps, base) {
     try {
       const rm = await rmOpen(rmc);
       const before = await RM.snapshot(rm);
-      job.say(`RM: ${before.size} consultas antes (${[...before].filter((k) => k.split('|')[2].startsWith(C.PREFIX)).length} ZMV.*)`);
+      job.say(`RM: ${before.size} consulta(s) temporária(s) ZMV.* antes`);
       // 1) RM: UMA consulta por vez. Cada tabela sai nas partes da conferência (cada parte: criar → executar → apagar); o total
       //    tem de bater com a contagem da conferência (senão os dados mudaram e a tabela não é gravada).
       const fetched = new Map();
@@ -303,9 +303,8 @@ function mount(app, deps, base) {
       }
       const after = await RM.snapshot(rm);
       const leftovers = [...after].filter((k) => k.split('|')[2].startsWith(C.PREFIX)).map((k) => k.split('|')[2]);
-      const others = [...before].filter((k) => !after.has(k)).concat([...after].filter((k) => !before.has(k))).filter((k) => !k.split('|')[2].startsWith(C.PREFIX));
-      snapshot = { before: before.size, after: after.size, leftovers, others: others.length };
-      job.say(`RM: ${after.size} consultas depois · temporárias restantes: ${leftovers.length ? leftovers.join(', ') : 'nenhuma'} · mudanças de terceiros durante a execução: ${others.length || 'nenhuma'}`);
+      snapshot = { before: before.size, after: after.size, leftovers };
+      job.say(`RM: ${after.size} consulta(s) temporária(s) ZMV.* depois · restantes: ${leftovers.length ? leftovers.join(', ') : 'nenhuma'}`);
       if (leftovers.length) job.say(`ATENÇÃO: sobraram consultas desta ferramenta no RM: ${leftovers.join(', ')}`);
       // 2) Base: uma tabela por vez (cópia da atual → substituição em transação, gravação em massa com plano B)
       let bulkOk = true;

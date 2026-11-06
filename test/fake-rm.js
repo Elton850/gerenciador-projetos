@@ -31,7 +31,7 @@ function evaluate(sentence, rows) {
 }
 
 function createFakeRm() {
-  const fake = { consultas: new Map(), ops: [], restFail: false, hang: false, rows: {}, sentences: [] };
+  const fake = { consultas: new Map(), ops: [], restFail: false, hang: false, rows: {}, sentences: [], filters: [] };
   fake.server = http.createServer((req, res) => {
     const auth = Buffer.from(String(req.headers.authorization || '').replace(/^Basic /, ''), 'base64').toString();
     if (auth !== 'integracao:senha-ficticia') { res.writeHead(401); res.end(); return; }
@@ -51,7 +51,13 @@ function createFakeRm() {
       res.writeHead(200, { 'Content-Type': 'text/xml' });
       const pk = (field(body, 'PrimaryKey') || '').split(';')[2];
       if (op === 'ReadRecord') { const c = fake.consultas.get(pk); res.end(envelope(op, c ? `<GlbConsSql>${recXml(c)}</GlbConsSql>` : '<GlbConsSql />')); return; }
-      if (op === 'ReadView') { res.end(envelope(op, `<NewDataSet>${[...fake.consultas.values()].map(recXml).join('')}</NewDataSet>`)); return; }
+      if (op === 'ReadView') {
+        // filtro do RM: entende o "CODSENTENCA LIKE 'ZMV.%'" que a ferramenta usa (o RM real aplica o WHERE no banco)
+        const filtro = field(body, 'Filtro') || ''; fake.filters.push(filtro);
+        const like = filtro.match(/CODSENTENCA LIKE '([^']*)%'/);
+        const list = [...fake.consultas.values()].filter((c) => !like || c.code.startsWith(like[1]));
+        res.end(envelope(op, `<NewDataSet>${list.map(recXml).join('')}</NewDataSet>`)); return;
+      }
       if (op === 'SaveRecord') {
         const x = field(body, 'XML');
         const c = { code: inner(x, 'CODSENTENCA'), title: inner(x, 'TITULO'), sentence: inner(x, 'SENTENCA'), user: 'integracao' };

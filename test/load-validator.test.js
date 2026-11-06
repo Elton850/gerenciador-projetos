@@ -336,3 +336,20 @@ test('base: gravação em massa por padrão e plano B (lotes) quando o bulk é r
   await assert.rejects(SQLM.replace(ok.core, conn, '', { table: 'SALUNO', rowsFile: file, allowed: ['SALUNO'] }, { progress: () => {}, isCancelled: () => true }), /Cancelado/);
   await assert.rejects(SQLM.replace(ok.core, conn, '', { table: 'ZMIGRA_X', rowsFile: file, allowed: ['SALUNO'] }, ctx), /fora da lista/);
 });
+
+test('RM: a lista de consultas pede só as ZMV.* (leve para o RM.Host) e OutOfMemory do RM ganha orientação', async () => {
+  fake.consultas.clear(); fake.filters.length = 0;
+  fake.consultas.set('CLIENTE.01', { code: 'CLIENTE.01', title: 'Consulta do cliente', sentence: 'SELECT 1', user: 'outra.pessoa' });
+  fake.consultas.set('ZMV.SOBRA', { code: 'ZMV.SOBRA', title: `${C.MARKER} X`, sentence: 'SELECT 1', user: 'integracao' });
+  const snap = [...(await RM.snapshot(RMCONN))];
+  assert.equal(fake.filters[0], "GCONSSQL.CODCOLIGADA = 0 AND GCONSSQL.CODSENTENCA LIKE 'ZMV.%'");
+  assert.deepEqual(snap.map((k) => k.split('|')[2]), ['ZMV.SOBRA'], 'consultas do cliente nem são lidas');
+  fake.consultas.clear();
+  // erro real visto em 06/11/2026 (SOAP Fault do RM.Host sem memória)
+  const http = require('http');
+  const srv = http.createServer((q, s) => { s.writeHead(200); s.end('<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><s:Fault><faultcode>a:InternalServiceFault</faultcode><faultstring>Ocorreu um erro ao efetuar a leitura da visão: Exception of type \'System.OutOfMemoryException\' was thrown.</faultstring></s:Fault></s:Body></s:Envelope>'); });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  try {
+    await assert.rejects(RM.snapshot({ ...RMCONN, url: `http://127.0.0.1:${srv.address().port}` }), /OutOfMemoryException.*SEM MEMÓRIA\. Nada foi feito pela ferramenta/);
+  } finally { srv.close(); }
+});

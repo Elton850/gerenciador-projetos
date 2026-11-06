@@ -4,7 +4,7 @@
 // ESCRITA: só pela função `write`, e só para consultas SQL temporárias desta ferramenta: Educacional/coligada global
 //   (CODCOLIGADA 0), código ZMV.* (máx. 16), TÍTULO começando pelo marcador. Apagar exige ainda que a consulta tenha sido
 //   gravada pelo MESMO usuário. Ciclo de uma tabela (extract): conferir que o código não existe → criar → reler e comparar a
-//   sentença → executar → APAGAR SEMPRE (finally) → conferir que sumiu. `snapshot` lista todas as consultas do RM (antes/depois).
+//   sentença → executar → APAGAR SEMPRE (finally) → conferir que sumiu. `snapshot` lista só as consultas ZMV.* (antes/depois).
 // O RM devolve erro como SOAP Fault com HTTP 200: `soap` procura o faultstring. Caracteres de controle inválidos em XML 1.0
 // (e-mails com lixo, por exemplo) são removidos antes de interpretar a resposta.
 'use strict';
@@ -57,11 +57,14 @@ async function soap(rm, op, fields, { allowWrite = false } = {}) {
   const text = r.body.toString('utf8');
   if (r.status === 401) throw Object.assign(new Error('Usuário ou senha do RM recusados (HTTP 401).'), { code: 'LV_RM_AUTH' });
   const fault = text.match(/<faultstring[^>]*>([\s\S]*?)<\/faultstring>/);
-  if (fault) throw new Error(`RM: ${unesc(fault[1]).replace(/\s+/g, ' ').trim().slice(0, 600)}`);
+  if (fault) throw new Error(`RM: ${unesc(fault[1]).replace(/\s+/g, ' ').trim().slice(0, 600)}${hostHint(fault[1])}`);
   if (r.status !== 200) throw new Error(`RM respondeu HTTP ${r.status}.`);
   const m = text.match(new RegExp(`<${op}Result>([\\s\\S]*?)</${op}Result>`)) || text.match(new RegExp(`<${op}Result\\s*/>`));
   return m && m[1] !== undefined ? sanitize(unesc(m[1])) : '';
 }
+
+// Erro de falta de memória do próprio RM.Host: diz o que fazer (não é a ferramenta; insistir piora).
+const hostHint = (text) => (/OutOfMemoryException/i.test(String(text)) ? ' — O servidor do RM (RM.Host) está SEM MEMÓRIA. Nada foi feito pela ferramenta. Não tente de novo agora: aguarde ou peça à TOTVS/ao cliente o reinício do serviço do RM.' : '');
 
 const ctx = (rm, codSistema = 'S') => `CODCOLIGADA=0;CODSISTEMA=${codSistema};CODUSUARIO=${rm.user}`;
 const tagText = (xml, tag) => { const m = String(xml).match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`)); return m ? unesc(m[1]) : null; };
@@ -74,9 +77,12 @@ async function readConsulta(rm, code, codSistema = 'S') {
   return { code: tagText(rec, 'CODSENTENCA'), title: tagText(rec, 'TITULO') || '', sentence: tagText(rec, 'SENTENCA') || '', user: tagText(rec, 'USRULTALTERACAO') || '', changedAt: tagText(rec, 'DTULTALTERACAO') || '' };
 }
 
-// Todas as consultas SQL do RM (qualquer sistema): "coligada|sistema|código|alteração".
+// Só as consultas temporárias DESTA ferramenta (ZMV.* na coligada global): "coligada|sistema|código|alteração".
+// Antes listava TODAS as consultas do RM com o texto completo de cada uma — resposta grande à toa, que o RM.Host precisa montar
+// na memória (num Host já sem memória, deu OutOfMemoryException em 06/11/2026). Para achar sobras basta o prefixo.
+const SNAPSHOT_FILTER = "GCONSSQL.CODCOLIGADA = 0 AND GCONSSQL.CODSENTENCA LIKE 'ZMV.%'";
 async function snapshot(rm) {
-  const x = await soap(rm, 'ReadView', { DataServerName: DS, Filtro: 'GCONSSQL.CODCOLIGADA >= 0', Contexto: ctx(rm) });
+  const x = await soap(rm, 'ReadView', { DataServerName: DS, Filtro: SNAPSHOT_FILTER, Contexto: ctx(rm) });
   return new Set(records(x, 'GConsSql').map((r) => [tagText(r, 'CODCOLIGADA'), tagText(r, 'APLICACAO'), tagText(r, 'CODSENTENCA'), tagText(r, 'DTULTALTERACAO') || ''].join('|')));
 }
 
@@ -116,7 +122,7 @@ async function execute(rm, code, coligada, codSistema = 'S', { sleep = (ms) => n
     }
     const text = r.body.toString('utf8').replace(/^﻿/, '');
     if (r.status === 401) throw Object.assign(new Error('Usuário ou senha do RM recusados (HTTP 401).'), { code: 'LV_RM_AUTH' });
-    if (r.status !== 200) throw new Error(`Consulta ${code}: RM respondeu HTTP ${r.status}: ${text.slice(0, 400)}`);
+    if (r.status !== 200) throw new Error(`Consulta ${code}: RM respondeu HTTP ${r.status}: ${text.slice(0, 400)}${hostHint(text)}`);
     let data = JSON.parse(text);
     if (!Array.isArray(data)) data = Object.values(data || {}).find(Array.isArray);
     if (!Array.isArray(data)) throw new Error(`Consulta ${code}: resposta inesperada da API de Consulta SQL.`);
@@ -156,4 +162,4 @@ async function test(rm) {
   return { ok: true, ms: Date.now() - t0 };
 }
 
-module.exports = { cleanUrl, soap, readConsulta, snapshot, write, execute, extract, test, sanitize, DS, NOT_SENT };
+module.exports = { cleanUrl, soap, readConsulta, snapshot, write, execute, extract, test, sanitize, DS, NOT_SENT, SNAPSHOT_FILTER };

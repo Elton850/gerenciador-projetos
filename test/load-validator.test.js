@@ -297,3 +297,42 @@ test('API: dados do RM mudaram depois da conferência → a tabela não é grava
     assert.equal(fake.consultas.size, 0);
   } finally { fake.rows['ZMV.STURMA'].pop(); }
 });
+
+// ---------- Gravação na base: em massa (bulk) com plano B (INSERT em lotes), driver simulado ----------
+function fakeDriver({ failBulk = false } = {}) {
+  const log = []; let rows = 0;
+  class Transaction { async begin() { log.push('BEGIN'); } async commit() { log.push('COMMIT'); } async rollback() { log.push('ROLLBACK'); rows = 0; } }
+  class Table { constructor(name) { this.name = name; this.columns = { list: [], add: (n, t, o) => this.columns.list.push({ n, t, o }) }; this.rows = []; this.rows.add = (...v) => this.rows.push(v); } }
+  class Request {
+    input() { return this; }
+    async batch(sql) { log.push(sql.split(' (')[0]); if (/^DROP/.test(sql)) rows = 0; }
+    async query(sql) { if (/COUNT_BIG/.test(sql)) return { recordset: [{ n: rows }] }; log.push('INSERT'); rows += (sql.match(/\(@lv/g) || []).length; return {}; }
+    async bulk(t) { log.push(`BULK ${t.name} ${t.rows.length}`); if (failBulk) throw new Error('bulk não suportado'); rows += t.rows.length; }
+  }
+  const h = { sql: { Transaction, Table, Request, NVarChar: (n) => ({ n }), MAX: 'MAX' }, pool: {} };
+  const core = { withPool: (c, p, fn) => fn(h), identity: async () => ({ database: 'BASE' }), friendly: (e) => e.message };
+  return { core, log };
+}
+
+test('base: gravação em massa por padrão e plano B (lotes) quando o bulk é recusado, sempre numa transação', async () => {
+  const file = path.join(tmp, 'rows.json');
+  const data = { columns: ['RA', 'NOME'], rows: Array.from({ length: 45001 }, (_, i) => [String(i), i % 7 ? `N${i}` : null]) };
+  fs.writeFileSync(file, JSON.stringify(data));
+  const ctx = { progress: () => {}, isCancelled: () => false };
+  const conn = { database: 'BASE' };
+  const ok = fakeDriver();
+  const r1 = await SQLM.replace(ok.core, conn, '', { table: 'SALUNO', rowsFile: file, allowed: ['SALUNO'] }, ctx);
+  assert.deepEqual([r1.rows, r1.mode], [45001, 'bulk']);
+  assert.deepEqual(ok.log.filter((x) => x.startsWith('BULK')), ['BULK [dbo].[SALUNO] 20000', 'BULK [dbo].[SALUNO] 20000', 'BULK [dbo].[SALUNO] 5001'], 'blocos de 20 mil');
+  assert.ok(ok.log.includes('COMMIT') && !ok.log.includes('INSERT'));
+  const bad = fakeDriver({ failBulk: true });
+  const r2 = await SQLM.replace(bad.core, conn, '', { table: 'SALUNO', rowsFile: file, allowed: ['SALUNO'] }, ctx);
+  assert.deepEqual([r2.rows, r2.mode, r2.bulkError], [45001, 'insert', 'bulk não suportado']);
+  assert.deepEqual(bad.log.slice(0, 6), ['BEGIN', 'SET XACT_ABORT ON;', 'DROP TABLE IF EXISTS [dbo].[SALUNO]', 'CREATE TABLE [dbo].[SALUNO]', 'BULK [dbo].[SALUNO] 20000', 'ROLLBACK'], 'bulk recusado: transação desfeita antes do plano B');
+  assert.equal(bad.log.filter((x) => x === 'COMMIT').length, 1);
+  const forced = fakeDriver();
+  assert.equal((await SQLM.replace(forced.core, conn, '', { table: 'SALUNO', rowsFile: file, allowed: ['SALUNO'], forceInsert: true }, ctx)).mode, 'insert');
+  assert.ok(!forced.log.some((x) => x.startsWith('BULK')));
+  await assert.rejects(SQLM.replace(ok.core, conn, '', { table: 'SALUNO', rowsFile: file, allowed: ['SALUNO'] }, { progress: () => {}, isCancelled: () => true }), /Cancelado/);
+  await assert.rejects(SQLM.replace(ok.core, conn, '', { table: 'ZMIGRA_X', rowsFile: file, allowed: ['SALUNO'] }, ctx), /fora da lista/);
+});

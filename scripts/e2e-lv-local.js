@@ -63,6 +63,8 @@ async function waitJob(id) { for (let i = 0; i < 600; i++) { const j = ok(await 
     const go = ok(await api('POST', `${B}/plans/${plan.planId}/execute`, { hash: plan.hash, authorized: true })); // local: sem confirmação extra
     const job = await waitJob(go.jobId);
     assert.equal(job.status, 'done', job.log.join('\n'));
+    assert.ok(job.log.some((l) => /\[STURMA\] base: gravada \(2 linhas, em massa/.test(l)), `gravação em massa no SQL Server real:\n${job.log.join('\n')}`);
+    assert.doesNotMatch(fs.readFileSync(path.join(job.result.dir, 'RESUMO.txt'), 'utf8'), /EM ANDAMENTO/, 'resumo final sem o aviso de execução parcial');
     assert.equal(fake.consultas.size, 0, 'nenhuma consulta temporária ficou no RM');
     const ex = Object.fromEntries(job.result.extraction.map((e) => [e.table, e]));
     assert.match(ex.SALUNO.status, /NÃO SUBSTITUÍDA: o RM devolveu 0 linhas/);

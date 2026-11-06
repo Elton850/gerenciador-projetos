@@ -4,8 +4,10 @@
 // LEITURA (transação sempre desfeita + LOCK_TIMEOUT): precheck (identidade, permissões, tabelas e contagens), dump (cópia da
 // tabela atual em CSV antes de substituir), validate (consultas de validação embutidas, revalidadas pela trava de leitura) e
 // keys (colunas de chave para o complemento).
-// ESCRITA: replace — substitui UMA tabela da lista do modelo numa transação (DROP + CREATE + INSERT com XACT_ABORT): erro ou
+// ESCRITA: replace — substitui UMA tabela da lista do modelo numa transação (DROP + CREATE + carga com XACT_ABORT): erro ou
 // contagem diferente → ROLLBACK e a tabela anterior fica intacta. Todo SQL gerado passa por expressões regulares (assertGenerated).
+// Carga: gravação em massa (bulk do driver, em blocos, na mesma transação) — muito mais rápida que INSERT em lotes. Se o bulk
+// falhar (driver/servidor que não aceite), a transação é desfeita e a tabela é gravada de novo pelo INSERT em lotes (plano B).
 'use strict';
 const fs = require('fs');
 const { checkReadOnly } = require('../db-explorer/readonly');
@@ -13,6 +15,7 @@ const { checkReadOnly } = require('../db-explorer/readonly');
 const q = (s) => `[${String(s).replace(/\]/g, ']]')}]`;
 const NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 const LOCK_TIMEOUT_MS = 30000;
+const BULK_ROWS = 20000; // linhas por bloco da gravação em massa
 const SAFE = {
   drop: /^DROP TABLE IF EXISTS \[dbo\]\.\[[A-Z][A-Z0-9_]{0,63}\]$/,
   create: /^CREATE TABLE \[dbo\]\.\[[A-Z][A-Z0-9_]{0,63}\] \((?:\[[A-Za-z_][A-Za-z0-9_]{0,127}\] NVARCHAR\((?:MAX|\d{1,4})\) NULL(?:, )?)+\)$/,
@@ -79,16 +82,43 @@ async function dump(core, conn, password, { table, file }) {
 }
 
 // Substitui UMA tabela numa transação. rowsFile: JSON { columns, rows: [[...]] } gravado pela api (dados do RM).
-async function replace(core, conn, password, { table, rowsFile, allowed }, { progress, isCancelled }) {
+async function replace(core, conn, password, { table, rowsFile, allowed, forceInsert = false }, { progress, isCancelled }) {
   if (!Array.isArray(allowed) || !allowed.includes(table)) throw new Error(`Tabela fora da lista do modelo: ${table}`);
   const { columns, rows } = JSON.parse(fs.readFileSync(rowsFile, 'utf8'));
   if (!columns.length) throw new Error(`${table}: o RM não devolveu colunas.`);
   columns.forEach((c) => checkName(c, 'coluna'));
+  checkName(table, 'tabela');
   const width = columns.map((_, i) => rows.reduce((m, r) => Math.max(m, r[i] === null ? 0 : String(r[i]).length), 1));
-  const defs = columns.map((c, i) => `${q(c)} NVARCHAR(${width[i] > 4000 ? 'MAX' : Math.max(50, width[i])}) NULL`).join(', ');
-  return core.withPool(conn, password, async (h) => {
-    const who = await core.identity(h);
-    if (who.database.toLowerCase() !== conn.database.toLowerCase()) throw new Error(`A conexão abriu o banco "${who.database}", diferente do escolhido ("${conn.database}"). Nada foi gravado.`);
+  const size = width.map((w) => (w > 4000 ? 'MAX' : Math.max(50, w)));
+  const defs = columns.map((c, i) => `${q(c)} NVARCHAR(${size[i]}) NULL`).join(', ');
+  const cancelled = () => Object.assign(new Error('Cancelado: nada desta tabela foi gravado (transação desfeita).'), { cancelled: true });
+
+  // Gravação em massa: blocos de BULK_ROWS linhas (progresso e cancelamento entre blocos), colunas iguais às do CREATE.
+  async function loadBulk(h, req) {
+    for (let i = 0; i < rows.length || i === 0; i += BULK_ROWS) {
+      if (isCancelled()) throw cancelled();
+      const t = new h.sql.Table(`[dbo].${q(table)}`);
+      t.create = false;
+      columns.forEach((c, k) => t.columns.add(c, size[k] === 'MAX' ? h.sql.NVarChar(h.sql.MAX) : h.sql.NVarChar(size[k]), { nullable: true }));
+      for (const row of rows.slice(i, i + BULK_ROWS)) t.rows.add(...row.map((v) => (v === null ? null : String(v))));
+      if (!t.rows.length) break;
+      await req().bulk(t);
+      progress({ done: Math.min(rows.length, i + BULK_ROWS), total: rows.length, table });
+    }
+  }
+  // Plano B (o método de antes): INSERT em lotes com parâmetros, cada comando conferido pela trava.
+  async function loadInsert(h, req) {
+    const per = Math.max(1, Math.min(1000, Math.floor(2000 / columns.length)));
+    const head = `INSERT INTO [dbo].${q(table)} (${columns.map(q).join(', ')}) VALUES `;
+    for (let i = 0; i < rows.length; i += per) {
+      if (isCancelled()) throw cancelled();
+      const r = req(); let k = 0;
+      const values = rows.slice(i, i + per).map((row) => `(${row.map((v) => { const n = `lv${k++}`; r.input(n, v !== null && String(v).length > 4000 ? h.sql.NVarChar(h.sql.MAX) : h.sql.NVarChar(4000), v === null ? null : String(v)); return `@${n}`; }).join(', ')})`).join(', ');
+      await r.query(assertGenerated('insert', head + values));
+      progress({ done: Math.min(rows.length, i + per), total: rows.length, table });
+    }
+  }
+  async function once(h, load) {
     const tx = new h.sql.Transaction(h.pool);
     await tx.begin();
     try {
@@ -96,21 +126,31 @@ async function replace(core, conn, password, { table, rowsFile, allowed }, { pro
       await req().batch('SET XACT_ABORT ON;');
       await req().batch(assertGenerated('drop', `DROP TABLE IF EXISTS [dbo].${q(table)}`));
       await req().batch(assertGenerated('create', `CREATE TABLE [dbo].${q(table)} (${defs})`));
-      const per = Math.max(1, Math.min(1000, Math.floor(2000 / columns.length)));
-      const head = `INSERT INTO [dbo].${q(table)} (${columns.map(q).join(', ')}) VALUES `;
-      for (let i = 0; i < rows.length; i += per) {
-        if (isCancelled()) throw Object.assign(new Error('Cancelado: nada desta tabela foi gravado (transação desfeita).'), { cancelled: true });
-        const r = req(); let k = 0;
-        const values = rows.slice(i, i + per).map((row) => `(${row.map((v) => { const n = `lv${k++}`; r.input(n, v !== null && String(v).length > 4000 ? h.sql.NVarChar(h.sql.MAX) : h.sql.NVarChar(4000), v === null ? null : String(v)); return `@${n}`; }).join(', ')})`).join(', ');
-        await r.query(assertGenerated('insert', head + values));
-        progress({ done: Math.min(rows.length, i + per), total: rows.length, table });
-      }
+      await load(h, req);
       const n = Number((await req().query(`SELECT COUNT_BIG(*) AS n FROM [dbo].${q(table)}`)).recordset[0].n);
-      if (n !== rows.length) throw new Error(`${table}: contagem após gravar (${n}) diferente do RM (${rows.length}). Nada foi gravado.`);
+      if (n !== rows.length) throw Object.assign(new Error(`${table}: contagem após gravar (${n}) diferente do RM (${rows.length}). Nada foi gravado.`), { countMismatch: true });
       await tx.commit();
-      return { rows: n };
+      return n;
     } catch (e) {
       try { await tx.rollback(); } catch { /* já encerrada */ }
+      throw e;
+    }
+  }
+
+  return core.withPool(conn, password, async (h) => {
+    const who = await core.identity(h);
+    if (who.database.toLowerCase() !== conn.database.toLowerCase()) throw new Error(`A conexão abriu o banco "${who.database}", diferente do escolhido ("${conn.database}"). Nada foi gravado.`);
+    try {
+      if (!forceInsert) {
+        try { return { rows: await once(h, loadBulk), mode: 'bulk' }; } catch (e) {
+          if (e.cancelled) throw e;
+          // bulk recusado: transação desfeita; grava de novo pelo INSERT em lotes
+          const bulkError = core.friendly(e);
+          return { rows: await once(h, loadInsert), mode: 'insert', bulkError };
+        }
+      }
+      return { rows: await once(h, loadInsert), mode: 'insert' };
+    } catch (e) {
       if (!e.cancelled) e.message = core.friendly(e);
       throw e;
     }

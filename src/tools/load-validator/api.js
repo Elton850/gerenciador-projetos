@@ -220,8 +220,9 @@ function mount(app, deps, base) {
     for (const v of r) job.say(v.error ? `[${v.label}] validação: ERRO ${v.error}` : `[${v.label}] carga ${v.carga} · não subiu ${v.missing}`);
     return r;
   }
-  function writeSummary(dir, { target, rm, params, extraction, validation, snapshot }) {
+  function writeSummary(dir, { target, rm, params, extraction, validation, snapshot, partial }) {
     const L = [`Validação de Carga — ${new Date().toLocaleString('pt-BR')}`, `Base: ${target.connectionName} · ${target.server} · ${target.database}`];
+    if (partial) L.unshift(`EM ANDAMENTO (ou interrompida): ${partial.done} de ${partial.total} tabela(s) processada(s) na base. Se este aviso ficou, a execução não terminou.`, '');
     if (rm) L.push(`RM: ${rm.url} (usuário ${rm.user}) · coligada ${params.coligada}${params.periods.length ? ` · períodos ${params.periods.join(', ')}` : ''}`);
     if (snapshot) L.push(`Consultas no RM: antes ${snapshot.before} · depois ${snapshot.after} · temporárias restantes ${snapshot.leftovers.length ? snapshot.leftovers.join(', ') : 'nenhuma'}`);
     if (extraction) { L.push('', 'EXTRAÇÃO (RM → base)'); for (const e of extraction) L.push(`  ${e.table.padEnd(22)} ${String(e.rows ?? '').padStart(8)}  ${e.status}`); }
@@ -306,7 +307,9 @@ function mount(app, deps, base) {
       snapshot = { before: before.size, after: after.size, leftovers, others: others.length };
       job.say(`RM: ${after.size} consultas depois · temporárias restantes: ${leftovers.length ? leftovers.join(', ') : 'nenhuma'} · mudanças de terceiros durante a execução: ${others.length || 'nenhuma'}`);
       if (leftovers.length) job.say(`ATENÇÃO: sobraram consultas desta ferramenta no RM: ${leftovers.join(', ')}`);
-      // 2) Base: uma tabela por vez (cópia da atual → substituição em transação)
+      // 2) Base: uma tabela por vez (cópia da atual → substituição em transação, gravação em massa com plano B)
+      let bulkOk = true;
+      try { writeSummary(dir, { target: info, rm: rmc, params, extraction, snapshot, partial: { done: 0, total: defs.length } }); } catch { /* idem */ }
       for (const d of defs) {
         const f = fetched.get(d.table);
         if (job.cancelRequested) { extraction.push({ table: d.table, rows: null, status: 'NÃO GRAVADA (cancelado)' }); continue; }
@@ -321,16 +324,20 @@ function mount(app, deps, base) {
             job.say(`[${d.table}] cópia da tabela atual: ${bk.rows} linhas (backup\\${d.table}_….csv)`);
           }
           const ac = new AbortController(); job.abort = () => ac.abort();
-          const r = await worker(conn, 'lv-replace', { table: d.table, rowsFile: f.file, allowed: defs.map((x) => x.table) }, { signal: ac.signal, gracefulCancel: true, onProgress: (done, total) => { job.current = `Base: ${d.table} (${done}/${total})`; job.updatedAt = Date.now(); } });
+          const t0 = Date.now();
+          const r = await worker(conn, 'lv-replace', { table: d.table, rowsFile: f.file, allowed: defs.map((x) => x.table), forceInsert: !bulkOk }, { signal: ac.signal, gracefulCancel: true, onProgress: (done, total) => { job.current = `Base: ${d.table} (${done}/${total})`; job.updatedAt = Date.now(); } });
           job.abort = null;
+          if (r.bulkError) { bulkOk = false; job.say(`[${d.table}] gravação em massa recusada pelo servidor (${r.bulkError}); gravada pelo método de lotes, que será usado nas próximas tabelas.`); }
           extraction.push({ table: d.table, rows: r.rows, status: `gravada: ${r.rows} linhas${current !== null ? ' (substituiu a anterior)' : ' (nova)'}` });
-          job.say(`[${d.table}] base: gravada (${r.rows} linhas)`);
-          audit.log({ action: 'lv-tabela-substituida', ...meta, tabela: d.table, linhas: r.rows, anterior: current });
+          job.say(`[${d.table}] base: gravada (${r.rows} linhas, ${r.mode === 'bulk' ? 'em massa' : 'em lotes'}, ${((Date.now() - t0) / 1000).toFixed(1)} s)`);
+          audit.log({ action: 'lv-tabela-substituida', ...meta, tabela: d.table, linhas: r.rows, anterior: current, modo: r.mode });
         } catch (e) {
           extraction.push({ table: d.table, rows: null, status: `ERRO ao gravar (tabela anterior mantida): ${db.friendly(e)}` });
           job.say(`[${d.table}] ERRO ao gravar (tabela anterior mantida): ${db.friendly(e)}`);
         }
         job.done++;
+        // resumo parcial a cada tabela: se o app fechar no meio, a pasta da execução mostra até onde foi
+        try { writeSummary(dir, { target: info, rm: rmc, params, extraction, snapshot, partial: { done: extraction.length, total: defs.length } }); } catch { /* o resumo final tenta de novo */ }
       }
       // 3) Validação (só leitura)
       if (!job.cancelRequested) validation = await runValidations(conn, defs, dir, job);

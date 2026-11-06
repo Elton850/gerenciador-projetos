@@ -1,6 +1,6 @@
 ## Rota de contexto (ler antes de tudo)
 
-Vault Obsidian: `<raiz do Vault>\Gerenciador de Projetos\Apps\GerenciadorProjetos` — a raiz muda conforme a máquina (`C:\Vault` ou `C:\Vaults`; use a que existir). Papéis: **Obsidian** = arquitetura, regras de negócio e decisões; **graphify** = navegação técnica e dependências do código; **código-fonte** = fonte final da implementação.
+Vault Obsidian: `<raiz do Vault>\Gerenciador de Projetos\Apps\GerenciadorProjetos` — a raiz é o **Vault compartilhado no Google Drive** (`G:\Meu Drive\Vault` nesta máquina; o caminho exato de cada máquina está no `~\.claude\CLAUDE.md` do usuário, criado por `Instalar-Vault-Claude.ps1` na raiz do Vault). Não usar cópias locais antigas (`C:\Vault`, `C:\Vaults`); se o Drive não estiver acessível, avisar o usuário. Papéis: **Obsidian** = arquitetura, regras de negócio e decisões; **graphify** = navegação técnica e dependências do código; **código-fonte** = fonte final da implementação.
 
 1. Ler só `99-Claude/context.md` e `99-Claude/task-routing.md` do Vault.
 2. Pela rota, achar o domínio e os documentos pertinentes (não abrir docs "por segurança").

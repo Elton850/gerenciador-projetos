@@ -25,6 +25,15 @@ const TOOLS = [
     api: () => require('./db-explorer/api'),
     ensure: (data) => require('./db-explorer/settings').ensureData(data),
   },
+  {
+    id: 'load-validator',
+    name: 'Validação de Carga',
+    description: 'Confere se a carga foi de fato para o RM: extrai as tabelas do RM do cliente (consultas temporárias pela API), grava na base de migração, valida contra as ZMIGRA e gera os TXT complementares. Educacional (Folha em breve).',
+    icon: 'swap',
+    permissions: ['Conexão cadastrada da base de migração', 'SQL: CREATE TABLE, ALTER e INSERT no schema dbo (substitui as cópias do RM)', 'RM: usuário da API com permissão de incluir, executar e excluir Consultas SQL (só as temporárias ZMV.*)'],
+    api: () => require('./load-validator/api'),
+    ensure: (data) => require('./load-validator/settings').ensureData(data),
+  },
 ];
 
 const publicTools = () => TOOLS.map(({ id, name, description, icon, permissions }) => ({ id, name, description, icon, permissions }));

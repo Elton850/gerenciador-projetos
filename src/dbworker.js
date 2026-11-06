@@ -29,6 +29,6 @@ process.once('message', async ({ op, args }) => {
     else throw new Error(`Operação desconhecida: ${op}`);
     finish({ type: 'result', value });
   } catch (e) {
-    finish({ type: 'error', message: e.message, status: e.status, executed: e.executed, scriptOutput: e.scriptOutput, code: /^BT_/.test(e.code || '') ? e.code : undefined, cancelled: e.cancelled });
+    finish({ type: 'error', message: e.message, status: e.status, executed: e.executed, scriptOutput: e.scriptOutput, code: /^(BT|LV)_/.test(e.code || '') ? e.code : undefined, cancelled: e.cancelled });
   }
 });

@@ -671,7 +671,7 @@ require('./src/rm-env-api').mount(app, { store, audit, getProject, publicProject
 require('./src/email-api').mount(app, { store, audit, getProject, getIn, publicProject, dataDir: DATA_DIR }); // Comunicações: gerador de e-mails (modelos, prévia, copiar) — não envia nada
 require('./src/docgen-api').mount(app, { store, audit, getProject }); // Documentos gerados: modelos → prévia → Word (.docx) baixado pela tela
 // Ferramentas Auxiliares (registro em src/tools/registry.js): cada ferramenta monta as próprias rotas em /api/tools/<id>.
-require('./src/tools').mount(app, { store, audit, db, resolveConn, connPassword, whoAmI: require('./src/evidence-http').whoAmI, pickFiles, pickFolder });
+require('./src/tools').mount(app, { store, audit, db, resolveConn, connPassword, whoAmI: require('./src/evidence-http').whoAmI, pickFiles, pickFolder, protect, unprotect }); // protect/unprotect: senhas próprias de ferramenta (DPAPI), ex.: API do RM
 
 app.get('/api/jobs/:id', (req, res) => {
   const j = jobs.get(req.params.id);

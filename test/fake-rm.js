@@ -13,8 +13,25 @@ const recXml = (c) => `<GConsSql><CODCOLIGADA>0</CODCOLIGADA><APLICACAO>S</APLIC
 const envelope = (op, result) => `<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><${op}Response xmlns="http://www.totvs.com/"><${op}Result>${xesc(result)}</${op}Result></${op}Response></s:Body></s:Envelope>`;
 const fault = (msg) => `<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><s:Fault><faultcode>a:InternalServiceFault</faultcode><faultstring xml:lang="pt-BR">${xesc(msg)}</faultstring></s:Fault></s:Body></s:Envelope>`;
 
+// Entende as sentenças que a ferramenta monta sobre a consulta do modelo: contagem (COUNT_BIG/MIN/MAX da coluna de divisão)
+// e parte (WHERE Q.[col] BETWEEN a AND b / IS NULL). Qualquer outra devolve as linhas inteiras.
+function evaluate(sentence, rows) {
+  const s = String(sentence);
+  if (/COUNT_BIG\(\*\) AS N/.test(s)) {
+    const m = s.match(/COUNT_BIG\(Q\.\[(\w+)\]\)/);
+    if (!m) return [{ N: rows.length }];
+    const vals = rows.map((r) => r[m[1]]).filter((v) => v !== null && v !== undefined);
+    return [{ N: rows.length, NN: vals.length, LO: vals.length ? Math.min(...vals) : null, HI: vals.length ? Math.max(...vals) : null }];
+  }
+  let m = s.match(/WHERE Q\.\[(\w+)\] BETWEEN (-?\d+) AND (-?\d+)$/);
+  if (m) return rows.filter((r) => r[m[1]] !== null && r[m[1]] !== undefined && r[m[1]] >= Number(m[2]) && r[m[1]] <= Number(m[3]));
+  m = s.match(/WHERE Q\.\[(\w+)\] IS NULL$/);
+  if (m) return rows.filter((r) => r[m[1]] === null || r[m[1]] === undefined);
+  return rows;
+}
+
 function createFakeRm() {
-  const fake = { consultas: new Map(), ops: [], restFail: false, rows: {} };
+  const fake = { consultas: new Map(), ops: [], restFail: false, hang: false, rows: {}, sentences: [] };
   fake.server = http.createServer((req, res) => {
     const auth = Buffer.from(String(req.headers.authorization || '').replace(/^Basic /, ''), 'base64').toString();
     if (auth !== 'integracao:senha-ficticia') { res.writeHead(401); res.end(); return; }
@@ -23,8 +40,11 @@ function createFakeRm() {
       if (req.method === 'GET' && req.url.startsWith('/api/framework/v1/consultaSQLServer/RealizaConsulta/')) {
         const code = decodeURIComponent(req.url.split('/')[6]);
         fake.ops.push(`GET ${code}`);
+        if (fake.hang) return; // RM que não responde (timeout do cliente); a conexão é derrubada em close()
         if (fake.restFail || !fake.consultas.has(code)) { res.writeHead(500, { 'Content-Type': 'application/json' }); res.end('{"message":"erro"}'); return; }
-        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(fake.rows[code] || [])); return;
+        const sentence = fake.consultas.get(code).sentence;
+        fake.sentences.push(sentence);
+        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(evaluate(sentence, fake.rows[code] || []))); return;
       }
       const op = String(req.headers.soapaction || '').split('/').pop();
       fake.ops.push(op);
@@ -43,7 +63,7 @@ function createFakeRm() {
     });
   });
   fake.listen = (port) => new Promise((r) => fake.server.listen(port, '127.0.0.1', r));
-  fake.close = () => fake.server.close();
+  fake.close = () => { fake.server.closeAllConnections(); fake.server.close(); };
   fake.conn = (port) => ({ url: `http://127.0.0.1:${port}`, user: 'integracao', password: 'senha-ficticia' });
   return fake;
 }

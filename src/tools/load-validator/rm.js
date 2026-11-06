@@ -1,6 +1,6 @@
 // Validação de Carga — cliente da API do TOTVS RM (SOAP wsDataServer + REST de Consulta SQL), com as travas validadas em produção:
 //
-// LEITURA: ReadRecord/ReadView/GetSchema (SOAP) e RealizaConsulta (REST GET).
+// LEITURA: ReadRecord/ReadView/GetSchema (SOAP) e RealizaConsulta (REST GET; nunca repetida depois de timeout).
 // ESCRITA: só pela função `write`, e só para consultas SQL temporárias desta ferramenta: Educacional/coligada global
 //   (CODCOLIGADA 0), código ZMV.* (máx. 16), TÍTULO começando pelo marcador. Apagar exige ainda que a consulta tenha sido
 //   gravada pelo MESMO usuário. Ciclo de uma tabela (extract): conferir que o código não existe → criar → reler e comparar a
@@ -41,7 +41,7 @@ function request({ url, user, password }, method, path, { body, headers = {}, ti
       res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks) }));
       res.on('error', reject);
     });
-    req.setTimeout(timeoutMs, () => req.destroy(new Error('O RM não respondeu a tempo.')));
+    req.setTimeout(timeoutMs, () => req.destroy(Object.assign(new Error('O RM não respondeu a tempo.'), { code: 'LV_RM_TIMEOUT' })));
     req.on('error', reject);
     if (body) req.write(body);
     req.end();
@@ -100,13 +100,18 @@ async function write(rm, op, { code, codSistema = 'S', table, sentence }) {
   throw new Error(`Operação bloqueada no RM: ${op}`);
 }
 
-// Executa uma consulta cadastrada (REST GET). Falha de rede: até 3 tentativas (é só leitura).
-async function execute(rm, code, coligada, codSistema = 'S', { sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+// Executa uma consulta cadastrada (REST GET). Repete (até 3 tentativas) SÓ quando o pedido nem chegou ao RM (conexão recusada,
+// nome não resolvido, rede inalcançável). Timeout, conexão derrubada no meio ou qualquer resposta do RM: NÃO repete — o RM pode
+// ainda estar processando a consulta, e repetir somaria outra execução pesada à que já está rodando.
+const NOT_SENT = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH']);
+async function execute(rm, code, coligada, codSistema = 'S', { sleep = (ms) => new Promise((r) => setTimeout(r, ms)), timeoutMs = TIMEOUT_MS } = {}) {
   const path = `/api/framework/v1/consultaSQLServer/RealizaConsulta/${encodeURIComponent(code)}/0/${codSistema}?context=${encodeURIComponent(`CODCOLIGADA=${coligada}`)}`;
   for (let i = 0; ; i++) {
     let r;
-    try { r = await request(rm, 'GET', path, { headers: { Accept: 'application/json' } }); } catch (e) {
-      if (i >= 2) throw new Error(`Falha de rede com o RM após 3 tentativas: ${e.message}`);
+    try { r = await request(rm, 'GET', path, { headers: { Accept: 'application/json' }, timeoutMs }); } catch (e) {
+      if (e.code === 'LV_RM_TIMEOUT') throw Object.assign(new Error(`Consulta ${code}: o RM não respondeu a tempo (${Math.round(timeoutMs / 1000)} s). A consulta NÃO foi repetida (o RM pode ainda estar processando); espere antes de tentar de novo.`), { code: 'LV_RM_TIMEOUT' });
+      if (!NOT_SENT.has(e.code)) throw new Error(`Consulta ${code}: a conexão com o RM caiu durante a execução (${e.message}). A consulta NÃO foi repetida.`);
+      if (i >= 2) throw new Error(`Falha de rede com o RM após 3 tentativas (o pedido não chegou ao RM): ${e.message}`);
       await sleep(5000 * (i + 1)); continue;
     }
     const text = r.body.toString('utf8').replace(/^﻿/, '');
@@ -119,8 +124,8 @@ async function execute(rm, code, coligada, codSistema = 'S', { sleep = (ms) => n
   }
 }
 
-// Ciclo completo de uma tabela no RM. log(msg) registra cada passo (auditoria só com metadados).
-async function extract(rm, { table, code, sentence, coligada, codSistema = 'S', log = () => {} }) {
+// Ciclo completo de UMA consulta no RM (uma contagem, uma tabela ou uma parte dela). log(msg) registra cada passo.
+async function extract(rm, { table, code, sentence, coligada, codSistema = 'S', log = () => {}, exec = {} }) {
   const existing = await readConsulta(rm, code, codSistema);
   if (existing) {
     if (existing.title.startsWith(MARKER) && existing.user.toLowerCase() === String(rm.user).toLowerCase()) {
@@ -134,7 +139,7 @@ async function extract(rm, { table, code, sentence, coligada, codSistema = 'S', 
     const back = await readConsulta(rm, code, codSistema);
     if (!back || back.sentence.replace(/\r\n/g, '\n').trim() !== sentence.trim()) throw new Error(`Criação da consulta ${code} não confirmada na releitura (${String(res).slice(0, 200)}).`);
     log(`consulta ${code} criada`);
-    return await execute(rm, code, coligada, codSistema);
+    return await execute(rm, code, coligada, codSistema, exec);
   } finally {
     await write(rm, 'DeleteRecordByKey', { code, codSistema });
     if (await readConsulta(rm, code, codSistema)) throw new Error(`ATENÇÃO: a consulta ${code} não foi apagada no RM. Apague-a em Consultas SQL.`);
@@ -151,4 +156,4 @@ async function test(rm) {
   return { ok: true, ms: Date.now() - t0 };
 }
 
-module.exports = { cleanUrl, soap, readConsulta, snapshot, write, execute, extract, test, sanitize, DS };
+module.exports = { cleanUrl, soap, readConsulta, snapshot, write, execute, extract, test, sanitize, DS, NOT_SENT };

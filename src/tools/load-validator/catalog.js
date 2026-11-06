@@ -3,9 +3,20 @@
 'use strict';
 const EDU = require('./catalog-educacional');
 
+// Coluna usada para DIVIDIR a extração de cada tabela em partes (faixas de valor): um ID inteiro da tabela raiz que sai na consulta
+// e é chave (ou começo de chave) no RM, para cada parte ser uma leitura por faixa. Sem coluna = a tabela sai numa chamada só
+// (cadastros pequenos; históricos têm chave texto — RA — e ficam com o aviso de tabela grande).
+const EDU_PARTS = {
+  PPESSOA: 'CODIGO', SALUNO: 'CODPESSOA', SPROFESSOR: 'CODPESSOA',
+  SHABILITACAOFILIAL: 'IDHABILITACAOFILIAL', SHABILITACAOFILIALPL: 'IDPERLET', SHABILITACAOALUNO: 'IDHABILITACAOFILIAL',
+  STURMA: 'IDPERLET', SMATRICPL: 'IDPERLET', SHORARIOPROFESSOR: 'IDHORARIOTURMA',
+  STURMADISC: 'IDTURMADISC', SPROFESSORTURMA: 'IDTURMADISC', SHORARIOTURMA: 'IDTURMADISC', SETAPAS: 'IDTURMADISC', SMATRICULA: 'IDTURMADISC',
+  SPROVAS: 'IDTURMADISC', SNOTAETAPA: 'IDTURMADISC', SNOTAS: 'IDTURMADISC', SPLANOAULA: 'IDTURMADISC', SFREQUENCIA: 'IDTURMADISC',
+};
+
 // Sistemas da ferramenta. Folha ainda não tem modelo (a tela mostra "em breve").
 const SYSTEMS = {
-  educacional: { id: 'educacional', name: 'Educacional', codSistema: 'S', tables: EDU.TABLES, complement: EDU.COMPLEMENT, ready: true },
+  educacional: { id: 'educacional', name: 'Educacional', codSistema: 'S', tables: EDU.TABLES, complement: EDU.COMPLEMENT, ready: true, parts: EDU_PARTS },
   folha: { id: 'folha', name: 'Folha', codSistema: 'P', tables: [], complement: [], ready: false },
 };
 
@@ -58,6 +69,79 @@ function checkSelect(sql) {
   if (/;\s*\S/.test(code)) throw new Error('Consulta bloqueada: mais de um comando.');
   return true;
 }
+
+// ---------- Contagem e divisão em partes (para o RM Host nunca montar uma resposta gigante) ----------
+// Valores lidos na hora (não congelados no require) para os testes poderem usar partes pequenas.
+const LIMITS = { rowsPerPart: 200000, bigTable: 2000000, maxParts: 500 };
+const COL_RE = /^[A-Z][A-Z0-9_]{0,127}$/;
+
+// Colunas que a consulta devolve (lista entre o SELECT e o FROM de nível 0; usa o alias do AS ou o nome depois do ponto).
+function outputColumns(sql) {
+  const s = String(sql);
+  let depth = 0; let start = -1; let end = -1;
+  const re = /\(|\)|\bSELECT\b|\bFROM\b/gi;
+  for (let m = re.exec(s); m; m = re.exec(s)) {
+    const t = m[0].toUpperCase();
+    if (t === '(') depth++; else if (t === ')') depth--;
+    else if (t === 'SELECT' && depth === 0 && start < 0) start = m.index + 6;
+    else if (t === 'FROM' && depth === 0 && start >= 0) { end = m.index; break; }
+  }
+  if (start < 0 || end < 0) return [];
+  const items = []; let cur = ''; depth = 0;
+  for (const ch of s.slice(start, end)) {
+    if (ch === '(') depth++; if (ch === ')') depth--;
+    if (ch === ',' && depth === 0) { items.push(cur); cur = ''; } else cur += ch;
+  }
+  items.push(cur);
+  return items.map((x) => { const t = x.trim(); const a = t.match(/\bAS\s+\[?(\w+)\]?$/i); return (a ? a[1] : t.split('.').pop().replace(/[[\]]/g, '')).toUpperCase(); });
+}
+
+function partColumnOf(system, table) {
+  const col = (system.parts || {})[table] || null;
+  if (col && !COL_RE.test(col)) throw new Error(`Coluna de divisão inválida em ${table}: ${col}`);
+  return col;
+}
+const wrap = (sql) => `FROM (\n${sql}\n) AS Q`;
+
+// Contagem no RM (só SQL no banco do RM; o Host devolve uma linha): total, não nulos, menor e maior valor da coluna de divisão.
+function statsSql(sql, col) {
+  const out = col
+    ? `SELECT COUNT_BIG(*) AS N, COUNT_BIG(Q.[${col}]) AS NN, MIN(Q.[${col}]) AS LO, MAX(Q.[${col}]) AS HI ${wrap(sql)}`
+    : `SELECT COUNT_BIG(*) AS N ${wrap(sql)}`;
+  checkSelect(out);
+  return out;
+}
+
+// Partes a partir da contagem: faixas de mesmo tamanho entre LO e HI (+ uma parte para a coluna nula, se houver).
+// Tabela pequena, sem coluna ou com valores não inteiros = uma parte só ({ kind: 'all' }).
+function planParts(stats, col, limits = LIMITS) {
+  const n = Number(stats && stats.N); const nn = Number(stats && stats.NN); const lo = Number(stats && stats.LO); const hi = Number(stats && stats.HI);
+  if (!Number.isFinite(n) || n < 0) throw new Error('Contagem do RM inválida.');
+  if (!col || n <= limits.rowsPerPart || !(nn > 0) || !Number.isSafeInteger(lo) || !Number.isSafeInteger(hi) || hi < lo) return [{ kind: 'all' }];
+  const span = hi - lo + 1;
+  const k = Math.min(span, limits.maxParts, Math.ceil(nn / limits.rowsPerPart));
+  const width = Math.ceil(span / k);
+  const parts = [];
+  for (let a = lo; a <= hi; a += width) parts.push({ kind: 'range', lo: a, hi: Math.min(hi, a + width - 1) });
+  if (n > nn) parts.push({ kind: 'null' });
+  return parts;
+}
+
+// Sentença de uma parte. A consulta do modelo vira uma tabela derivada (Q) e o filtro da faixa vai na coluna de divisão.
+function partSql(sql, col, part) {
+  if (!part || part.kind === 'all') return sql;
+  if (!COL_RE.test(String(col))) throw new Error(`Coluna de divisão inválida: ${col}`);
+  let where;
+  if (part.kind === 'range') {
+    if (!Number.isSafeInteger(part.lo) || !Number.isSafeInteger(part.hi)) throw new Error('Faixa de divisão inválida.');
+    where = `Q.[${col}] BETWEEN ${part.lo} AND ${part.hi}`;
+  } else if (part.kind === 'null') where = `Q.[${col}] IS NULL`;
+  else throw new Error('Parte desconhecida.');
+  const out = `SELECT * ${wrap(sql)} WHERE ${where}`;
+  checkSelect(out);
+  return out;
+}
+const partLabel = (p) => (p.kind === 'range' ? `${p.lo}–${p.hi}` : p.kind === 'null' ? 'sem valor' : 'inteira');
 
 function systemOf(id) {
   const s = SYSTEMS[String(id || 'educacional')];
@@ -138,4 +222,5 @@ function computeComplement(def, txtBuf, rmRows, coligada) {
   return { inRm: rm.size, txtLines: lines.length, toLoad: missing.length, onlyRm, dupRm, dupTxt, warnings, content };
 }
 
-module.exports = { SYSTEMS, PREFIX, MARKER, CODE_RE, TABLE_RE, consultaCode, cleanParams, renderRm, checkSelect, systemOf, pickTables, sourceOf, norm, splitTxt, keyOf, computeComplement, crc32 };
+module.exports = { SYSTEMS, PREFIX, MARKER, CODE_RE, TABLE_RE, consultaCode, cleanParams, renderRm, checkSelect, systemOf, pickTables, sourceOf, norm, splitTxt, keyOf, computeComplement, crc32,
+  LIMITS, outputColumns, partColumnOf, statsSql, planParts, partSql, partLabel };

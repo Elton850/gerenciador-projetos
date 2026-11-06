@@ -1,6 +1,7 @@
 // Ferramentas Auxiliares › Validação de Carga (tela). Regras, SQL e acesso ao RM/banco ficam no servidor (src/tools/load-validator).
 // Abas por sistema: Educacional (pronto) · Folha (em breve). Passos: 1 Conexões (API do RM com senha DPAPI + base de migração
-// cadastrada) → 2 Parâmetros (coligada, períodos, pasta de saída, tabelas) → 3 Conferir (só leitura: plano) → Executar
+// cadastrada) → 2 Parâmetros (coligada, períodos, pasta de saída, tabelas) → 3 Conferir (trabalho: base só leitura + contagem
+// no RM, uma tabela por vez → plano com as partes de cada tabela) → Executar
 // (autorização explícita + confirmação do servidor) · Só validar · 4 Complemento (TXT do Hop → só o que falta no RM).
 (() => {
   const BASE = '/api/tools/load-validator';
@@ -82,7 +83,7 @@
     const auth = h('input', { type: 'checkbox' });
     function drawPlan() {
       const p = LV.plan;
-      if (!p) { planHost.replaceChildren(h('p', { class: 'muted' }, 'Clique em “Conferir” para ver o que será feito. A conferência só lê: nada é gravado no RM nem na base.')); return; }
+      if (!p) { planHost.replaceChildren(h('p', { class: 'muted' }, 'Clique em “Conferir” para ver o que será feito. A conferência só lê a base e conta as linhas no RM (uma consulta temporária de contagem por tabela, uma por vez, criada e apagada). Nada é gravado na base nem fica no RM.')); return; }
       auth.checked = false;
       planHost.replaceChildren(
         h('div', { class: 'lv-facts' },
@@ -92,13 +93,15 @@
           h('div', null, h('b', null, 'Saída: '), h('span', { class: 'mono' }, p.outDir))),
         p.warnings.length ? h('ul', { class: 'lv-warn' }, p.warnings.map((w) => h('li', null, w))) : null,
         h('div', { class: 'tablewrap' }, h('table', { class: 'compact' },
-          h('thead', null, h('tr', null, h('th', null, 'Tabela'), h('th', null, 'Consulta temporária no RM'), h('th', { class: 'num' }, 'Linhas hoje na base'), h('th', null, 'Validação'), h('th', { class: 'num' }, 'Carga'))),
+          h('thead', null, h('tr', null, h('th', null, 'Tabela'), h('th', null, 'Consulta temporária no RM'), h('th', { class: 'num' }, 'Linhas no RM'), h('th', { class: 'num' }, 'Partes'), h('th', { class: 'num' }, 'Linhas hoje na base'), h('th', null, 'Validação'), h('th', { class: 'num' }, 'Carga'))),
           h('tbody', null, p.tables.flatMap((t) => t.validations.map((v, i) => h('tr', null,
             i === 0 ? h('td', { class: 'mono', rowspan: t.validations.length }, t.table) : null,
             i === 0 ? h('td', { class: 'mono', rowspan: t.validations.length }, t.code) : null,
+            i === 0 ? h('td', { class: 'num', rowspan: t.validations.length }, t.countError ? pill('overdue', 'erro', t.countError) : N(t.rmRows)) : null,
+            i === 0 ? h('td', { class: 'num', rowspan: t.validations.length, title: t.partColumn ? `Dividida por faixas de ${t.partColumn} (até ${N(p.rowsPerPart)} linhas por parte)` : 'Sem coluna de divisão: uma chamada só' }, t.parts === null ? '—' : t.parts > 1 ? pill('soon', N(t.parts)) : '1') : null,
             i === 0 ? h('td', { class: 'num', rowspan: t.validations.length }, t.current === null ? 'nova' : N(t.current)) : null,
             h('td', null, v.label, ' ', h('span', { class: 'muted small mono' }, v.source)), h('td', { class: 'num' }, N(v.carga)))))))),
-        h('label', { class: 'check lv-auth' }, auth, h('span', null, h('b', null, 'Autorizo '), `criar, executar e apagar ${p.tables.length} consulta(s) temporária(s) ZMV.* no RM do cliente e SUBSTITUIR ${p.tables.length} tabela(s) na base ${p.target.database} (uma cópia CSV da tabela atual é gravada antes, na pasta de saída).`)),
+        h('label', { class: 'check lv-auth' }, auth, h('span', null, h('b', null, 'Autorizo '), `criar, executar e apagar ${N(p.tables.reduce((n, t) => n + (t.parts || 0), 0))} consulta(s) temporária(s) ZMV.* no RM do cliente, uma por vez, e SUBSTITUIR ${p.tables.length} tabela(s) na base ${p.target.database} (uma cópia CSV da tabela atual é gravada antes, na pasta de saída).`)),
         h('div', { class: 'inline' }, h('button', { class: 'btn primary', disabled: !p.canExecute, onclick: (e) => busy(e.currentTarget, execute, 'Iniciando…') }, 'Extrair do RM e validar')));
     }
     async function execute() {
@@ -117,6 +120,7 @@
       const tick = async () => {
         let j; try { j = await api('GET', `${BASE}/jobs/${jobId}`); } catch (e) { fail(e); return; }
         LV.job = j; drawJob();
+        if (j.kind === 'precheck' && j.status === 'done' && j.result && j.result.plan) { LV.plan = j.result.plan; drawPlan(); }
         if (j.status === 'running' && document.body.contains(jobHost)) LV.poll = setTimeout(tick, 1000);
       };
       tick();
@@ -124,7 +128,7 @@
     function drawJob() {
       const j = LV.job; if (!j) { jobHost.replaceChildren(); return; }
       const pct = j.total ? (100 * j.done) / j.total : 0;
-      const label = { execute: 'Extração e validação', validate: 'Validação (só leitura)', complement: 'Complemento' }[j.kind];
+      const label = { precheck: 'Conferência (contagem no RM, uma tabela por vez)', execute: 'Extração e validação', validate: 'Validação (só leitura)', complement: 'Complemento' }[j.kind];
       const st = { running: pill('soon', 'Em andamento'), done: pill('ok', 'Concluído'), error: pill('overdue', 'Erro'), cancelled: pill('soon', 'Cancelado') }[j.status];
       const res = j.result || {};
       jobHost.replaceChildren(h('div', { class: 'card lv-job' },
@@ -141,7 +145,7 @@
     }
     const resultTable = (head, rows) => h('div', { class: 'tablewrap tall' }, h('table', { class: 'compact' }, h('thead', null, h('tr', null, head.map((x) => h('th', null, x)))), h('tbody', null, rows.map((r) => h('tr', null, r.map((c) => h('td', null, c)))))));
 
-    const conferir = h('button', { class: 'btn', onclick: (e) => busy(e.currentTarget, async () => { LV.plan = await api('POST', `${BASE}/precheck`, params()); drawPlan(); }, 'Conferindo…') }, 'Conferir');
+    const conferir = h('button', { class: 'btn', onclick: (e) => busy(e.currentTarget, async () => { LV.plan = null; drawPlan(); const r = await api('POST', `${BASE}/precheck`, params()); follow(r.jobId); }, 'Iniciando…') }, 'Conferir');
     const soValidar = h('button', { class: 'btn', onclick: (e) => busy(e.currentTarget, async () => { const p = params(); const r = await api('POST', `${BASE}/validate`, { system: p.system, connectionId: p.connectionId, database: p.database, tables: p.tables, outDir: p.outDir }); follow(r.jobId); }, 'Iniciando…') }, 'Só validar (somente leitura)');
 
     // ---- 4. Complemento ----
@@ -163,7 +167,7 @@
       sec(2, 'Parâmetros', 'Só a coligada e os períodos letivos entram nas consultas; o SQL é o modelo embutido do Educacional.',
         h('div', { class: 'lv-grid' }, field('Coligada', colIn), field('Períodos letivos (frequência)', perIn), field('Pasta de saída', outF.el, 'Cada execução cria uma pasta nova em ValidacaoCarga\\ (resumo, linhas que não subiram, cópias das tabelas substituídas).')),
         h('div', { class: 'field' }, h('label', null, 'Tabelas'), h('div', { class: 'inline' }, allBtn(true), allBtn(false)), h('div', { class: 'lv-tables' }, tblBoxes))),
-      sec(3, 'Extrair do RM e validar', 'Conferir só lê. Executar cria/executa/apaga uma consulta temporária por tabela no RM e substitui a tabela na base (uma transação por tabela).',
+      sec(3, 'Extrair do RM e validar', 'Conferir lê a base e conta as linhas no RM. Executar cria/executa/apaga, uma por vez, as consultas temporárias no RM (tabelas grandes em partes) e substitui a tabela na base (uma transação por tabela).',
         h('div', { class: 'inline' }, conferir, soValidar), planHost),
       sec(4, 'Gerar complemento', 'Compara os TXT do Hop com as tabelas do RM já gravadas na base e gera, numa pasta nova, só as linhas que ainda não estão no RM.',
         h('div', { class: 'lv-grid' }, field('Pasta dos TXT do Hop', txtF.el), h('label', { class: 'check' }, incl, h('span', null, 'Copiar inteiros os TXT de tabelas ainda sem referência na base'))),

@@ -137,6 +137,42 @@ test('RM: escrita travada (código, marcador, usuário) e operações de escrita
   fake.consultas.clear();
 });
 
+test('RM: timeout NÃO repete a consulta; só repete quando o pedido nem chegou ao RM', async () => {
+  fake.ops.length = 0; fake.hang = true;
+  await assert.rejects(RM.execute(RMCONN, 'ZMV.STURMA', 7, 'S', { timeoutMs: 300, sleep: async () => { throw new Error('não devia repetir'); } }), /NÃO foi repetida/);
+  fake.hang = false;
+  assert.equal(fake.ops.filter((o) => o === 'GET ZMV.STURMA').length, 1, 'uma única chamada');
+  // porta fechada (conexão recusada): o pedido não chegou ao RM → até 3 tentativas
+  const net = require('net'); const srv = net.createServer(); await new Promise((r) => srv.listen(0, '127.0.0.1', r)); const port = srv.address().port; await new Promise((r) => srv.close(r));
+  let sleeps = 0;
+  await assert.rejects(RM.execute({ ...RMCONN, url: `http://127.0.0.1:${port}` }, 'ZMV.STURMA', 7, 'S', { sleep: async () => { sleeps++; } }), /após 3 tentativas/);
+  assert.equal(sleeps, 2);
+  assert.ok(RM.NOT_SENT.has('ECONNREFUSED') && !RM.NOT_SENT.has('ECONNRESET'), 'conexão derrubada no meio não repete');
+});
+
+test('partes: contagem, faixas e sentenças sobre a consulta do modelo (todas as tabelas, colunas únicas)', () => {
+  const s = C.systemOf('educacional');
+  for (const t of s.tables) {
+    const sql = C.renderRm(t, { coligada: 7, periods: '2030' });
+    const cols = C.outputColumns(sql);
+    assert.equal(new Set(cols).size, cols.length, `${t.table}: colunas repetidas impedem a tabela derivada`);
+    const col = C.partColumnOf(s, t.table);
+    if (col) assert.ok(cols.includes(col), `${t.table}: coluna de divisão ${col} precisa sair na consulta`);
+    assert.ok(C.checkSelect(C.statsSql(sql, col)));
+  }
+  assert.deepEqual(C.outputColumns("SELECT A.X, CONVERT(VARCHAR(10), A.D, 23) AS D, B.[Y]\nFROM A JOIN (SELECT 1 AS Z FROM C) B ON 1 = 1"), ['X', 'D', 'Y']);
+  const L = { rowsPerPart: 100, bigTable: 1000, maxParts: 500 };
+  assert.deepEqual(C.planParts({ N: 100, NN: 100, LO: 1, HI: 100 }, 'ID', L), [{ kind: 'all' }], 'pequena: uma parte');
+  assert.deepEqual(C.planParts({ N: 900 }, null, L), [{ kind: 'all' }], 'sem coluna: uma parte');
+  assert.deepEqual(C.planParts({ N: 250, NN: 250, LO: 'A', HI: 'Z' }, 'ID', L), [{ kind: 'all' }], 'valores não inteiros: uma parte');
+  assert.deepEqual(C.planParts({ N: 251, NN: 250, LO: 1, HI: 300 }, 'ID', L), [{ kind: 'range', lo: 1, hi: 100 }, { kind: 'range', lo: 101, hi: 200 }, { kind: 'range', lo: 201, hi: 300 }, { kind: 'null' }]);
+  assert.equal(C.planParts({ N: 1e9, NN: 1e9, LO: 1, HI: 1e9 }, 'ID', L).length, 500, 'limite de partes');
+  assert.equal(C.partSql('SELECT ID FROM T', 'ID', { kind: 'range', lo: 1, hi: 9 }), 'SELECT * FROM (\nSELECT ID FROM T\n) AS Q WHERE Q.[ID] BETWEEN 1 AND 9');
+  assert.equal(C.partSql('SELECT ID FROM T', 'ID', { kind: 'all' }), 'SELECT ID FROM T');
+  assert.throws(() => C.partSql('SELECT ID FROM T', 'ID]; DROP', { kind: 'null' }), /inválida/);
+  assert.throws(() => C.partSql('SELECT ID FROM T', 'ID', { kind: 'range', lo: '1 OR 1=1', hi: 2 }), /inválida/);
+});
+
 // ---------- API (SQL Server simulado) ----------
 const sim = { calls: [], current: { STURMA: 5, SFREQUENCIA: null } };
 db.runWorker = async (op, args, opts = {}) => {
@@ -178,28 +214,47 @@ test('API: conexão do RM com senha DPAPI (nunca devolvida), registro na lista d
   assert.equal(st.systems.find((s) => s.id === 'folha').ready, false);
 });
 
-test('API: conferir → executar (autorização + confirmação) → RM limpo, tabela substituída, validação e resumo', async () => {
+const conferir = async (req) => { const r = await api('POST', `${B}/precheck`, req); assert.equal(r.status, 200, JSON.stringify(r.json)); const j = await waitJob(r.json.jobId); assert.equal(j.status, 'done', JSON.stringify(j)); return j.result.plan; };
+// Cada consulta no RM é um ciclo completo antes da próxima começar: SaveRecord → GET → DeleteRecordByKey, sem sobreposição.
+const sequentialCycles = (ops) => {
+  const w = ops.filter((o) => o === 'SaveRecord' || o.startsWith('GET ') || o === 'DeleteRecordByKey');
+  for (let i = 0; i < w.length; i += 3) if (w[i] !== 'SaveRecord' || !String(w[i + 1]).startsWith('GET ') || w[i + 2] !== 'DeleteRecordByKey') return false;
+  return w.length > 0 && w.length % 3 === 0;
+};
+
+test('API: conferir (contagem no RM) → executar em partes, uma consulta por vez → RM limpo, tabela substituída, validação e resumo', async (t) => {
   fake.consultas.clear(); sim.calls.length = 0;
-  fake.rows['ZMV.SFREQUENCIA'] = [{ RA: '1', DATA: '2030-03-02', PRESENCA: 'A' }];
+  // 5 linhas com IDTURMADISC 1..5 + 1 sem valor; com 2 linhas por parte: faixas 1–2, 3–4, 5–5 e a parte "sem valor" = 4 partes
+  fake.rows['ZMV.SFREQUENCIA'] = [1, 2, 3, 4, 5, null].map((id, i) => ({ IDTURMADISC: id, RA: String(i), DATA: '2030-03-02', PRESENCA: 'A' }));
+  const limits = { ...C.LIMITS }; C.LIMITS.rowsPerPart = 2; C.LIMITS.bigTable = 5;
+  t.after(() => Object.assign(C.LIMITS, limits));
+  fake.ops.length = 0;
   const conn = (await api('POST', '/api/connections', { name: 'Migração', env: 'hml', server: '192.0.2.10', auth: 'sql', user: 'migracao', password: 'senha-ficticia' })).json;
   const rmId = store.data.tools.loadValidator.rm[0].id;
   const out = fs.mkdtempSync(path.join(tmp, 'saida-'));
   const req = { system: 'educacional', rmId, connectionId: conn.id, database: 'BASE_TESTE', coligada: 7, periods: '2030', tables: ['STURMA', 'SFREQUENCIA'], outDir: out };
   assert.equal((await api('POST', `${B}/precheck`, { ...req, periods: "2030'--" })).status, 400);
   assert.equal((await api('POST', `${B}/precheck`, { ...req, tables: ['ZMIGRA_SALUNO'] })).status, 400);
-  const plan = (await api('POST', `${B}/precheck`, req)).json;
+  const plan = await conferir(req);
   assert.equal(plan.canExecute, true);
-  assert.deepEqual(plan.tables.map((t) => [t.table, t.code, t.current]), [['STURMA', 'ZMV.STURMA', 5], ['SFREQUENCIA', 'ZMV.SFREQUENCIA', null]]);
+  assert.deepEqual(plan.tables.map((x) => [x.table, x.code, x.current, x.rmRows, x.parts]), [['STURMA', 'ZMV.STURMA', 5, 2, 1], ['SFREQUENCIA', 'ZMV.SFREQUENCIA', null, 6, 4]]);
+  assert.ok(plan.warnings.some((w) => /SFREQUENCIA: tabela grande \(6 linhas\), extraída em 4 partes/.test(w)), plan.warnings.join(' | '));
+  assert.equal(fake.consultas.size, 0, 'as consultas de contagem foram apagadas');
+  assert.ok(sequentialCycles(fake.ops), `conferência: uma consulta por vez (${fake.ops.join(', ')})`);
+  fake.ops.length = 0; fake.sentences.length = 0;
   const noAuth = await api('POST', `${B}/plans/${plan.planId}/execute`, { hash: plan.hash });
   assert.equal(noAuth.json.code, 'LV_NOT_AUTHORIZED');
   const ask = await api('POST', `${B}/plans/${plan.planId}/execute`, { hash: plan.hash, authorized: true });
-  assert.equal(ask.status, 409); assert.equal(ask.json.code, 'LV_CONFIRM'); assert.match(ask.json.error, /SUBSTITUIR 2 tabela/);
+  assert.equal(ask.status, 409); assert.equal(ask.json.code, 'LV_CONFIRM'); assert.match(ask.json.error, /SUBSTITUIR 2 tabela/); assert.match(ask.json.error, /5 consulta\(s\) temporária\(s\) ZMV\.\*, uma por vez/);
   const go = await api('POST', `${B}/plans/${plan.planId}/execute`, { hash: plan.hash, authorized: true, confirmed: true });
   const job = await waitJob(go.json.jobId);
   assert.equal(job.status, 'done', JSON.stringify(job.log));
   assert.equal(fake.consultas.size, 0, 'nenhuma consulta temporária ficou no RM');
   assert.deepEqual(job.result.snapshot.leftovers, []);
-  assert.deepEqual(job.result.extraction.map((e) => [e.table, e.rows]), [['STURMA', 2], ['SFREQUENCIA', 1]]);
+  assert.deepEqual(job.result.extraction.map((e) => [e.table, e.rows]), [['STURMA', 2], ['SFREQUENCIA', 6]]);
+  assert.equal(fake.ops.filter((o) => o === 'GET ZMV.SFREQUENCIA').length, 4, 'SFREQUENCIA em 4 partes');
+  assert.ok(sequentialCycles(fake.ops), `execução: uma consulta por vez (${fake.ops.join(', ')})`);
+  assert.deepEqual(fake.sentences.filter((s) => s.includes('SFREQUENCIA')).map((s) => (s.match(/WHERE Q\.\[IDTURMADISC\] (.*)$/) || [])[1]), ['BETWEEN 1 AND 2', 'BETWEEN 3 AND 4', 'BETWEEN 5 AND 5', 'IS NULL']);
   const ops = sim.calls.map((c) => c.op);
   assert.ok(ops.includes('tool:lv-dump'), 'cópia da tabela atual antes de substituir');
   assert.equal(ops.filter((o) => o === 'tool:lv-dump').length, 1, 'só a tabela que existia é copiada');
@@ -224,4 +279,21 @@ test('API: só validar e gerar complemento (só leitura na base, arquivos numa p
   assert.equal(fs.readFileSync(path.join(c.result.dir, 'STURMA.txt'), 'utf8'), `${f('3', '2030', 'T2')}\r\n`);
   assert.equal(c.result.rows.find((r) => r.table === 'SALUNO').status, 'SEM TXT');
   assert.ok(sim.calls.filter((x) => x.op === 'tool:lv-replace').length === 2, 'complemento e validação não gravam na base');
+});
+
+test('API: dados do RM mudaram depois da conferência → a tabela não é gravada (a contagem tem de bater)', async () => {
+  fake.consultas.clear(); sim.calls.length = 0;
+  const conn = store.data.connections[0];
+  const rmId = store.data.tools.loadValidator.rm[0].id;
+  const out = fs.mkdtempSync(path.join(tmp, 'saida-'));
+  const plan = await conferir({ system: 'educacional', rmId, connectionId: conn.id, database: 'BASE_TESTE', coligada: 7, periods: '', tables: ['STURMA'], outDir: out });
+  assert.equal(plan.tables[0].rmRows, 2);
+  fake.rows['ZMV.STURMA'].push({ CODCOLIGADA: 7, CODTURMA: 'T3', NOME: 'nova' });
+  try {
+    const go = await api('POST', `${B}/plans/${plan.planId}/execute`, { hash: plan.hash, authorized: true, confirmed: true });
+    const job = await waitJob(go.json.jobId);
+    assert.match(job.result.extraction[0].status, /NÃO GRAVADA.*os dados mudaram desde a conferência/);
+    assert.equal(sim.calls.filter((x) => x.op === 'tool:lv-replace').length, 0, 'nada foi gravado na base');
+    assert.equal(fake.consultas.size, 0);
+  } finally { fake.rows['ZMV.STURMA'].pop(); }
 });

@@ -54,7 +54,10 @@ async function waitJob(id) { for (let i = 0; i < 600; i++) { const j = ok(await 
 
     const out = fs.mkdtempSync(path.join(tmp, 'saida-'));
     const req = { system: 'educacional', rmId: rm.id, connectionId: conn.id, database: DBN, coligada: 7, periods: '2030', tables: ['SALUNO', 'STURMA'], outDir: out };
-    const plan = ok(await api('POST', `${B}/precheck`, req));
+    const pj = await waitJob(ok(await api('POST', `${B}/precheck`, req)).jobId); // conferência = trabalho (contagem no RM)
+    assert.equal(pj.status, 'done', pj.log.join('\n'));
+    const plan = pj.result.plan;
+    assert.deepEqual(plan.tables.map((t) => [t.table, t.rmRows, t.parts]), [['SALUNO', 0, 1], ['STURMA', 2, 1]]);
     assert.deepEqual(plan.tables.map((t) => [t.table, t.current]), [['SALUNO', 1], ['STURMA', 1]]);
     assert.equal(plan.tables[1].validations[0].carga, 3);
     const go = ok(await api('POST', `${B}/plans/${plan.planId}/execute`, { hash: plan.hash, authorized: true })); // local: sem confirmação extra

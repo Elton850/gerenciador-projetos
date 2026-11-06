@@ -2,8 +2,11 @@
 // para o RM do cliente: extrai as tabelas do RM por consultas SQL temporárias (criar → executar → apagar), grava cada uma na base
 // de migração com o nome da tabela raiz (SALUNO, STURMADISC…), roda as validações embutidas e gera os TXT complementares.
 //
-// Fluxo com trava: Conferir (pré-checagem só leitura → plano com hash, uso único, 15 min) → Executar (autorização explícita +
-// confirmação 409 LV_CONFIRM fora do ambiente local) → trabalho com progresso. "Só validar" e "Gerar complemento" só leem a base.
+// Fluxo com trava: Conferir (trabalho: base só leitura + CONTAGEM no RM por consulta temporária de COUNT → plano com hash, uso
+// único, 15 min, com as partes de cada tabela) → Executar (autorização explícita + confirmação 409 LV_CONFIRM fora do ambiente
+// local) → trabalho com progresso. "Só validar" e "Gerar complemento" só leem a base.
+// Carga no RM: UMA consulta por vez (nunca em paralelo); tabela com mais de C.LIMITS.rowsPerPart linhas sai em partes (faixas
+// da coluna de divisão), e o total das partes tem de bater com a contagem da conferência; nenhuma consulta é repetida após timeout.
 // Segurança: SQL nunca vem da tela (modelo embutido + coligada/períodos validados); escrita no RM só de consultas ZMV.* da
 // ferramenta (rm.js); escrita na base só das tabelas do modelo, uma transação por tabela, com cópia CSV da tabela atual antes;
 // senhas: SQL pelas conexões cadastradas, RM pela DPAPI (nunca devolvida à tela nem auditada); auditoria só com metadados.
@@ -18,7 +21,6 @@ const S = require('./settings');
 const RM = require('./rm');
 
 const PLAN_TTL_MS = 15 * 60 * 1000;
-const RM_PARALLEL = 4;
 const MAX_LOG = 400;
 const stamp = () => new Date().toISOString().replace(/[-:]/g, '').replace('T', '_').slice(0, 15);
 
@@ -130,6 +132,7 @@ function mount(app, deps, base) {
     if (!defs.length) throw httpError(400, 'Escolha ao menos uma tabela.');
     return { sys, params, defs };
   }
+  // Trabalho (não é mais resposta direta): a contagem no RM roda uma tabela por vez e pode levar minutos. Resultado: job.result.plan.
   app.post(`${base}/precheck`, async (req, res) => {
     cleanup();
     const b = req.body || {};
@@ -139,25 +142,64 @@ function mount(app, deps, base) {
     const outDir = outDirOf(b.outDir);
     const sentences = defs.map((d) => { try { return C.renderRm(d, params); } catch (e) { throw httpError(400, `${d.table}: ${e.message}`); } });
     const sources = [...new Set(defs.flatMap((d) => d.validations.map((v) => C.sourceOf(v.sql)).filter(Boolean)))];
-    let pre;
-    try { pre = await worker(conn, 'lv-precheck', { rmTables: defs.map((d) => d.table), sourceTables: sources }); } catch (e) { throw httpError(502, `Base de migração (${saved.name}): ${db.friendly(e)}`, { code: e.code }); }
-    let rmInfo;
-    try { const rm = await rmOpen(rmc); const t0 = Date.now(); const snap = await RM.snapshot(rm); rmInfo = { ok: true, consultas: snap.size, leftovers: [...snap].filter((k) => k.split('|')[2].startsWith(C.PREFIX)).map((k) => k.split('|')[2]), ms: Date.now() - t0 }; } catch (e) { if (e.status) throw e; throw httpError(502, `RM (${rmc.name}): ${e.message}`, { code: e.code }); }
-    const warnings = [];
-    if (!pre.canCreate || !pre.canAlter || !pre.canInsert) warnings.push(`O login ${pre.identity.login} não tem permissão para criar/alterar tabelas e inserir no schema dbo deste banco.`);
-    if (rmInfo.leftovers.length) warnings.push(`Há consulta(s) temporária(s) desta ferramenta sobrando no RM (${rmInfo.leftovers.join(', ')}); serão apagadas antes de recriar, se forem do mesmo usuário.`);
-    const tables = defs.map((d, i) => ({
-      table: d.table, code: C.consultaCode(d.table), current: pre.rm[d.table], sentenceChars: sentences[i].length,
-      validations: d.validations.map((v) => ({ label: v.label, source: C.sourceOf(v.sql), carga: pre.src[C.sourceOf(v.sql)] ?? null })),
-    }));
-    for (const t of tables) for (const v of t.validations) if (v.carga === null) warnings.push(`Tabela da carga ${v.source} não existe na base: a validação de ${v.label} vai falhar.`);
-    const canExecute = pre.canCreate && pre.canAlter && pre.canInsert;
-    const body = { system: sys.id, params, tables: tables.map((t) => t.table), target: info, rm: { id: rmc.id, url: rmc.url, user: rmc.user }, sentences, outDir };
-    const hash = fingerprint(body);
-    const id = crypto.randomBytes(8).toString('hex');
-    plans.set(id, { id, hash, expiresAt: Date.now() + PLAN_TTL_MS, body, connFp: fingerprint([saved.id, saved.server, saved.port || null, saved.auth, saved.user || '', saved.passwordEnc || '']), rmFp: fingerprint([rmc.id, rmc.url, rmc.user, rmc.passwordEnc]) });
-    audit.log({ action: 'lv-conferencia', by: whoAmI(), detalhe: saved.name, server: db.label(saved), database: info.database, rm: rmc.url, tabelas: tables.length });
-    res.json({ planId: id, hash, expiresAt: Date.now() + PLAN_TTL_MS, target: { ...info, login: pre.identity.login, connectedTo: pre.identity.server }, rm: { name: rmc.name, url: rmc.url, user: rmc.user, ...rmInfo }, params, tables, warnings, canExecute, outDir });
+    if (running()) throw httpError(409, 'Já existe um trabalho da Validação de Carga em andamento.', { code: 'LV_BUSY' });
+    const rm = await rmOpen(rmc);
+    const job = newJob('precheck', defs.length + 2);
+    res.json({ jobId: job.id });
+    try {
+      job.current = 'Base de migração (só leitura)…';
+      let pre;
+      try { pre = await worker(conn, 'lv-precheck', { rmTables: defs.map((d) => d.table), sourceTables: sources }); } catch (e) { throw new Error(`Base de migração (${saved.name}): ${db.friendly(e)}`); }
+      job.done++;
+      job.current = 'RM: lista de consultas…';
+      let rmInfo;
+      try { const t0 = Date.now(); const snap = await RM.snapshot(rm); rmInfo = { ok: true, consultas: snap.size, leftovers: [...snap].filter((k) => k.split('|')[2].startsWith(C.PREFIX)).map((k) => k.split('|')[2]), ms: Date.now() - t0 }; } catch (e) { throw new Error(`RM (${rmc.name}): ${e.message}`); }
+      job.done++;
+      // Contagem no RM, uma tabela por vez (COUNT numa consulta temporária: o banco do RM conta, o Host devolve uma linha).
+      const counts = [];
+      for (const [i, d] of defs.entries()) {
+        if (job.cancelRequested) break;
+        const code = C.consultaCode(d.table); const col = C.partColumnOf(sys, d.table);
+        job.current = `RM: contando ${d.table} (${i + 1}/${defs.length})`;
+        try {
+          const r = await RM.extract(rm, { table: d.table, code, sentence: C.statsSql(sentences[i], col), coligada: params.coligada, codSistema: sys.codSistema, log: (m) => job.say(`[${d.table}] contagem: ${m}`) });
+          const row = r.rows[0] || {};
+          const parts = C.planParts(row, col, C.LIMITS);
+          counts.push({ rows: Number(row.N), parts });
+          job.say(`[${d.table}] RM: ${Number(row.N).toLocaleString('pt-BR')} linhas · ${parts.length} parte(s)`);
+        } catch (e) {
+          counts.push({ rows: null, parts: null, error: e.message });
+          job.say(`[${d.table}] ERRO na contagem: ${e.message}`);
+        }
+        job.done++; job.updatedAt = Date.now();
+      }
+      if (job.cancelRequested) { job.status = 'cancelled'; job.say('Conferência cancelada: nenhum plano foi gerado.'); return; }
+      const warnings = [];
+      if (!pre.canCreate || !pre.canAlter || !pre.canInsert) warnings.push(`O login ${pre.identity.login} não tem permissão para criar/alterar tabelas e inserir no schema dbo deste banco.`);
+      if (rmInfo.leftovers.length) warnings.push(`Há consulta(s) temporária(s) desta ferramenta sobrando no RM (${rmInfo.leftovers.join(', ')}); serão apagadas antes de recriar, se forem do mesmo usuário.`);
+      const tables = defs.map((d, i) => ({
+        table: d.table, code: C.consultaCode(d.table), current: pre.rm[d.table], sentenceChars: sentences[i].length,
+        rmRows: counts[i].rows, parts: counts[i].parts ? counts[i].parts.length : null, partColumn: C.partColumnOf(sys, d.table), countError: counts[i].error || null,
+        validations: d.validations.map((v) => ({ label: v.label, source: C.sourceOf(v.sql), carga: pre.src[C.sourceOf(v.sql)] ?? null })),
+      }));
+      for (const t of tables) {
+        if (t.countError) warnings.push(`${t.table}: a contagem no RM falhou (${t.countError}). Tire a tabela da lista ou corrija antes de executar.`);
+        else if (t.parts === 1 && t.rmRows > C.LIMITS.rowsPerPart) warnings.push(`${t.table}: ${t.rmRows.toLocaleString('pt-BR')} linhas numa chamada só (a tabela não tem coluna de divisão). É a mais pesada para o RM Host; avalie extrair em outro momento.`);
+        else if (t.rmRows > C.LIMITS.bigTable) warnings.push(`${t.table}: tabela grande (${t.rmRows.toLocaleString('pt-BR')} linhas), extraída em ${t.parts} partes, uma por vez.`);
+        for (const v of t.validations) if (v.carga === null) warnings.push(`Tabela da carga ${v.source} não existe na base: a validação de ${v.label} vai falhar.`);
+      }
+      const canExecute = pre.canCreate && pre.canAlter && pre.canInsert && tables.every((t) => !t.countError);
+      const body = { system: sys.id, params, tables: tables.map((t) => t.table), target: info, rm: { id: rmc.id, url: rmc.url, user: rmc.user }, sentences, outDir,
+        rmRows: counts.map((c) => c.rows), parts: counts.map((c) => c.parts) };
+      const hash = fingerprint(body);
+      const id = crypto.randomBytes(8).toString('hex');
+      plans.set(id, { id, hash, expiresAt: Date.now() + PLAN_TTL_MS, body, connFp: fingerprint([saved.id, saved.server, saved.port || null, saved.auth, saved.user || '', saved.passwordEnc || '']), rmFp: fingerprint([rmc.id, rmc.url, rmc.user, rmc.passwordEnc]) });
+      audit.log({ action: 'lv-conferencia', by: whoAmI(), detalhe: saved.name, server: db.label(saved), database: info.database, rm: rmc.url, tabelas: tables.length });
+      job.result = { plan: { planId: id, hash, expiresAt: Date.now() + PLAN_TTL_MS, target: { ...info, login: pre.identity.login, connectedTo: pre.identity.server }, rm: { name: rmc.name, url: rmc.url, user: rmc.user, ...rmInfo }, params, tables, warnings, canExecute, outDir, rowsPerPart: C.LIMITS.rowsPerPart } };
+      job.status = 'done'; job.done = job.total;
+    } catch (e) {
+      job.status = 'error'; job.error = e.message; job.say(`ERRO: ${e.message}`);
+    } finally { job.current = null; job.updatedAt = Date.now(); }
   });
 
   // ---------- Trabalhos ----------
@@ -204,11 +246,13 @@ function mount(app, deps, base) {
     if (fingerprint([saved.id, saved.server, saved.port || null, saved.auth, saved.user || '', saved.passwordEnc || '']) !== pl.connFp || fingerprint([rmc.id, rmc.url, rmc.user, rmc.passwordEnc]) !== pl.rmFp) throw httpError(409, 'Uma conexão foi alterada depois da conferência. Confira de novo.', { code: 'LV_PLAN_EXPIRED' });
     if (saved.env !== 'local' && b.confirmed !== true) {
       const env = { prod: 'PRODUÇÃO', hml: 'Homologação', dev: 'Desenvolvimento' }[saved.env] || saved.env;
-      throw httpError(409, `Executar a Validação de Carga?\n\nRM ${rmc.url}: criar, executar e apagar ${tables.length} consulta(s) temporária(s) ZMV.*\nBase ${env} ${saved.name} · ${info.database}: SUBSTITUIR ${tables.length} tabela(s) (cópia CSV da atual antes): ${tables.join(', ')}`, { code: 'LV_CONFIRM' });
+      const nParts = pl.body.parts.reduce((n, p) => n + p.length, 0);
+      throw httpError(409, `Executar a Validação de Carga?\n\nRM ${rmc.url}: criar, executar e apagar ${nParts} consulta(s) temporária(s) ZMV.*, uma por vez (${tables.length} tabela(s))\nBase ${env} ${saved.name} · ${info.database}: SUBSTITUIR ${tables.length} tabela(s) (cópia CSV da atual antes): ${tables.join(', ')}`, { code: 'LV_CONFIRM' });
     }
     plans.delete(pl.id); // uso único
     const sys = C.systemOf(system); const defs = C.pickTables(sys, tables);
-    const job = newJob('execute', defs.length * 2 + 1);
+    const planParts = pl.body.parts; const planRows = pl.body.rmRows;
+    const job = newJob('execute', planParts.reduce((n, p) => n + p.length, 0) + defs.length + 1);
     res.json({ jobId: job.id });
     const by = whoAmI(); const meta = { by, detalhe: saved.name, server: db.label(saved), database: info.database, rm: rmc.url };
     audit.log({ action: 'lv-execucao-iniciada', ...meta, tabelas: tables.join(', '), hash: pl.hash });
@@ -219,30 +263,43 @@ function mount(app, deps, base) {
       const rm = await rmOpen(rmc);
       const before = await RM.snapshot(rm);
       job.say(`RM: ${before.size} consultas antes (${[...before].filter((k) => k.split('|')[2].startsWith(C.PREFIX)).length} ZMV.*)`);
-      // 1) RM: até RM_PARALLEL tabelas ao mesmo tempo (cada uma: criar → executar → apagar)
-      const fetched = new Map(); const queue = defs.map((d, i) => ({ d, sql: sentences[i] }));
-      const workerRm = async () => {
-        for (let it = queue.shift(); it; it = queue.shift()) {
-          if (job.cancelRequested) { fetched.set(it.d.table, { error: 'cancelado antes de começar' }); continue; }
-          const code = C.consultaCode(it.d.table); const t0 = Date.now();
-          job.current = `RM: ${it.d.table}`;
-          try {
-            const r = await RM.extract(rm, { table: it.d.table, code, sentence: it.sql, coligada: params.coligada, codSistema: sys.codSistema, log: (m) => job.say(`[${it.d.table}] ${m}`) });
-            const columns = r.rows.length ? Object.keys(r.rows[0]) : [];
-            const rows = r.rows.map((o) => columns.map((c) => (o[c] === null || o[c] === undefined ? null : typeof o[c] === 'boolean' ? (o[c] ? '1' : '0') : String(o[c]))));
-            const file = path.join(tmp, `${it.d.table}.json`);
-            fs.writeFileSync(file, JSON.stringify({ columns, rows }));
-            fetched.set(it.d.table, { file, rows: rows.length, mb: (r.bytes / 1e6).toFixed(1), s: ((Date.now() - t0) / 1000).toFixed(1) });
-            job.say(`[${it.d.table}] RM: ${rows.length} linhas, ${(r.bytes / 1e6).toFixed(1)} MB, ${((Date.now() - t0) / 1000).toFixed(1)} s`);
-            audit.log({ action: 'lv-tabela-extraida', ...meta, tabela: it.d.table, consulta: code, linhas: rows.length });
-          } catch (e) {
-            fetched.set(it.d.table, { error: e.message });
-            job.say(`[${it.d.table}] ERRO no RM: ${e.message}`);
+      // 1) RM: UMA consulta por vez. Cada tabela sai nas partes da conferência (cada parte: criar → executar → apagar); o total
+      //    tem de bater com a contagem da conferência (senão os dados mudaram e a tabela não é gravada).
+      const fetched = new Map();
+      const cell = (v) => (v === null || v === undefined ? null : typeof v === 'boolean' ? (v ? '1' : '0') : String(v));
+      for (const [i, d] of defs.entries()) {
+        const parts = planParts[i];
+        if (job.cancelRequested) { fetched.set(d.table, { error: 'cancelado antes de começar' }); continue; }
+        const code = C.consultaCode(d.table); const col = C.partColumnOf(sys, d.table); const t0 = Date.now();
+        try {
+          let columns = null; const rows = []; let bytes = 0;
+          for (const [k, p] of parts.entries()) {
+            if (job.cancelRequested) throw new Error(`cancelado na parte ${k + 1} de ${parts.length} (as partes já lidas foram descartadas)`);
+            const tag = parts.length > 1 ? `${d.table} ${k + 1}/${parts.length}` : d.table;
+            job.current = `RM: ${tag}`;
+            const r = await RM.extract(rm, { table: d.table, code, sentence: C.partSql(sentences[i], col, p), coligada: params.coligada, codSistema: sys.codSistema, log: (m) => job.say(`[${tag}] ${m}`) });
+            if (r.rows.length) {
+              const cols = Object.keys(r.rows[0]);
+              if (!columns) columns = cols;
+              else if (cols.join('|') !== columns.join('|')) throw new Error(`a parte ${k + 1} veio com colunas diferentes das anteriores.`);
+            }
+            for (const o of r.rows) rows.push(columns.map((c) => cell(o[c])));
+            bytes += r.bytes;
+            if (parts.length > 1) job.say(`[${tag}] faixa ${C.partLabel(p)}: ${r.rows.length} linhas`);
+            job.done++; job.updatedAt = Date.now();
           }
-          job.done++; job.updatedAt = Date.now();
+          if (planRows[i] !== null && rows.length !== planRows[i]) throw new Error(`o RM devolveu ${rows.length} linhas e a conferência contou ${planRows[i]}: os dados mudaram desde a conferência. Confira de novo.`);
+          const file = path.join(tmp, `${d.table}.json`);
+          fs.writeFileSync(file, JSON.stringify({ columns: columns || [], rows }));
+          fetched.set(d.table, { file, rows: rows.length });
+          job.say(`[${d.table}] RM: ${rows.length} linhas em ${parts.length} parte(s), ${(bytes / 1e6).toFixed(1)} MB, ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+          audit.log({ action: 'lv-tabela-extraida', ...meta, tabela: d.table, consulta: code, linhas: rows.length, partes: parts.length });
+        } catch (e) {
+          fetched.set(d.table, { error: e.message });
+          job.say(`[${d.table}] ERRO no RM: ${e.message}`);
         }
-      };
-      await Promise.all(Array.from({ length: Math.min(RM_PARALLEL, defs.length) }, workerRm));
+        job.updatedAt = Date.now();
+      }
       const after = await RM.snapshot(rm);
       const leftovers = [...after].filter((k) => k.split('|')[2].startsWith(C.PREFIX)).map((k) => k.split('|')[2]);
       const others = [...before].filter((k) => !after.has(k)).concat([...after].filter((k) => !before.has(k))).filter((k) => !k.split('|')[2].startsWith(C.PREFIX));

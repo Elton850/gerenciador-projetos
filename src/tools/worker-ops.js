@@ -11,6 +11,12 @@ const OPS = {
   'dbx-profile': (core, a) => require('./db-explorer/sql').profile(core, a.conn, a.password, a.input),
   'dbx-check': (core, a) => require('./db-explorer/sql').checkRelationship(core, a.conn, a.password, a.input),
   'dbx-query': (core, a) => require('./db-explorer/sql').query(core, a.conn, a.password, a.input),
+  // Validação de Carga: leitura (transação desfeita) e substituição de UMA tabela do modelo por transação
+  'lv-precheck': (core, a) => require('./load-validator/sql').precheck(core, a.conn, a.password, a.input),
+  'lv-dump': (core, a) => require('./load-validator/sql').dump(core, a.conn, a.password, a.input),
+  'lv-replace': (core, a, ctx) => require('./load-validator/sql').replace(core, a.conn, a.password, a.input, ctx),
+  'lv-validate': (core, a, ctx) => require('./load-validator/sql').validate(core, a.conn, a.password, a.input, ctx),
+  'lv-keys': (core, a) => require('./load-validator/sql').keys(core, a.conn, a.password, a.input),
 };
 
 async function run(name, core, args, ctx) {

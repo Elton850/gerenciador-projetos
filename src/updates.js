@@ -172,11 +172,17 @@ function Save($status, $msg) {
   $o = [ordered]@{ status = $status; version = $env:GP_VERSION; from = $env:GP_FROM; message = $msg; at = (Get-Date).ToString('o') }
   [IO.File]::WriteAllText($out, ($o | ConvertTo-Json), (New-Object Text.UTF8Encoding $false))
 }
-function Retry([scriptblock]$b) { for ($i = 0; $i -lt 25; $i++) { try { & $b; return } catch { Start-Sleep -Milliseconds 400 } }; & $b }
+function Retry([scriptblock]$b) { for ($i = 0; $i -lt 60; $i++) { try { & $b; return } catch { Start-Sleep -Milliseconds 500 } }; & $b }
+function AppProcs { Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $env:GP_EXE } }
 function Launch([switch]$PassThru) { $a = @{ FilePath = $env:GP_EXE; WorkingDirectory = $app }; if ($env:GP_WINDOW_STYLE) { $a.WindowStyle = $env:GP_WINDOW_STYLE }; if ($PassThru) { $a.PassThru = $true }; Start-Process @a }
 function StartApp { Remove-Item env:GP_UPDATE_OK_FILE -ErrorAction SilentlyContinue; Launch | Out-Null }
 try { Wait-Process -Id ([int]$env:GP_PID) -Timeout 60 -ErrorAction SilentlyContinue } catch {}
 if (Get-Process -Id ([int]$env:GP_PID) -ErrorAction SilentlyContinue) { Save 'failed' 'O aplicativo não fechou a tempo; nada foi alterado.'; exit 1 }
+# Os processos filhos do Electron (GPU, renderização, utilitários) usam o mesmo .exe e fecham DEPOIS do principal, segurando o
+# app.asar: espera todos (até 30 s) e encerra os que sobrarem — o principal já saiu, então são restos do app que está fechando.
+$fim = (Get-Date).AddSeconds(30)
+while ((Get-Date) -lt $fim -and (AppProcs)) { Start-Sleep -Milliseconds 500 }
+if (AppProcs) { AppProcs | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 1 }
 Start-Sleep -Milliseconds 800
 try {
   if (Test-Path -LiteralPath $ant) { Retry { Remove-Item -LiteralPath $ant -Recurse -Force } }
@@ -193,7 +199,7 @@ $deadline = (Get-Date).AddSeconds([int]$env:GP_HEALTH_SECONDS)
 while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $okFile)) { Start-Sleep -Milliseconds 500 }
 if (Test-Path -LiteralPath $okFile) { Remove-Item -LiteralPath $okFile -Force; Save 'ok' ''; exit 0 }
 try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch {}
-Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $env:GP_EXE } | Stop-Process -Force -ErrorAction SilentlyContinue
+AppProcs | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 1
 Retry { Rename-Item -LiteralPath $res -NewName ('resources.falhou-' + (Get-Date -Format 'yyyyMMddHHmmss')) }
 Retry { Rename-Item -LiteralPath $ant -NewName 'resources' }

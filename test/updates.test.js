@@ -204,3 +204,21 @@ test('início independente (como o app real): o processo que pede a atualizaçã
   assert.equal(JSON.parse(fs.readFileSync(result, 'utf8')).status, 'ok');
   assert.equal(fs.readFileSync(path.join(client.resourcesDir, 'app.asar'), 'utf8'), 'CODIGO-1.1.0');
 });
+
+test('outro processo segurando o app.asar depois que o app fecha (filhos do Electron): espera e troca quando ele solta', async () => {
+  const client = fakeApp(path.join(tmp, 'notebook-filho-preso'), 'CODIGO-1.0.0'); trust(client);
+  await U.prepareUpdate({ channelDir: CANAL, lay: client, appVersion: '1.0.0', electron: ELECTRON });
+  // abre o app.asar sem compartilhamento por 22 s (o atualizador antigo desistia ~10 s depois de o app fechar)
+  const asar = path.join(client.resourcesDir, 'app.asar').replace(/'/g, "''");
+  const holder = spawn('powershell.exe', ['-NoProfile', '-Command', `$f = [IO.File]::Open('${asar}', 'Open', 'Read', 'None'); Start-Sleep -Seconds 22; $f.Close()`], { stdio: 'ignore' });
+  await new Promise((res) => setTimeout(res, 2500)); // garante o arquivo preso antes de o "app" fechar
+  const running = shortProcess();
+  const t0 = Date.now();
+  const code = await runUpdater({ lay: client, pid: running.pid, from: '1.0.0', version: '1.1.0', healthSeconds: 20 });
+  holder.kill();
+  const result = U.takeResult(client);
+  assert.equal(code, 0, JSON.stringify(result));
+  assert.ok(Date.now() - t0 > 8000, 'esperou o arquivo ser solto');
+  assert.equal(fs.readFileSync(path.join(client.resourcesDir, 'app.asar'), 'utf8'), 'CODIGO-1.1.0');
+  assert.equal(result.status, 'ok');
+});

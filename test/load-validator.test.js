@@ -505,7 +505,8 @@ test('API: várias coligadas no RM e na validação; RM vazio nas coligadas = na
   const job = await waitJob(go.json.jobId);
   assert.equal(job.status, 'done', JSON.stringify(job.log));
   assert.ok(fake.sentences.every((s) => /WHERE CODCOLIGADA IN \(1, 2, 9\)/.test(s)), 'o RM recebe só as coligadas escolhidas');
-  assert.match(job.result.extraction[0].status, /NÃO SUBSTITUÍDA.*a validação considera que nada desta carga subiu/);
+  assert.match(job.result.extraction[0].status, /RM SEM LINHAS.*cópia anterior \(5 linhas\) foi mantida.*a validação considera que nada desta carga subiu/);
+  assert.equal(job.result.extraction[0].state, 'empty');
   const val = sim.calls.find((c) => c.op === 'tool:lv-validate').input;
   assert.deepEqual(val.coligadas, [1, 2, 9]);
   assert.deepEqual(val.items.map((i) => [i.label, !!i.rmEmpty, !!i.skip]), [['PFHSTSAL', true, false], ['PFHSTFCO', false, false]]);
@@ -525,4 +526,22 @@ test('API: várias coligadas no RM e na validação; RM vazio nas coligadas = na
   // complemento: uma coligada por vez
   const comp = await api('POST', `${B}/complement`, { system: 'educacional', connectionId: conn.id, database: 'BASE_TESTE', coligadas: '1, 2', txtDir: out, outDir: out });
   assert.equal(comp.json.code, 'LV_ONE_COLIGADA');
+});
+
+test('API: RM sem linhas e sem cópia anterior não é erro (nada a gravar; validação = nada subiu) e a pasta ValidacaoCarga ganha .gitignore', async () => {
+  fake.consultas.clear(); sim.calls.length = 0;
+  fake.rows['ZMV.PFHSTNDP'] = []; // RM sem linhas e a base sem a tabela (sim.current não tem PFHSTNDP → null)
+  const conn = store.data.connections[0];
+  const rmId = store.data.tools.loadValidator.rm[0].id;
+  const out = fs.mkdtempSync(path.join(tmp, 'saida-'));
+  const plan = await conferir({ system: 'folha', rmId, connectionId: conn.id, database: 'BASE_TESTE', coligadas: '2', periods: '', tables: ['PFHSTNDP', 'PFHSTSAL'], outDir: out });
+  fake.rows['ZMV.PFHSTSAL'] = [];
+  const job = await waitJob((await api('POST', `${B}/plans/${plan.planId}/execute`, { hash: plan.hash, authorized: true, confirmed: true })).json.jobId);
+  assert.equal(job.status, 'done', JSON.stringify(job.log));
+  assert.deepEqual(job.result.extraction.map((e) => [e.table, e.state]), [['PFHSTSAL', 'empty'], ['PFHSTNDP', 'empty']], 'ordem do modelo');
+  assert.match(job.result.extraction.find((e) => e.table === 'PFHSTNDP').status, /RM SEM LINHAS.*nenhuma cópia foi criada/);
+  assert.equal(sim.calls.filter((x) => x.op === 'tool:lv-replace').length, 0, 'nada foi gravado na base');
+  assert.deepEqual(job.result.validation.map((v) => [v.label, v.rmEmpty]), [['PFHSTSAL', true]], 'PFHSTNDP não tem validação; PFHSTSAL = nada subiu');
+  const gi = path.join(out, 'ValidacaoCarga', '.gitignore');
+  assert.ok(fs.existsSync(gi)); assert.match(fs.readFileSync(gi, 'utf8'), /^\*$/m, 'ignora tudo: dados do cliente nunca vão para um commit');
 });

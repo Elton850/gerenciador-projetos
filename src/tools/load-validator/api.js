@@ -65,7 +65,15 @@ function mount(app, deps, base) {
     if (!st.isDirectory()) throw httpError(400, `A ${what} não é uma pasta: ${full}`);
     return full;
   }
-  const runDir = (outDir, kind) => { const d = path.join(outDir, 'ValidacaoCarga', `${stamp()}_${kind}`); fs.mkdirSync(d, { recursive: true }); return d; };
+  // A pasta ValidacaoCarga guarda dados do cliente (CSV das linhas da carga, cópias das tabelas): se a pasta de saída for um
+  // repositório Git, um .gitignore "*" dentro dela impede que esses arquivos entrem num commit por engano.
+  const runDir = (outDir, kind) => {
+    const root = path.join(outDir, 'ValidacaoCarga');
+    const d = path.join(root, `${stamp()}_${kind}`); fs.mkdirSync(d, { recursive: true });
+    const gi = path.join(root, '.gitignore');
+    try { if (!fs.existsSync(gi)) fs.writeFileSync(gi, '# Gerado pela Validação de Carga: dados do cliente, nunca versionar.\n*\n'); } catch { /* sem permissão: segue sem */ }
+    return d;
+  };
   const fileSafe = (s) => String(s).replace(/[^A-Za-z0-9]+/g, '_').replace(/^_|_$/g, '');
 
   // ---------- Estado / modelos ----------
@@ -332,14 +340,19 @@ function mount(app, deps, base) {
       try { writeSummary(dir, { target: info, rm: rmc, params, extraction, snapshot, partial: { done: 0, total: defs.length } }); } catch { /* idem */ }
       for (const d of defs) {
         const f = fetched.get(d.table);
-        if (job.cancelRequested) { extraction.push({ table: d.table, rows: null, status: 'NÃO GRAVADA (cancelado)' }); continue; }
-        if (!f || f.error) { extraction.push({ table: d.table, rows: null, status: `NÃO GRAVADA (erro no RM): ${f ? f.error : 'sem dados'}` }); status.set(d.table, 'erro no RM'); job.done++; continue; }
+        if (job.cancelRequested) { extraction.push({ table: d.table, rows: null, state: 'cancelled', status: 'NÃO GRAVADA (cancelado)' }); continue; }
+        if (!f || f.error) { extraction.push({ table: d.table, rows: null, state: 'error', status: `NÃO GRAVADA (erro no RM): ${f ? f.error : 'sem dados'}` }); status.set(d.table, 'erro no RM'); job.done++; continue; }
         job.current = `Base: ${d.table}`;
         try {
           const pre = await worker(conn, 'lv-precheck', { rmTables: [d.table], sourceTables: [] });
           const current = pre.rm[d.table];
-          // RM sem linhas nas coligadas: a cópia anterior fica (proteção), mas a validação NÃO a usa — considera que nada subiu
-          if (!f.rows && current) { extraction.push({ table: d.table, rows: 0, status: `NÃO SUBSTITUÍDA: o RM devolveu 0 linhas nas coligadas escolhidas; a cópia anterior (${current} linhas) foi mantida e a validação considera que nada desta carga subiu` }); status.set(d.table, 'empty'); job.done++; continue; }
+          // RM sem linhas nas coligadas: nada é gravado (a cópia anterior, se houver, fica — proteção); a validação NÃO a usa e
+          // considera que nada desta carga subiu. Sem cópia anterior não há colunas para criar a tabela: também não é erro.
+          if (!f.rows) {
+            const why = current ? `a cópia anterior (${current} linhas) foi mantida` : current === 0 ? 'a cópia anterior (vazia) foi mantida' : 'nenhuma cópia foi criada (sem linhas, o RM não informa as colunas)';
+            extraction.push({ table: d.table, rows: 0, state: 'empty', status: `RM SEM LINHAS nas coligadas escolhidas: ${why}; a validação considera que nada desta carga subiu` });
+            status.set(d.table, 'empty'); job.done++; continue;
+          }
           if (current !== null) {
             const bk = await worker(conn, 'lv-dump', { table: d.table, file: path.join(bkDir, `${d.table}_${stamp()}.csv`) });
             job.say(`[${d.table}] cópia da tabela atual: ${bk.rows} linhas (backup\\${d.table}_….csv)`);
@@ -349,12 +362,12 @@ function mount(app, deps, base) {
           const r = await worker(conn, 'lv-replace', { table: d.table, rowsFile: f.file, allowed: defs.map((x) => x.table), forceInsert: !bulkOk }, { signal: ac.signal, gracefulCancel: true, onProgress: (done, total) => { job.current = `Base: ${d.table} (${done}/${total})`; job.updatedAt = Date.now(); } });
           job.abort = null;
           if (r.bulkError) { bulkOk = false; job.say(`[${d.table}] gravação em massa recusada pelo servidor (${r.bulkError}); gravada pelo método de lotes, que será usado nas próximas tabelas.`); }
-          extraction.push({ table: d.table, rows: r.rows, status: `gravada: ${r.rows} linhas${current !== null ? ' (substituiu a anterior)' : ' (nova)'}` });
+          extraction.push({ table: d.table, rows: r.rows, state: 'ok', status: `gravada: ${r.rows} linhas${current !== null ? ' (substituiu a anterior)' : ' (nova)'}` });
           status.set(d.table, 'ok');
           job.say(`[${d.table}] base: gravada (${r.rows} linhas, ${r.mode === 'bulk' ? 'em massa' : 'em lotes'}, ${((Date.now() - t0) / 1000).toFixed(1)} s)`);
           audit.log({ action: 'lv-tabela-substituida', ...meta, tabela: d.table, linhas: r.rows, anterior: current, modo: r.mode });
         } catch (e) {
-          extraction.push({ table: d.table, rows: null, status: `ERRO ao gravar (tabela anterior mantida): ${db.friendly(e)}` });
+          extraction.push({ table: d.table, rows: null, state: 'error', status: `ERRO ao gravar (tabela anterior mantida): ${db.friendly(e)}` });
           status.set(d.table, 'erro ao gravar na base');
           job.say(`[${d.table}] ERRO ao gravar (tabela anterior mantida): ${db.friendly(e)}`);
         }
@@ -368,7 +381,7 @@ function mount(app, deps, base) {
       writeSummary(dir, { target: info, rm: rmc, params, extraction, validation, snapshot });
       job.result = { dir, extraction, validation, snapshot };
       job.status = job.cancelRequested ? 'cancelled' : 'done';
-      audit.log({ action: 'lv-execucao-concluida', ...meta, tabelas: defs.length, erros: extraction.filter((e) => !e.status.startsWith('gravada')).length });
+      audit.log({ action: 'lv-execucao-concluida', ...meta, tabelas: defs.length, erros: extraction.filter((e) => e.state === 'error').length, rmVazio: extraction.filter((e) => e.state === 'empty').length });
     } catch (e) {
       job.status = 'error'; job.error = e.message; job.say(`ERRO: ${e.message}`);
       try { writeSummary(dir, { target: info, rm: rmc, params, extraction, validation, snapshot }); } catch { /* ignora */ }

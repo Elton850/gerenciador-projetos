@@ -67,7 +67,7 @@ async function waitJob(id) { for (let i = 0; i < 600; i++) { const j = ok(await 
     assert.doesNotMatch(fs.readFileSync(path.join(job.result.dir, 'RESUMO.txt'), 'utf8'), /EM ANDAMENTO/, 'resumo final sem o aviso de execução parcial');
     assert.equal(fake.consultas.size, 0, 'nenhuma consulta temporária ficou no RM');
     const ex = Object.fromEntries(job.result.extraction.map((e) => [e.table, e]));
-    assert.match(ex.SALUNO.status, /NÃO SUBSTITUÍDA: o RM devolveu 0 linhas/);
+    assert.match(ex.SALUNO.status, /RM SEM LINHAS nas coligadas escolhidas: a cópia anterior \(1 linhas\) foi mantida/);
     assert.match(ex.STURMA.status, /gravada: 2 linhas \(substituiu a anterior\)/);
     assert.deepEqual((await q(DBN, 'SELECT COUNT(*) AS n FROM dbo.SALUNO'))[0].n, 1, 'SALUNO intacta');
     const st = await q(DBN, 'SELECT CODTURMA, NOME, IDPERLET, DTFINAL FROM dbo.STURMA ORDER BY CODTURMA');

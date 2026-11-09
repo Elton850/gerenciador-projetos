@@ -87,13 +87,13 @@
       if (!p) { planHost.replaceChildren(h('p', { class: 'muted' }, 'Clique em “Conferir” para ver o que será feito. A conferência só lê a base e conta as linhas no RM (uma consulta temporária de contagem por tabela, uma por vez, criada e apagada). Nada é gravado na base nem fica no RM.')); return; }
       auth.checked = false;
       planHost.replaceChildren(
-        h('div', { class: 'lv-facts' },
-          h('div', null, h('b', null, 'RM: '), `${p.rm.url} · usuário ${p.rm.user} · ${N(p.rm.consultas)} consulta(s) temporária(s) ZMV.* encontrada(s)`),
-          h('div', null, h('b', null, 'Base: '), `${p.target.connectionName} · ${p.target.server} · ${p.target.database} · login ${p.target.login}`, ' ', pill(p.target.env === 'prod' ? 'prod' : p.target.env === 'local' ? 'local' : 'soon', p.target.env || '—')),
-          h('div', null, h('b', null, 'Parâmetros: '), `coligada(s) ${(p.params.coligadas || [p.params.coligada]).join(', ')}${!sys.usesPeriods ? '' : p.params.periods.length ? ` · períodos ${p.params.periods.join(', ')}` : ' · todos os períodos'}`),
-          h('div', null, h('b', null, 'Saída: '), h('span', { class: 'mono' }, p.outDir))),
-        p.warnings.length ? h('ul', { class: 'lv-warn' }, p.warnings.map((w) => h('li', null, w))) : null,
-        h('div', { class: 'tablewrap' }, h('table', { class: 'compact' },
+        h('dl', { class: 'lv-kv' },
+          h('dt', null, 'RM'), h('dd', null, h('span', { class: 'mono' }, p.rm.url), h('span', { class: 'muted' }, ` · usuário ${p.rm.user} · ${N(p.rm.consultas)} consulta(s) ZMV.* já no RM`)),
+          h('dt', null, 'Base'), h('dd', null, `${p.target.connectionName} · ${p.target.server} · `, h('b', null, p.target.database), h('span', { class: 'muted' }, ` · login ${p.target.login} `), pill(p.target.env === 'prod' ? 'prod' : p.target.env === 'local' ? 'local' : 'soon', p.target.env || '—')),
+          h('dt', null, 'Coligada(s)'), h('dd', null, h('b', null, (p.params.coligadas || [p.params.coligada]).join(', ')), !sys.usesPeriods ? null : h('span', { class: 'muted' }, p.params.periods.length ? ` · períodos ${p.params.periods.join(', ')}` : ' · todos os períodos')),
+          h('dt', null, 'Saída'), h('dd', null, h('span', { class: 'mono' }, p.outDir))),
+        p.warnings.length ? h('ul', { class: 'lv-callout warn' }, p.warnings.map((w) => h('li', null, w))) : null,
+        h('div', { class: 'lv-tablewrap' }, h('table', { class: 'lv-table' },
           h('thead', null, h('tr', null, h('th', null, 'Tabela'), h('th', null, 'Consulta temporária no RM'), h('th', { class: 'num' }, 'Linhas no RM'), h('th', { class: 'num' }, 'Partes'), h('th', { class: 'num' }, 'Linhas hoje na base'), h('th', null, 'Validação'), h('th', { class: 'num' }, 'Carga'))),
           // tabela sem validação no modelo (ex.: PFHSTNDP da Folha) também aparece: uma linha com "sem validação"
           h('tbody', null, p.tables.flatMap((t) => { const vs = t.validations.length ? t.validations : [null]; return vs.map((v, i) => h('tr', null,
@@ -119,6 +119,7 @@
     }
     function follow(jobId) {
       clearTimeout(LV.poll);
+      if (LV.jobId !== jobId) { LV.jobId = jobId; LV.vfilter = 'all'; LV.vopen = new Set(); LV.extOpen = undefined; } // trabalho novo: visão padrão
       const tick = async () => {
         let j; try { j = await api('GET', `${BASE}/jobs/${jobId}`); } catch (e) { fail(e); return; }
         LV.job = j; drawJob();
@@ -127,32 +128,119 @@
       };
       tick();
     }
+    // ---- Resultado do trabalho: resumo no topo → validação (principal) → extração (recolhível) → arquivos → registro ----
+    const pctOf = (carga, missing) => (carga ? (100 * (carga - missing)) / carga : null);
+    const tone = (p) => (p === null ? 'none' : p >= 99.95 ? 'ok' : p <= 0.05 ? 'bad' : 'warn');
+    const fmtPct = (p) => (p === null ? '—' : `${p.toFixed(1).replace('.', ',')}%`);
+    // barra do "% no RM": verde = tudo subiu, laranja = parcial, vermelho = nada subiu
+    const meter = (p, title) => h('div', { class: `lv-meter ${tone(p)}`, title: title || null },
+      h('span', { class: 'lv-meter-bar' }, h('span', { style: `width:${p === null ? 0 : Math.max(0, Math.min(100, p))}%` })), h('span', { class: 'lv-meter-val' }, fmtPct(p)));
+    // situação curta da extração (o texto completo vai como detalhe, quebrando linha)
+    const extState = (e) => e.state || (e.status.startsWith('gravada') ? 'ok' : /SEM LINHAS|NÃO SUBSTITUÍDA/.test(e.status) ? 'empty' : /cancelad/i.test(e.status) ? 'cancelled' : 'error');
+    const EXT = { ok: ['ok', 'Gravada'], empty: ['soon', 'RM sem linhas'], error: ['overdue', 'Erro'], cancelled: ['none', 'Cancelada'] };
+    const detailOf = (s) => String(s).replace(/^[^:]*:\s*/, '');
+
+    function kpis(res) {
+      const ext = res.extraction || []; const val = res.validation || [];
+      const done = val.filter((v) => !v.error);
+      const carga = done.reduce((s, v) => s + (v.carga || 0), 0); const miss = done.reduce((s, v) => s + (v.missing || 0), 0);
+      const p = pctOf(carga, miss);
+      const count = (st) => ext.filter((e) => extState(e) === st).length;
+      const card = (label, value, sub, cls) => h('div', { class: `lv-kpi ${cls || ''}` }, h('span', { class: 'lv-kpi-label' }, label), h('span', { class: 'lv-kpi-value' }, value), sub ? h('span', { class: 'lv-kpi-sub' }, sub) : null);
+      const cards = [];
+      if (ext.length) cards.push(card('Tabelas', N(ext.length), [count('ok') ? `${count('ok')} gravada(s)` : null, count('empty') ? `${count('empty')} sem linhas no RM` : null, count('error') ? `${count('error')} com erro` : null].filter(Boolean).join(' · '), count('error') ? 'bad' : ''));
+      if (val.length) {
+        cards.push(card('Carga comparada', N(carga), `${done.length} de ${val.length} validação(ões)`));
+        cards.push(card('Não subiu', N(miss), miss ? 'linhas da carga fora do RM' : 'tudo da carga está no RM', miss ? 'bad' : 'ok'));
+        cards.push(h('div', { class: `lv-kpi ${tone(p)}` }, h('span', { class: 'lv-kpi-label' }, 'No RM'), h('span', { class: 'lv-kpi-value' }, fmtPct(p)), meter(p)));
+      }
+      if (res.snapshot) cards.push(card('Consultas ZMV.* no RM', res.snapshot.leftovers.length ? 'Sobrou' : 'Limpo', res.snapshot.leftovers.length ? res.snapshot.leftovers.join(', ') : `${N(res.snapshot.before)} antes · ${N(res.snapshot.after)} depois`, res.snapshot.leftovers.length ? 'bad' : 'ok'));
+      return cards.length ? h('div', { class: 'lv-kpis' }, cards) : null;
+    }
+
+    // filtro da lista de validações (fica entre redesenhos)
+    const VFILTERS = [['all', 'Todas'], ['pend', 'Com pendência'], ['ok', '100% no RM'], ['skip', 'Não validadas']];
+    const vMatch = (v, f) => (f === 'all' ? true : f === 'skip' ? !!v.error : f === 'ok' ? !v.error && !v.missing : !v.error && v.missing > 0);
+    // origem da carga só quando foge do padrão ZMIGRA_<tabela> (ex.: ZPESSOA, ZMIGRA_SPESSOA_SALUNO, SNOTAETAPA (FALTAS…))
+    const srcLine = (v) => (v.source && v.source !== `ZMIGRA_${v.label}` ? h('div', { class: 'lv-sub' }, 'carga: ', h('span', { class: 'mono' }, v.source)) : null);
+    function validationBlock(val) {
+      LV.vfilter = LV.vfilter || 'all'; LV.vopen = LV.vopen || new Set();
+      const f = LV.vfilter;
+      const chips = h('div', { class: 'lv-chips', role: 'tablist' }, VFILTERS.map(([id, name]) => {
+        const n = val.filter((v) => vMatch(v, id)).length;
+        return h('button', { class: `lv-chip${f === id ? ' on' : ''}`, onclick: () => { LV.vfilter = id; drawJob(); } }, name, h('span', { class: 'lv-chip-n' }, String(n)));
+      }));
+      const rows = [];
+      for (const v of val.filter((x) => vMatch(x, f))) {
+        if (v.error) {
+          rows.push(h('tr', { class: 'lv-row-skip' }, h('td', null, h('span', { class: 'mono lv-strong' }, v.label), srcLine(v)), h('td', { colspan: 4 }, pill(v.skipped ? 'soon' : 'overdue', v.skipped ? 'Não validada' : 'Erro'), h('div', { class: 'lv-sub' }, v.error))));
+          continue;
+        }
+        const p = pctOf(v.carga, v.missing);
+        const byC = (v.byColigada || []).filter(Boolean);
+        const multi = byC.length > 1; const key = v.label; const open = LV.vopen.has(key);
+        const toggle = multi ? h('button', { class: 'lv-toggle', 'aria-expanded': String(open), onclick: () => { if (open) LV.vopen.delete(key); else LV.vopen.add(key); drawJob(); } }, `${open ? '▾' : '▸'} ${byC.length} coligadas`) : null;
+        rows.push(h('tr', { class: `lv-row ${tone(p)}` },
+          h('td', null, h('span', { class: 'mono lv-strong' }, v.label), srcLine(v),
+            v.rmEmpty || v.scoped === false ? h('div', { class: 'lv-tags' },
+              v.rmEmpty ? h('span', { class: 'lv-tag bad', title: 'O RM não tem linhas desta tabela nas coligadas escolhidas: toda a carga delas conta como "não subiu"' }, 'RM sem linhas') : null,
+              v.scoped === false ? h('span', { class: 'lv-tag', title: 'A carga não tem a coluna CODCOLIGADA: comparada inteira' }, 'carga sem coligada') : null) : null,
+            toggle),
+          h('td', { class: 'num' }, N(v.carga)), h('td', { class: 'num' }, N((v.carga || 0) - (v.missing || 0))),
+          h('td', { class: 'num' }, v.missing ? h('span', { class: 'lv-bad-n' }, N(v.missing)) : '0'),
+          h('td', null, meter(p, v.file ? `Linhas que não subiram: ${v.file}` : null))));
+        if (multi && open) for (const b of byC) {
+          const bp = pctOf(b.carga, b.missing);
+          rows.push(h('tr', { class: `lv-row-sub${b.carga ? '' : ' off'}` },
+            h('td', null, `coligada ${b.coligada}`, b.carga ? null : h('span', { class: 'lv-sub' }, ' · sem carga')),
+            h('td', { class: 'num' }, N(b.carga)), h('td', { class: 'num' }, N(b.carga - b.missing)),
+            h('td', { class: 'num' }, b.missing ? h('span', { class: 'lv-bad-n' }, N(b.missing)) : '0'),
+            h('td', null, b.carga ? meter(bp) : h('span', { class: 'muted' }, '—'))));
+        }
+      }
+      return h('section', { class: 'lv-block' },
+        h('div', { class: 'lv-block-head' }, h('h3', null, 'Validação: carga × RM'), chips),
+        rows.length ? h('div', { class: 'lv-tablewrap' }, h('table', { class: 'lv-table' },
+          h('thead', null, h('tr', null, h('th', null, 'Tabela'), h('th', { class: 'num' }, 'Carga'), h('th', { class: 'num' }, 'No RM'), h('th', { class: 'num' }, 'Não subiu'), h('th', { class: 'lv-col-meter' }, '% no RM'))),
+          h('tbody', null, rows))) : h('p', { class: 'muted' }, 'Nenhuma validação neste filtro.'));
+    }
+    function extractionBlock(ext) {
+      const bad = ext.some((e) => extState(e) === 'error');
+      const counts = Object.entries(EXT).map(([k, [, name]]) => [name, ext.filter((e) => extState(e) === k).length]).filter(([, n]) => n).map(([name, n]) => `${n} ${name.toLowerCase()}`).join(' · ');
+      // aberta por padrão só quando há erro; a escolha do usuário vale entre redesenhos (filtros, recolher coligadas)
+      return h('details', { class: 'lv-block lv-fold', open: (LV.extOpen ?? bad) || null, ontoggle: (ev) => { LV.extOpen = ev.currentTarget.open; } },
+        h('summary', null, h('h3', null, 'Extração do RM → base'), h('span', { class: 'muted small' }, `${ext.length} tabela(s) · ${counts}`)),
+        h('div', { class: 'lv-tablewrap' }, h('table', { class: 'lv-table' },
+          h('thead', null, h('tr', null, h('th', null, 'Tabela'), h('th', { class: 'num' }, 'Linhas do RM'), h('th', null, 'Situação'))),
+          h('tbody', null, ext.map((e) => { const [cls, name] = EXT[extState(e)]; return h('tr', null,
+            h('td', { class: 'mono lv-strong' }, e.table), h('td', { class: 'num' }, N(e.rows)),
+            h('td', null, pill(cls, name), h('div', { class: 'lv-sub' }, detailOf(e.status)))); })))));
+    }
     function drawJob() {
       const j = LV.job; if (!j) { jobHost.replaceChildren(); return; }
       const pct = j.total ? (100 * j.done) / j.total : 0;
       const label = { precheck: 'Conferência (contagem no RM, uma tabela por vez)', execute: 'Extração e validação', validate: 'Validação (só leitura)', complement: 'Complemento' }[j.kind];
       const st = { running: pill('soon', 'Em andamento'), done: pill('ok', 'Concluído'), error: pill('overdue', 'Erro'), cancelled: pill('soon', 'Cancelado') }[j.status];
       const res = j.result || {};
+      const secs = j.startedAt && j.updatedAt ? Math.max(0, Math.round((j.updatedAt - j.startedAt) / 1000)) : null;
+      const dur = secs === null ? null : secs < 60 ? `${secs} s` : `${Math.floor(secs / 60)} min ${String(secs % 60).padStart(2, '0')} s`;
       jobHost.replaceChildren(h('div', { class: 'card lv-job' },
-        h('div', { class: 'inline' }, h('b', null, label), st, j.status === 'running' ? h('button', { class: 'btn ghost sm', onclick: () => api('POST', `${BASE}/jobs/${j.id}/cancel`).catch(fail) }, 'Cancelar') : null),
+        h('div', { class: 'lv-job-head' }, h('h2', null, label), st, dur && j.status !== 'running' ? h('span', { class: 'muted small' }, dur) : null, h('span', { class: 'grow' }),
+          j.status === 'running' ? h('button', { class: 'btn ghost sm', onclick: () => api('POST', `${BASE}/jobs/${j.id}/cancel`).catch(fail) }, 'Cancelar') : null),
         j.status === 'running' ? h('div', null, h('div', { class: 'progress' }, h('div', { style: `width:${pct}%` })), h('div', { class: 'muted small' }, j.current || '…')) : null,
-        j.error ? h('p', { class: 'lv-bad' }, j.error) : null,
-        res.dir ? h('p', { class: 'small' }, 'Arquivos em ', h('span', { class: 'mono' }, res.dir)) : null,
-        res.snapshot ? h('p', { class: 'small' }, `Consultas temporárias ZMV.* no RM: ${N(res.snapshot.before)} antes · ${N(res.snapshot.after)} depois · restantes: `, res.snapshot.leftovers.length ? pill('overdue', res.snapshot.leftovers.join(', ')) : pill('ok', 'nenhuma')) : null,
-        res.extraction ? resultTable(['Tabela', 'Linhas do RM', 'Situação'], res.extraction.map((e) => [h('span', { class: 'mono' }, e.table), N(e.rows), e.status.startsWith('gravada') ? pill('ok', e.status) : pill('overdue', e.status)])) : null,
-        // uma linha por validação e, com mais de uma coligada, uma linha por coligada logo abaixo
-        res.validation ? resultTable(['Validação', 'Origem', 'Carga', 'Não subiu', '% no RM'], res.validation.flatMap((v) => {
-          if (v.error) return [[v.label, v.source, '—', pill(v.skipped ? 'soon' : 'overdue', v.skipped ? 'não validada' : 'erro', v.error), v.error]];
-          const pc = (c, m) => (c ? `${(100 * (c - m) / c).toFixed(1)}%` : '—');
-          const head = [v.label, h('span', { class: 'mono', title: v.scoped === false ? 'A carga não tem CODCOLIGADA: comparada inteira' : null }, v.source, v.scoped === false ? ' (sem coligada)' : ''), N(v.carga), v.missing ? pill('overdue', N(v.missing)) : pill('ok', '0'), v.rmEmpty ? h('span', { title: 'O RM não tem linhas desta tabela nas coligadas escolhidas' }, pc(v.carga, v.missing), ' · RM vazio') : pc(v.carga, v.missing)];
-          const rows = (v.byColigada && v.byColigada.length > 1 ? v.byColigada : []).map((b) => [h('span', { class: 'muted small' }, `↳ coligada ${b.coligada}`), '', N(b.carga), b.missing ? pill('overdue', N(b.missing)) : pill('ok', '0'), pc(b.carga, b.missing)]);
-          return [head, ...rows];
-        })) : null,
-        res.rows ? resultTable(['TXT', 'No RM', 'Linhas no TXT', 'A subir', 'Só no RM', 'Situação'], res.rows.map((r) => [h('span', { class: 'mono' }, r.table), N(r.inRm), N(r.txtLines), r.toLoad ? pill('soon', N(r.toLoad)) : N(r.toLoad), N(r.onlyRm), r.status])) : null,
-        res.warnings && res.warnings.length ? h('ul', { class: 'lv-warn' }, res.warnings.map((w) => h('li', null, w))) : null,
+        j.error ? h('p', { class: 'lv-callout bad' }, j.error) : null,
+        j.kind !== 'precheck' && j.status !== 'running' ? kpis(res) : null,
+        res.validation ? validationBlock(res.validation) : null,
+        res.extraction ? extractionBlock(res.extraction) : null,
+        res.rows ? h('section', { class: 'lv-block' }, h('div', { class: 'lv-block-head' }, h('h3', null, 'Complemento: TXT × RM')),
+          h('div', { class: 'lv-tablewrap' }, h('table', { class: 'lv-table' },
+            h('thead', null, h('tr', null, ['TXT', 'No RM', 'Linhas no TXT', 'A subir', 'Só no RM', 'Situação'].map((x, i) => h('th', { class: i && i < 5 ? 'num' : null }, x)))),
+            h('tbody', null, res.rows.map((r) => h('tr', null, h('td', { class: 'mono lv-strong' }, r.table), h('td', { class: 'num' }, N(r.inRm)), h('td', { class: 'num' }, N(r.txtLines)), h('td', { class: 'num' }, r.toLoad ? pill('soon', N(r.toLoad)) : N(r.toLoad)), h('td', { class: 'num' }, N(r.onlyRm)), h('td', null, h('span', { class: 'lv-sub' }, r.status)))))))) : null,
+        res.warnings && res.warnings.length ? h('ul', { class: 'lv-callout warn' }, res.warnings.map((w) => h('li', null, w))) : null,
+        res.dir ? h('div', { class: 'lv-files' }, h('span', { class: 'muted small' }, 'Arquivos (resumo, linhas que não subiram, cópias):'), h('code', { class: 'mono' }, res.dir),
+          h('button', { class: 'btn ghost sm', onclick: () => navigator.clipboard.writeText(res.dir).then(() => toast('Caminho copiado.', 'ok'), fail) }, 'Copiar caminho')) : null,
         j.log && j.log.length ? h('details', { class: 'lv-log' }, h('summary', null, `Registro (${j.log.length})`), h('pre', null, j.log.join('\n'))) : null));
     }
-    const resultTable = (head, rows) => h('div', { class: 'tablewrap tall' }, h('table', { class: 'compact' }, h('thead', null, h('tr', null, head.map((x) => h('th', null, x)))), h('tbody', null, rows.map((r) => h('tr', null, r.map((c) => h('td', null, c)))))));
 
     const conferir = h('button', { class: 'btn', onclick: (e) => busy(e.currentTarget, async () => { LV.plan = null; drawPlan(); const r = await api('POST', `${BASE}/precheck`, params()); follow(r.jobId); }, 'Iniciando…') }, 'Conferir');
     const soValidar = h('button', { class: 'btn', onclick: (e) => busy(e.currentTarget, async () => { const p = params(); const r = await api('POST', `${BASE}/validate`, { system: p.system, connectionId: p.connectionId, database: p.database, coligadas: p.coligadas, tables: p.tables, outDir: p.outDir }); follow(r.jobId); }, 'Iniciando…') }, 'Só validar (somente leitura)');

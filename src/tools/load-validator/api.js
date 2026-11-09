@@ -72,7 +72,8 @@ function mount(app, deps, base) {
   app.get(`${base}/state`, (req, res) => {
     const s = state();
     res.json({
-      systems: Object.values(C.SYSTEMS).map((sy) => ({ id: sy.id, name: sy.name, ready: sy.ready, tables: sy.tables.map((t) => ({ table: t.table, code: C.consultaCode(t.table), validations: t.validations.map((v) => v.label), complement: sy.complement.some((k) => k.rmTable === t.table) })) })),
+      systems: Object.values(C.SYSTEMS).map((sy) => ({ id: sy.id, name: sy.name, ready: sy.ready,
+        usesPeriods: sy.tables.some((t) => t.rmSql.includes('{{CODPERLETS}}')), complementReady: sy.complement.length > 0, tables: sy.tables.map((t) => ({ table: t.table, code: C.consultaCode(t.table), validations: t.validations.map((v) => v.label), complement: sy.complement.some((k) => k.rmTable === t.table) })) })),
       rm: s.rm.map(S.publicRm), last: s.last,
     });
   });
@@ -184,8 +185,10 @@ function mount(app, deps, base) {
       }));
       for (const t of tables) {
         if (t.countError) warnings.push(`${t.table}: a contagem no RM falhou (${t.countError}). Tire a tabela da lista ou corrija antes de executar.`);
-        else if (t.parts === 1 && t.rmRows > C.LIMITS.rowsPerPart) warnings.push(`${t.table}: ${t.rmRows.toLocaleString('pt-BR')} linhas numa chamada só (a tabela não tem coluna de divisão). É a mais pesada para o RM Host; avalie extrair em outro momento.`);
+        else if (t.parts === 1 && t.rmRows > C.LIMITS.rowsPerPart) warnings.push(`${t.table}: ${t.rmRows.toLocaleString('pt-BR')} linhas numa chamada só (${t.partColumn ? `os valores de ${t.partColumn} não permitem dividir` : 'a tabela não tem coluna de divisão'}). É a mais pesada para o RM Host; avalie extrair em outro momento.`);
+        else if (t.parts > 1 && t.rmRows / t.parts > C.LIMITS.rowsPerPart) warnings.push(`${t.table}: ${t.rmRows.toLocaleString('pt-BR')} linhas em ${t.parts} partes, média de ${Math.round(t.rmRows / t.parts).toLocaleString('pt-BR')} por parte (acima do limite de ${C.LIMITS.rowsPerPart.toLocaleString('pt-BR')}: cada ${t.partColumn} já é uma parte). Pesada para o RM Host; avalie extrair em outro momento.`);
         else if (t.rmRows > C.LIMITS.bigTable) warnings.push(`${t.table}: tabela grande (${t.rmRows.toLocaleString('pt-BR')} linhas), extraída em ${t.parts} partes, uma por vez.`);
+        if (!t.validations.length) warnings.push(`${t.table}: o modelo não tem consulta de validação para esta tabela; ela só é extraída do RM para a base.`);
         for (const v of t.validations) if (v.carga === null) warnings.push(`Tabela da carga ${v.source} não existe na base: a validação de ${v.label} vai falhar.`);
       }
       const canExecute = pre.canCreate && pre.canAlter && pre.canInsert && tables.every((t) => !t.countError);
@@ -381,6 +384,7 @@ function mount(app, deps, base) {
     cleanup();
     const b = req.body || {};
     let sys; let params; try { sys = C.systemOf(b.system); params = C.cleanParams({ coligada: b.coligada, periods: '' }); } catch (e) { throw httpError(400, e.message); }
+    if (!sys.complement.length) throw httpError(400, `O complemento ainda não está disponível para ${sys.name} (o modelo não tem as chaves dos TXT).`, { code: 'LV_NO_COMPLEMENT' });
     const { saved, conn, info } = sqlTarget(b.connectionId, b.database);
     const txtDir = outDirOf(b.txtDir, 'pasta dos TXT do Hop');
     const outDir = outDirOf(b.outDir);

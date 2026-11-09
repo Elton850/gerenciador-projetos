@@ -2,6 +2,7 @@
 // temporárias no RM, trava de SELECT e a comparação do complemento (porta do gera_complemento.py).
 'use strict';
 const EDU = require('./catalog-educacional');
+const FOLHA = require('./catalog-folha');
 
 // Coluna usada para DIVIDIR a extração de cada tabela em partes (faixas de valor): um ID inteiro da tabela raiz que sai na consulta
 // e é chave (ou começo de chave) no RM, para cada parte ser uma leitura por faixa. Sem coluna = a tabela sai numa chamada só
@@ -14,10 +15,15 @@ const EDU_PARTS = {
   SPROVAS: 'IDTURMADISC', SNOTAETAPA: 'IDTURMADISC', SNOTAS: 'IDTURMADISC', SPLANOAULA: 'IDTURMADISC', SFREQUENCIA: 'IDTURMADISC',
 };
 
-// Sistemas da ferramenta. Folha ainda não tem modelo (a tela mostra "em breve").
+// Folha: só as tabelas grandes de competência têm um inteiro na consulta (ANOCOMP, começo da competência). As demais (férias,
+// históricos, dependentes) têm chave texto (CHAPA) e saem numa chamada só, com o aviso de tabela grande se passarem do limite.
+// Uma competência (ano) maior que o limite não se divide mais: a conferência avisa.
+const FOLHA_PARTS = { PFFINANC: 'ANOCOMP', PFPERFF: 'ANOCOMP' };
+
+// Sistemas da ferramenta. Folha = sistema P do RM (Folha de Pagamento), sem complemento (não há chaves de TXT da Folha).
 const SYSTEMS = {
   educacional: { id: 'educacional', name: 'Educacional', codSistema: 'S', tables: EDU.TABLES, complement: EDU.COMPLEMENT, ready: true, parts: EDU_PARTS },
-  folha: { id: 'folha', name: 'Folha', codSistema: 'P', tables: [], complement: [], ready: false },
+  folha: { id: 'folha', name: 'Folha', codSistema: 'P', tables: FOLHA.TABLES, complement: FOLHA.COMPLEMENT, ready: true, parts: FOLHA_PARTS },
 };
 
 const PREFIX = 'ZMV.'; // consultas temporárias desta ferramenta no RM (GCONSSQL.CODSENTENCA tem no máximo 16 caracteres)

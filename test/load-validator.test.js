@@ -33,7 +33,7 @@ test.after(() => { server.close(); fake.close(); fs.rmSync(tmp, { recursive: tru
 test('modelo Educacional: 24 tabelas, parâmetros só coligada/períodos, todas as consultas são SELECT', () => {
   const s = C.systemOf('educacional');
   assert.equal(s.tables.length, 24);
-  assert.throws(() => C.systemOf('folha'), /ainda não está disponível/);
+  assert.equal(C.systemOf('folha').ready, true);
   for (const t of s.tables) {
     const sql = C.renderRm(t, { coligada: 7, periods: '2030, 2031' });
     assert.ok(/^SELECT\b/.test(sql) && !/\{\{/.test(sql), t.table);
@@ -211,7 +211,9 @@ test('API: conexão do RM com senha DPAPI (nunca devolvida), registro na lista d
   assert.equal(t.ok, true);
   const st = (await api('GET', `${B}/state`)).json;
   assert.equal(st.rm[0].passwordEnc, undefined);
-  assert.equal(st.systems.find((s) => s.id === 'folha').ready, false);
+  const fo = st.systems.find((s) => s.id === 'folha');
+  assert.deepEqual([fo.ready, fo.usesPeriods, fo.complementReady, fo.tables.length], [true, false, false, 14]);
+  assert.deepEqual([st.systems[0].usesPeriods, st.systems[0].complementReady], [true, true]);
 });
 
 const conferir = async (req) => { const r = await api('POST', `${B}/precheck`, req); assert.equal(r.status, 200, JSON.stringify(r.json)); const j = await waitJob(r.json.jobId); assert.equal(j.status, 'done', JSON.stringify(j)); return j.result.plan; };
@@ -352,4 +354,73 @@ test('RM: a lista de consultas pede só as ZMV.* (leve para o RM.Host) e OutOfMe
   try {
     await assert.rejects(RM.snapshot({ ...RMCONN, url: `http://127.0.0.1:${srv.address().port}` }), /OutOfMemoryException.*SEM MEMÓRIA\. Nada foi feito pela ferramenta/);
   } finally { srv.close(); }
+});
+
+// ---------- Folha (sistema P do RM): modelo gerado do "SQL - VERIFICA DIFERENÇA ENTRE RM E ORIGEM" ----------
+test('Folha: 14 tabelas do arquivo de origem, coligada sempre filtrada, datas em texto e FORMAT só sobre datas convertidas', () => {
+  const s = C.systemOf('folha');
+  assert.equal(s.codSistema, 'P');
+  assert.deepEqual(s.tables.map((t) => t.table), ['PFDEPEND', 'PFUFERIAS', 'PFUFERIASPER', 'PFUFERIASRECIBO', 'PFUFERIASVERBAS', 'PFHSTSAL', 'PFHSTFCO', 'PFHSTSEC', 'PFHSTSIT', 'PFHSTCSD', 'PFHSTNDP', 'PFHSTAFT', 'PFPERFF', 'PFFINANC']);
+  assert.deepEqual(s.complement, []);
+  const codes = s.tables.map((t) => C.consultaCode(t.table));
+  assert.equal(new Set(codes).size, codes.length);
+  for (const t of s.tables) {
+    const sql = C.renderRm(t, { coligada: 7, periods: '' });
+    assert.match(sql, /\nWHERE CODCOLIGADA = 7$/, `${t.table}: coligada filtrada`);
+    const cols = C.outputColumns(sql);
+    assert.equal(new Set(cols).size, cols.length, t.table);
+    const converted = new Set([...sql.matchAll(/CONVERT\(VARCHAR\(19\), (\w+), 120\) AS \1/g)].map((m) => m[1]));
+    for (const v of t.validations) {
+      assert.ok(checkReadOnly(v.sql).ok, v.label);
+      assert.equal(C.sourceOf(v.sql), `ZMIGRA_${t.table}`, v.label);
+      assert.ok(!v.sql.includes(`FORMAT(${t.table}.`), `${t.table}: FORMAT direto sobre texto falharia`);
+      for (const m of v.sql.matchAll(new RegExp(String.raw`CAST\(${t.table}\.(\w+) AS DATE\)`, 'g'))) assert.ok(converted.has(m[1]), `${t.table}.${m[1]} usada como data mas não convertida no RM`);
+    }
+    const col = C.partColumnOf(s, t.table);
+    if (col) assert.ok(cols.includes(col), `${t.table}: coluna de divisão ${col}`);
+  }
+  assert.equal(s.tables.find((t) => t.table === 'PFHSTNDP').validations.length, 0, 'o arquivo de origem não tem validação de PFHSTNDP');
+  assert.deepEqual([C.partColumnOf(s, 'PFFINANC'), C.partColumnOf(s, 'PFPERFF'), C.partColumnOf(s, 'PFHSTSAL')], ['ANOCOMP', 'ANOCOMP', null]);
+});
+
+test('Folha: o catálogo é exatamente o que o gerador produz a partir do arquivo de origem', () => {
+  // --check só compara (sem gravar) e ignora CRLF × LF do checkout do Windows
+  const r = require('child_process').spawnSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'gera-catalogo-folha.js'), '--check'], { encoding: 'utf8' });
+  assert.equal(r.status, 0, `catalog-folha.js editado à mão ou desatualizado: rode node scripts/gera-catalogo-folha.js\n${r.stdout}${r.stderr}`);
+});
+
+test('API Folha: conferir → executar no sistema P, uma consulta por vez, PFFINANC em partes por ANOCOMP, sem complemento', async (t) => {
+  fake.consultas.clear(); fake.ops.length = 0; fake.urls.length = 0; sim.calls.length = 0;
+  fake.rows['ZMV.PFFINANC'] = [2021, 2022, 2023, 2024, 2025].flatMap((ano) => [1, 2].map((m) => ({ CODCOLIGADA: 7, CHAPA: '0001', ANOCOMP: ano, MESCOMP: m, NROPERIODO: 1, CODEVENTO: '001', DTPAGTO: `${ano}-0${m}-05 00:00:00`, REF: 30, VALOR: 1234.5, VALORORIGINAL: 1234.5 })));
+  fake.rows['ZMV.PFHSTNDP'] = [{ CODCOLIGADA: 7, CHAPA: '0001', DTMUDANCA: '2024-01-01 00:00:00', NRODEPENDIRRF: 1, NRODEPENDSALFAM: 0 }];
+  const limits = { ...C.LIMITS }; C.LIMITS.rowsPerPart = 4;
+  t.after(() => Object.assign(C.LIMITS, limits));
+  const conn = store.data.connections[0];
+  const rmId = store.data.tools.loadValidator.rm[0].id;
+  const out = fs.mkdtempSync(path.join(tmp, 'saida-'));
+  const plan = await conferir({ system: 'folha', rmId, connectionId: conn.id, database: 'BASE_TESTE', coligada: 7, periods: '', tables: ['PFHSTNDP', 'PFFINANC'], outDir: out });
+  assert.deepEqual(plan.tables.map((x) => [x.table, x.rmRows, x.parts]), [['PFHSTNDP', 1, 1], ['PFFINANC', 10, 3]]);
+  assert.ok(plan.warnings.some((w) => /PFHSTNDP: o modelo não tem consulta de validação/.test(w)), plan.warnings.join(' | '));
+  assert.ok(fake.urls.every((u) => /\/0\/P\?context=CODCOLIGADA%3D7$/.test(u)), `sistema P e coligada 7: ${fake.urls.join(' ')}`);
+  fake.ops.length = 0; fake.sentences.length = 0;
+  const go = await api('POST', `${B}/plans/${plan.planId}/execute`, { hash: plan.hash, authorized: true, confirmed: true });
+  const job = await waitJob(go.json.jobId);
+  assert.equal(job.status, 'done', JSON.stringify(job.log));
+  assert.deepEqual(job.result.extraction.map((e) => [e.table, e.rows]), [['PFHSTNDP', 1], ['PFFINANC', 10]]);
+  assert.ok(sequentialCycles(fake.ops), `uma consulta por vez (${fake.ops.join(', ')})`);
+  assert.deepEqual(fake.sentences.filter((s) => s.includes('FROM PFFINANC')).map((s) => (s.match(/WHERE Q\.\[ANOCOMP\] (.*)$/) || [])[1]), ['BETWEEN 2021 AND 2022', 'BETWEEN 2023 AND 2024', 'BETWEEN 2025 AND 2025']);
+  assert.equal(fake.consultas.size, 0, 'nada sobrou no RM');
+  assert.deepEqual(job.result.validation.map((v) => v.label), ['PFFINANC'], 'só as tabelas com validação no modelo');
+  const comp = await api('POST', `${B}/complement`, { system: 'folha', connectionId: conn.id, database: 'BASE_TESTE', coligada: 7, txtDir: out, outDir: out });
+  assert.equal(comp.json.code, 'LV_NO_COMPLEMENT');
+});
+
+test('RM: teste de conexão no sistema da Folha (P) só procura ZMV.TESTE e chama a API, sem criar nada', async () => {
+  fake.consultas.clear(); fake.ops.length = 0; fake.urls.length = 0;
+  const r = await RM.test(RMCONN, 'P');
+  assert.equal(r.ok, true);
+  assert.deepEqual(fake.ops, ['ReadRecord', 'GET ZMV.TESTE']);
+  assert.match(fake.urls[0], /\/ZMV\.TESTE\/0\/P$/);
+  assert.equal(fake.consultas.size, 0);
+  await assert.rejects(RM.test(RMCONN, 'P; X'), /Sistema inválido/);
 });

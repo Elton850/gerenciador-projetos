@@ -154,10 +154,12 @@ async function extract(rm, { table, code, sentence, coligada, codSistema = 'S', 
 }
 
 // Teste de conexão (só leitura): autenticação + leitura do cadastro de consultas SQL + API REST.
-async function test(rm) {
+// codSistema: S (Educacional) ou P (Folha). Nada é criado: ZMV.TESTE não existe e só é procurada.
+async function test(rm, codSistema = 'S') {
+  if (!/^[A-Z]$/.test(codSistema)) throw new Error('Sistema inválido.');
   const t0 = Date.now();
-  await readConsulta(rm, 'ZMV.TESTE');
-  const r = await request(rm, 'GET', '/api/framework/v1/consultaSQLServer/RealizaConsulta/ZMV.TESTE/0/S', { headers: { Accept: 'application/json' }, timeoutMs: 60000 });
+  await readConsulta(rm, 'ZMV.TESTE', codSistema);
+  const r = await request(rm, 'GET', `/api/framework/v1/consultaSQLServer/RealizaConsulta/ZMV.TESTE/0/${codSistema}`, { headers: { Accept: 'application/json' }, timeoutMs: 60000 });
   if (r.status === 401) throw Object.assign(new Error('A API REST recusou o usuário ou a senha (HTTP 401).'), { code: 'LV_RM_AUTH' });
   return { ok: true, ms: Date.now() - t0 };
 }

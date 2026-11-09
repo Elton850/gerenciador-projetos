@@ -384,10 +384,9 @@ test('Folha: 14 tabelas do arquivo de origem, coligada sempre filtrada, datas em
 });
 
 test('Folha: o catálogo é exatamente o que o gerador produz a partir do arquivo de origem', () => {
-  const file = path.join(__dirname, '..', 'src', 'tools', 'load-validator', 'catalog-folha.js');
-  const before = fs.readFileSync(file, 'utf8');
-  require('child_process').execFileSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'gera-catalogo-folha.js')], { stdio: 'ignore' });
-  assert.equal(fs.readFileSync(file, 'utf8'), before, 'catalog-folha.js editado à mão ou desatualizado: rode node scripts/gera-catalogo-folha.js');
+  // --check só compara (sem gravar) e ignora CRLF × LF do checkout do Windows
+  const r = require('child_process').spawnSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'gera-catalogo-folha.js'), '--check'], { encoding: 'utf8' });
+  assert.equal(r.status, 0, `catalog-folha.js editado à mão ou desatualizado: rode node scripts/gera-catalogo-folha.js\n${r.stdout}${r.stderr}`);
 });
 
 test('API Folha: conferir → executar no sistema P, uma consulta por vez, PFFINANC em partes por ANOCOMP, sem complemento', async (t) => {

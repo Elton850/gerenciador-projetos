@@ -74,6 +74,13 @@ const COMPLEMENT = [];
 
 module.exports = { TABLES, COMPLEMENT };
 `;
+// --check: só confere se o arquivo atual é a saída do gerador (ignora CRLF × LF do checkout do Windows); não grava nada.
+if (process.argv.includes('--check')) {
+  const norm = (s) => s.replace(/\r\n/g, '\n');
+  const same = fs.existsSync(OUT) && norm(fs.readFileSync(OUT, 'utf8')) === norm(head + body);
+  console.log(same ? 'catalog-folha.js confere com o arquivo de origem' : 'catalog-folha.js DIFERENTE do que o gerador produz: rode node scripts/gera-catalogo-folha.js');
+  process.exit(same ? 0 : 1);
+}
 fs.writeFileSync(OUT, head + body);
 console.log(`${tables.length} tabelas → ${path.relative(process.cwd(), OUT)}`);
 for (const t of tables) console.log(`  ${t.table.padEnd(16)} validações: ${t.validations.length}  (${t.title})`);

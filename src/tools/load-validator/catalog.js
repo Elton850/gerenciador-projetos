@@ -107,13 +107,17 @@ function partColumnOf(system, table) {
   if (col && !COL_RE.test(col)) throw new Error(`Coluna de divisão inválida em ${table}: ${col}`);
   return col;
 }
-const wrap = (sql) => `FROM (\n${sql}\n) AS Q`;
+// SQL que roda no RM montado pela ferramenta: só sintaxe comum a SQL Server E Oracle (o RM pode estar em qualquer um — a BOA
+// LOCAÇÃO é Oracle: COUNT_BIG, [colchetes] e "AS" no apelido de subselect deram ORA-00936 em 09/11/2026). Sem COUNT_BIG, sem
+// colchetes (a coluna já passou por COL_RE: só maiúsculas, dígitos e _), apelido do subselect sem AS.
+const wrap = (sql) => `FROM (\n${sql}\n) Q`;
 
 // Contagem no RM (só SQL no banco do RM; o Host devolve uma linha): total, não nulos, menor e maior valor da coluna de divisão.
 function statsSql(sql, col) {
+  if (col && !COL_RE.test(String(col))) throw new Error(`Coluna de divisão inválida: ${col}`);
   const out = col
-    ? `SELECT COUNT_BIG(*) AS N, COUNT_BIG(Q.[${col}]) AS NN, MIN(Q.[${col}]) AS LO, MAX(Q.[${col}]) AS HI ${wrap(sql)}`
-    : `SELECT COUNT_BIG(*) AS N ${wrap(sql)}`;
+    ? `SELECT COUNT(*) AS N, COUNT(Q.${col}) AS NN, MIN(Q.${col}) AS LO, MAX(Q.${col}) AS HI ${wrap(sql)}`
+    : `SELECT COUNT(*) AS N ${wrap(sql)}`;
   checkSelect(out);
   return out;
 }
@@ -140,8 +144,8 @@ function partSql(sql, col, part) {
   let where;
   if (part.kind === 'range') {
     if (!Number.isSafeInteger(part.lo) || !Number.isSafeInteger(part.hi)) throw new Error('Faixa de divisão inválida.');
-    where = `Q.[${col}] BETWEEN ${part.lo} AND ${part.hi}`;
-  } else if (part.kind === 'null') where = `Q.[${col}] IS NULL`;
+    where = `Q.${col} BETWEEN ${part.lo} AND ${part.hi}`;
+  } else if (part.kind === 'null') where = `Q.${col} IS NULL`;
   else throw new Error('Parte desconhecida.');
   const out = `SELECT * ${wrap(sql)} WHERE ${where}`;
   checkSelect(out);

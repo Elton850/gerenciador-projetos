@@ -167,7 +167,9 @@ test('partes: contagem, faixas e sentenças sobre a consulta do modelo (todas as
   assert.deepEqual(C.planParts({ N: 250, NN: 250, LO: 'A', HI: 'Z' }, 'ID', L), [{ kind: 'all' }], 'valores não inteiros: uma parte');
   assert.deepEqual(C.planParts({ N: 251, NN: 250, LO: 1, HI: 300 }, 'ID', L), [{ kind: 'range', lo: 1, hi: 100 }, { kind: 'range', lo: 101, hi: 200 }, { kind: 'range', lo: 201, hi: 300 }, { kind: 'null' }]);
   assert.equal(C.planParts({ N: 1e9, NN: 1e9, LO: 1, HI: 1e9 }, 'ID', L).length, 500, 'limite de partes');
-  assert.equal(C.partSql('SELECT ID FROM T', 'ID', { kind: 'range', lo: 1, hi: 9 }), 'SELECT * FROM (\nSELECT ID FROM T\n) AS Q WHERE Q.[ID] BETWEEN 1 AND 9');
+  assert.equal(C.partSql('SELECT ID FROM T', 'ID', { kind: 'range', lo: 1, hi: 9 }), 'SELECT * FROM (\nSELECT ID FROM T\n) Q WHERE Q.ID BETWEEN 1 AND 9');
+  assert.equal(C.statsSql('SELECT ID FROM T', 'ID'), 'SELECT COUNT(*) AS N, COUNT(Q.ID) AS NN, MIN(Q.ID) AS LO, MAX(Q.ID) AS HI FROM (\nSELECT ID FROM T\n) Q', 'SQL comum a SQL Server e Oracle');
+  assert.throws(() => C.statsSql('SELECT ID FROM T', 'id; DROP'), /inválida/);
   assert.equal(C.partSql('SELECT ID FROM T', 'ID', { kind: 'all' }), 'SELECT ID FROM T');
   assert.throws(() => C.partSql('SELECT ID FROM T', 'ID]; DROP', { kind: 'null' }), /inválida/);
   assert.throws(() => C.partSql('SELECT ID FROM T', 'ID', { kind: 'range', lo: '1 OR 1=1', hi: 2 }), /inválida/);
@@ -256,7 +258,7 @@ test('API: conferir (contagem no RM) → executar em partes, uma consulta por ve
   assert.deepEqual(job.result.extraction.map((e) => [e.table, e.rows]), [['STURMA', 2], ['SFREQUENCIA', 6]]);
   assert.equal(fake.ops.filter((o) => o === 'GET ZMV.SFREQUENCIA').length, 4, 'SFREQUENCIA em 4 partes');
   assert.ok(sequentialCycles(fake.ops), `execução: uma consulta por vez (${fake.ops.join(', ')})`);
-  assert.deepEqual(fake.sentences.filter((s) => s.includes('SFREQUENCIA')).map((s) => (s.match(/WHERE Q\.\[IDTURMADISC\] (.*)$/) || [])[1]), ['BETWEEN 1 AND 2', 'BETWEEN 3 AND 4', 'BETWEEN 5 AND 5', 'IS NULL']);
+  assert.deepEqual(fake.sentences.filter((s) => s.includes('SFREQUENCIA')).map((s) => (s.match(/WHERE Q\.IDTURMADISC (.*)$/) || [])[1]), ['BETWEEN 1 AND 2', 'BETWEEN 3 AND 4', 'BETWEEN 5 AND 5', 'IS NULL']);
   const ops = sim.calls.map((c) => c.op);
   assert.ok(ops.includes('tool:lv-dump'), 'cópia da tabela atual antes de substituir');
   assert.equal(ops.filter((o) => o === 'tool:lv-dump').length, 1, 'só a tabela que existia é copiada');
@@ -357,7 +359,10 @@ test('RM: a lista de consultas pede só as ZMV.* (leve para o RM.Host) e OutOfMe
 });
 
 // ---------- Folha (sistema P do RM): modelo gerado do "SQL - VERIFICA DIFERENÇA ENTRE RM E ORIGEM" ----------
-test('Folha: 14 tabelas do arquivo de origem, coligada sempre filtrada, datas em texto e FORMAT só sobre datas convertidas', () => {
+// Sintaxe que só existe no SQL Server: nada disso pode ir ao RM pela Folha nem pela contagem/partes (RM pode ser Oracle).
+const SQLSERVER_ONLY = /COUNT_BIG|\[|\)\s+AS\s+Q\b|CONVERT\(|\bTOP\s|ISNULL\(|GETDATE\(/i;
+
+test('Folha: 14 tabelas do arquivo de origem, coligada filtrada, SQL do RM neutro (SQL Server/Oracle) e datas tratadas na base', () => {
   const s = C.systemOf('folha');
   assert.equal(s.codSistema, 'P');
   assert.deepEqual(s.tables.map((t) => t.table), ['PFDEPEND', 'PFUFERIAS', 'PFUFERIASPER', 'PFUFERIASRECIBO', 'PFUFERIASVERBAS', 'PFHSTSAL', 'PFHSTFCO', 'PFHSTSEC', 'PFHSTSIT', 'PFHSTCSD', 'PFHSTNDP', 'PFHSTAFT', 'PFPERFF', 'PFFINANC']);
@@ -369,15 +374,21 @@ test('Folha: 14 tabelas do arquivo de origem, coligada sempre filtrada, datas em
     assert.match(sql, /\nWHERE CODCOLIGADA = 7$/, `${t.table}: coligada filtrada`);
     const cols = C.outputColumns(sql);
     assert.equal(new Set(cols).size, cols.length, t.table);
-    const converted = new Set([...sql.matchAll(/CONVERT\(VARCHAR\(19\), (\w+), 120\) AS \1/g)].map((m) => m[1]));
+    assert.doesNotMatch(sql, SQLSERVER_ONLY, `${t.table}: consulta do RM com sintaxe só de SQL Server`);
     for (const v of t.validations) {
       assert.ok(checkReadOnly(v.sql).ok, v.label);
       assert.equal(C.sourceOf(v.sql), `ZMIGRA_${t.table}`, v.label);
       assert.ok(!v.sql.includes(`FORMAT(${t.table}.`), `${t.table}: FORMAT direto sobre texto falharia`);
-      for (const m of v.sql.matchAll(new RegExp(String.raw`CAST\(${t.table}\.(\w+) AS DATE\)`, 'g'))) assert.ok(converted.has(m[1]), `${t.table}.${m[1]} usada como data mas não convertida no RM`);
+      assert.doesNotMatch(v.sql, new RegExp(String.raw`CAST\(${t.table}\.\w+ AS DATE\)`), `${t.table}: CAST direto falharia com o fuso da API`);
+      for (const m of v.sql.matchAll(new RegExp(String.raw`CAST\(LEFT\(${t.table}\.(\w+), 10\) AS DATE\)`, 'g'))) assert.ok(cols.includes(m[1]), `${t.table}.${m[1]} usada como data mas não vem do RM`);
     }
     const col = C.partColumnOf(s, t.table);
-    if (col) assert.ok(cols.includes(col), `${t.table}: coluna de divisão ${col}`);
+    if (col) {
+      assert.ok(cols.includes(col), `${t.table}: coluna de divisão ${col}`);
+      assert.doesNotMatch(C.statsSql(sql, col), SQLSERVER_ONLY);
+      assert.doesNotMatch(C.partSql(sql, col, { kind: 'range', lo: 2020, hi: 2021 }), SQLSERVER_ONLY);
+      assert.doesNotMatch(C.partSql(sql, col, { kind: 'null' }), SQLSERVER_ONLY);
+    } else assert.doesNotMatch(C.statsSql(sql, null), SQLSERVER_ONLY);
   }
   assert.equal(s.tables.find((t) => t.table === 'PFHSTNDP').validations.length, 0, 'o arquivo de origem não tem validação de PFHSTNDP');
   assert.deepEqual([C.partColumnOf(s, 'PFFINANC'), C.partColumnOf(s, 'PFPERFF'), C.partColumnOf(s, 'PFHSTSAL')], ['ANOCOMP', 'ANOCOMP', null]);
@@ -408,7 +419,7 @@ test('API Folha: conferir → executar no sistema P, uma consulta por vez, PFFIN
   assert.equal(job.status, 'done', JSON.stringify(job.log));
   assert.deepEqual(job.result.extraction.map((e) => [e.table, e.rows]), [['PFHSTNDP', 1], ['PFFINANC', 10]]);
   assert.ok(sequentialCycles(fake.ops), `uma consulta por vez (${fake.ops.join(', ')})`);
-  assert.deepEqual(fake.sentences.filter((s) => s.includes('FROM PFFINANC')).map((s) => (s.match(/WHERE Q\.\[ANOCOMP\] (.*)$/) || [])[1]), ['BETWEEN 2021 AND 2022', 'BETWEEN 2023 AND 2024', 'BETWEEN 2025 AND 2025']);
+  assert.deepEqual(fake.sentences.filter((s) => s.includes('FROM PFFINANC')).map((s) => (s.match(/WHERE Q\.ANOCOMP (.*)$/) || [])[1]), ['BETWEEN 2021 AND 2022', 'BETWEEN 2023 AND 2024', 'BETWEEN 2025 AND 2025']);
   assert.equal(fake.consultas.size, 0, 'nada sobrou no RM');
   assert.deepEqual(job.result.validation.map((v) => v.label), ['PFFINANC'], 'só as tabelas com validação no modelo');
   const comp = await api('POST', `${B}/complement`, { system: 'folha', connectionId: conn.id, database: 'BASE_TESTE', coligada: 7, txtDir: out, outDir: out });
@@ -423,4 +434,26 @@ test('RM: teste de conexão no sistema da Folha (P) só procura ZMV.TESTE e cham
   assert.match(fake.urls[0], /\/ZMV\.TESTE\/0\/P$/);
   assert.equal(fake.consultas.size, 0);
   await assert.rejects(RM.test(RMCONN, 'P; X'), /Sistema inválido/);
+});
+
+test('RM sobre ORACLE (BOA LOCAÇÃO): Folha confere e extrai; sintaxe só de SQL Server recebe o ORA-00936 real e a orientação', async (t) => {
+  fake.consultas.clear(); fake.ops.length = 0; sim.calls.length = 0; fake.oracle = true;
+  t.after(() => { fake.oracle = false; });
+  // erro real de 09/11/2026: o que a versão anterior mandava (COUNT_BIG / AS Q) é recusado e a consulta é apagada mesmo assim
+  await assert.rejects(RM.extract(RMCONN, { table: 'PFHSTSAL', code: 'ZMV.PFHSTSAL', sentence: 'SELECT COUNT_BIG(*) AS N FROM (\nSELECT CHAPA FROM PFHSTSAL\n) AS Q', coligada: 2, codSistema: 'P' }),
+    /HTTP 404.*ORA-00936.*ORACLE e recusou a consulta.*nada foi lido nem gravado/);
+  assert.equal(fake.consultas.size, 0, 'consulta recusada também é apagada');
+  // agora: contagem e extração da Folha passam no "Oracle"
+  fake.rows['ZMV.PFHSTSAL'] = [{ CODCOLIGADA: 2, CHAPA: '00001', DTMUDANCA: '2024-03-05T00:00:00-03:00', MOTIVO: '01', SALARIO: 2500.1 }];
+  const conn = store.data.connections[0];
+  const rmId = store.data.tools.loadValidator.rm[0].id;
+  const out = fs.mkdtempSync(path.join(tmp, 'saida-'));
+  const plan = await conferir({ system: 'folha', rmId, connectionId: conn.id, database: 'BASE_TESTE', coligada: 2, periods: '', tables: ['PFHSTSAL'], outDir: out });
+  assert.deepEqual(plan.tables.map((x) => [x.table, x.rmRows, x.parts, x.countError]), [['PFHSTSAL', 1, 1, null]]);
+  assert.equal(plan.canExecute, true);
+  const go = await api('POST', `${B}/plans/${plan.planId}/execute`, { hash: plan.hash, authorized: true, confirmed: true });
+  const job = await waitJob(go.json.jobId);
+  assert.equal(job.status, 'done', JSON.stringify(job.log));
+  assert.deepEqual(job.result.extraction.map((e) => [e.table, e.rows]), [['PFHSTSAL', 1]]);
+  assert.equal(fake.consultas.size, 0);
 });

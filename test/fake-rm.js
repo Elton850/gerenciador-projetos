@@ -31,7 +31,7 @@ function evaluate(sentence, rows) {
 }
 
 function createFakeRm() {
-  const fake = { consultas: new Map(), ops: [], restFail: false, hang: false, rows: {}, sentences: [], filters: [] };
+  const fake = { consultas: new Map(), ops: [], restFail: false, hang: false, rows: {}, sentences: [], filters: [], urls: [] };
   fake.server = http.createServer((req, res) => {
     const auth = Buffer.from(String(req.headers.authorization || '').replace(/^Basic /, ''), 'base64').toString();
     if (auth !== 'integracao:senha-ficticia') { res.writeHead(401); res.end(); return; }
@@ -39,7 +39,7 @@ function createFakeRm() {
     req.on('end', () => {
       if (req.method === 'GET' && req.url.startsWith('/api/framework/v1/consultaSQLServer/RealizaConsulta/')) {
         const code = decodeURIComponent(req.url.split('/')[6]);
-        fake.ops.push(`GET ${code}`);
+        fake.ops.push(`GET ${code}`); fake.urls.push(req.url);
         if (fake.hang) return; // RM que não responde (timeout do cliente); a conexão é derrubada em close()
         if (fake.restFail || !fake.consultas.has(code)) { res.writeHead(500, { 'Content-Type': 'application/json' }); res.end('{"message":"erro"}'); return; }
         const sentence = fake.consultas.get(code).sentence;

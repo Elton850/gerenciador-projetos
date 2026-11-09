@@ -27,7 +27,7 @@
       h('div', { class: 'page-head' }, h('div', { class: 'grow' },
         h('a', { class: 'link-quiet small', href: '#/tools' }, '← Ferramentas Auxiliares'),
         h('h1', null, tool ? tool.name : 'Validação de Carga'),
-        h('div', { class: 'muted' }, 'Confere se a carga foi de fato para o RM do cliente: extrai as tabelas do RM (consultas SQL temporárias pela API, criadas e apagadas a cada execução), grava cada uma na base de migração com o nome da tabela raiz, valida contra as ZMIGRA e gera os TXT complementares.'))),
+        h('div', { class: 'muted' }, 'Confere se a carga foi de fato para o RM do cliente: extrai as tabelas do RM (consultas SQL temporárias pela API, criadas e apagadas a cada execução), grava cada uma na base de migração com o nome da tabela raiz, valida contra as ZMIGRA e (no Educacional) gera os TXT complementares.'))),
       h('nav', { class: 'tabs', role: 'tablist' }, LV.state.systems.map((s) => h('button', { class: `tab${s.id === sys.id ? ' active' : ''}`, onclick: () => { if (!s.ready) { LV.system = s.id; rerender(); return; } LV.system = s.id; saveLast({ system: s.id }); rerender(); } }, s.name, s.ready ? null : h('span', { class: 'muted small' }, ' · em breve')))),
       sys.ready ? body(sys) : h('section', { class: 'card lv-section' }, h('h2', null, `${sys.name}: em breve`), h('p', { class: 'muted' }, 'O modelo de consultas e validações da Folha ainda não está disponível nesta versão. Por enquanto, a ferramenta atende o Educacional.'))));
   }
@@ -76,7 +76,7 @@
     const tblBoxes = sys.tables.map((t) => h('label', { class: 'check lv-tbl', title: `Consulta temporária no RM: ${t.code}\nValidações: ${t.validations.join(', ')}` },
       h('input', { type: 'checkbox', checked: chosen.has(t.table), onchange: (e) => { if (e.target.checked) chosen.add(t.table); else chosen.delete(t.table); saveLast({ tables: [...chosen] }); LV.plan = null; drawPlan(); } }), h('span', { class: 'mono' }, t.table)));
     const allBtn = (on) => h('button', { class: 'btn ghost sm', onclick: () => { if (on) sys.tables.forEach((t) => chosen.add(t.table)); else chosen.clear(); saveLast({ tables: [...chosen] }); rerender(); } }, on ? 'Todas' : 'Nenhuma');
-    const params = () => ({ system: sys.id, rmId: rmSel.value, connectionId: connSel.value, database: dbIn.value.trim(), coligada: colIn.value, periods: perIn.value, outDir: outF.get(), tables: sys.tables.map((t) => t.table).filter((t) => chosen.has(t)) });
+    const params = () => ({ system: sys.id, rmId: rmSel.value, connectionId: connSel.value, database: dbIn.value.trim(), coligada: colIn.value, periods: sys.usesPeriods ? perIn.value : '', outDir: outF.get(), tables: sys.tables.map((t) => t.table).filter((t) => chosen.has(t)) });
 
     // ---- 3. Conferir / executar ----
     const planHost = h('div'); const jobHost = h('div');
@@ -89,18 +89,19 @@
         h('div', { class: 'lv-facts' },
           h('div', null, h('b', null, 'RM: '), `${p.rm.url} · usuário ${p.rm.user} · ${N(p.rm.consultas)} consulta(s) temporária(s) ZMV.* encontrada(s)`),
           h('div', null, h('b', null, 'Base: '), `${p.target.connectionName} · ${p.target.server} · ${p.target.database} · login ${p.target.login}`, ' ', pill(p.target.env === 'prod' ? 'prod' : p.target.env === 'local' ? 'local' : 'soon', p.target.env || '—')),
-          h('div', null, h('b', null, 'Parâmetros: '), `coligada ${p.params.coligada}${p.params.periods.length ? ` · períodos ${p.params.periods.join(', ')}` : ' · todos os períodos'}`),
+          h('div', null, h('b', null, 'Parâmetros: '), `coligada ${p.params.coligada}${!sys.usesPeriods ? '' : p.params.periods.length ? ` · períodos ${p.params.periods.join(', ')}` : ' · todos os períodos'}`),
           h('div', null, h('b', null, 'Saída: '), h('span', { class: 'mono' }, p.outDir))),
         p.warnings.length ? h('ul', { class: 'lv-warn' }, p.warnings.map((w) => h('li', null, w))) : null,
         h('div', { class: 'tablewrap' }, h('table', { class: 'compact' },
           h('thead', null, h('tr', null, h('th', null, 'Tabela'), h('th', null, 'Consulta temporária no RM'), h('th', { class: 'num' }, 'Linhas no RM'), h('th', { class: 'num' }, 'Partes'), h('th', { class: 'num' }, 'Linhas hoje na base'), h('th', null, 'Validação'), h('th', { class: 'num' }, 'Carga'))),
-          h('tbody', null, p.tables.flatMap((t) => t.validations.map((v, i) => h('tr', null,
-            i === 0 ? h('td', { class: 'mono', rowspan: t.validations.length }, t.table) : null,
-            i === 0 ? h('td', { class: 'mono', rowspan: t.validations.length }, t.code) : null,
-            i === 0 ? h('td', { class: 'num', rowspan: t.validations.length }, t.countError ? pill('overdue', 'erro', t.countError) : N(t.rmRows)) : null,
-            i === 0 ? h('td', { class: 'num', rowspan: t.validations.length, title: t.partColumn ? `Dividida por faixas de ${t.partColumn} (até ${N(p.rowsPerPart)} linhas por parte)` : 'Sem coluna de divisão: uma chamada só' }, t.parts === null ? '—' : t.parts > 1 ? pill('soon', N(t.parts)) : '1') : null,
-            i === 0 ? h('td', { class: 'num', rowspan: t.validations.length }, t.current === null ? 'nova' : N(t.current)) : null,
-            h('td', null, v.label, ' ', h('span', { class: 'muted small mono' }, v.source)), h('td', { class: 'num' }, N(v.carga)))))))),
+          // tabela sem validação no modelo (ex.: PFHSTNDP da Folha) também aparece: uma linha com "sem validação"
+          h('tbody', null, p.tables.flatMap((t) => { const vs = t.validations.length ? t.validations : [null]; return vs.map((v, i) => h('tr', null,
+            i === 0 ? h('td', { class: 'mono', rowspan: vs.length }, t.table) : null,
+            i === 0 ? h('td', { class: 'mono', rowspan: vs.length }, t.code) : null,
+            i === 0 ? h('td', { class: 'num', rowspan: vs.length }, t.countError ? pill('overdue', 'erro', t.countError) : N(t.rmRows)) : null,
+            i === 0 ? h('td', { class: 'num', rowspan: vs.length, title: t.partColumn ? `Dividida por faixas de ${t.partColumn} (até ${N(p.rowsPerPart)} linhas por parte)` : 'Sem coluna de divisão: uma chamada só' }, t.parts === null ? '—' : t.parts > 1 ? pill('soon', N(t.parts)) : '1') : null,
+            i === 0 ? h('td', { class: 'num', rowspan: vs.length }, t.current === null ? 'nova' : N(t.current)) : null,
+            v ? h('td', null, v.label, ' ', h('span', { class: 'muted small mono' }, v.source)) : h('td', { class: 'muted' }, 'sem validação no modelo (só extrai)'), h('td', { class: 'num' }, v ? N(v.carga) : '—'))); })))),
         h('label', { class: 'check lv-auth' }, auth, h('span', null, h('b', null, 'Autorizo '), `criar, executar e apagar ${N(p.tables.reduce((n, t) => n + (t.parts || 0), 0))} consulta(s) temporária(s) ZMV.* no RM do cliente, uma por vez, e SUBSTITUIR ${p.tables.length} tabela(s) na base ${p.target.database} (uma cópia CSV da tabela atual é gravada antes, na pasta de saída).`)),
         h('div', { class: 'inline' }, h('button', { class: 'btn primary', disabled: !p.canExecute, onclick: (e) => busy(e.currentTarget, execute, 'Iniciando…') }, 'Extrair do RM e validar')));
     }
@@ -164,14 +165,15 @@
         h('div', { class: 'lv-grid' },
           field('API do RM', h('div', null, h('div', { class: 'inline' }, rmSel), rmButtons, rmStatus), 'Usuário com permissão de incluir, executar e excluir Consultas SQL. Endereço: https://servidor:porta.'),
           field('Base de migração', h('div', null, h('div', { class: 'inline' }, connSel), h('div', { class: 'inline' }, dbIn, testBase), baseStatus), sqlConns.length ? 'Onde estão as ZMIGRA. As cópias do RM são gravadas aqui (dbo.<TABELA>).' : h('a', { href: '#/settings' }, 'Cadastrar conexão em Configurações → Conexões')))),
-      sec(2, 'Parâmetros', 'Só a coligada e os períodos letivos entram nas consultas; o SQL é o modelo embutido do Educacional.',
-        h('div', { class: 'lv-grid' }, field('Coligada', colIn), field('Períodos letivos (frequência)', perIn), field('Pasta de saída', outF.el, 'Cada execução cria uma pasta nova em ValidacaoCarga\\ (resumo, linhas que não subiram, cópias das tabelas substituídas).')),
+      sec(2, 'Parâmetros', `Só ${sys.usesPeriods ? 'a coligada e os períodos letivos entram' : 'a coligada entra'} nas consultas; o SQL é o modelo embutido ${sys.id === 'folha' ? 'da Folha' : `do ${sys.name}`}.`,
+        h('div', { class: 'lv-grid' }, field('Coligada', colIn), sys.usesPeriods ? field('Períodos letivos (frequência)', perIn) : null, field('Pasta de saída', outF.el, 'Cada execução cria uma pasta nova em ValidacaoCarga\\ (resumo, linhas que não subiram, cópias das tabelas substituídas).')),
         h('div', { class: 'field' }, h('label', null, 'Tabelas'), h('div', { class: 'inline' }, allBtn(true), allBtn(false)), h('div', { class: 'lv-tables' }, tblBoxes))),
       sec(3, 'Extrair do RM e validar', 'Conferir lê a base e conta as linhas no RM. Executar cria/executa/apaga, uma por vez, as consultas temporárias no RM (tabelas grandes em partes) e substitui a tabela na base (uma transação por tabela).',
         h('div', { class: 'inline' }, conferir, soValidar), planHost),
-      sec(4, 'Gerar complemento', 'Compara os TXT do Hop com as tabelas do RM já gravadas na base e gera, numa pasta nova, só as linhas que ainda não estão no RM.',
+      sys.complementReady ? sec(4, 'Gerar complemento', 'Compara os TXT do Hop com as tabelas do RM já gravadas na base e gera, numa pasta nova, só as linhas que ainda não estão no RM.',
         h('div', { class: 'lv-grid' }, field('Pasta dos TXT do Hop', txtF.el), h('label', { class: 'check' }, incl, h('span', null, 'Copiar inteiros os TXT de tabelas ainda sem referência na base'))),
-        h('div', { class: 'inline' }, gerar)),
+        h('div', { class: 'inline' }, gerar))
+        : sec(4, 'Gerar complemento', `Ainda não disponível ${sys.id === 'folha' ? 'para a Folha' : `para ${sys.name}`}: o modelo não tem as chaves dos TXT do Hop. Extrair do RM e validar funcionam normalmente.`),
       jobHost);
     drawPlan(); drawJob();
     return wrap;

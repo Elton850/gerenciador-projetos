@@ -2,18 +2,18 @@
 // (cópia do "SQL - VERIFICA DIFERENÇA ENTRE RM E ORIGEM" da área de migração). Uso: node scripts/gera-catalogo-folha.js
 //
 // Cada bloco do arquivo: título entre linhas "=====", "-USAR NO RM" + consulta do RM e (quase sempre) a consulta de validação na
-// base de migração (ZMIGRA_* × cópia do RM). Adaptações — as MESMAS regras do modelo do Educacional, nada além disso:
+// base de migração (ZMIGRA_* × cópia do RM). Adaptações, nada além disso:
 //  1. Coligada: o arquivo da Folha não filtra; acrescenta "WHERE CODCOLIGADA = {{CODCOLIGADA}}" (o do Educacional já tinha o filtro).
-//  2. Datas: a cópia do RM é gravada como texto; datas saem do RM já em texto, CONVERT(VARCHAR(19), col, 120) = AAAA-MM-DD HH:MM:SS
-//     (o Educacional usa a mesma técnica com o estilo 23). Sem isso o RM devolve "2026-02-04T00:00:00-03:00".
-//  3. Validações: FORMAT(<tabela RM>.<data>, ...) vira FORMAT(CAST(<tabela RM>.<data> AS DATE), ...) — FORMAT não aceita texto.
+//     Fora isso a consulta do RM fica IGUAL à da origem: SQL simples, que roda em RM sobre SQL Server ou Oracle (sem CONVERT etc.).
+//  2. Datas, tratadas NA BASE DE MIGRAÇÃO (SQL Server): a cópia do RM é texto e a API devolve "2026-02-04T00:00:00-03:00"; nas
+//     validações, FORMAT(<tabela RM>.<data>, ...) e CAST(<tabela RM>.<data> AS DATE) viram ...CAST(LEFT(<tabela RM>.<data>, 10) AS DATE)...
+//     (os 10 primeiros caracteres = AAAA-MM-DD; FORMAT não aceita texto e CAST não aceita o fuso).
 'use strict';
 const fs = require('fs');
 const path = require('path');
 
 const SRC = path.join(__dirname, '..', 'docs', 'fontes', 'SQL FOLHA - VERIFICA DIFERENCA ENTRE RM E ORIGEM.txt');
 const OUT = path.join(__dirname, '..', 'src', 'tools', 'load-validator', 'catalog-folha.js');
-const DATE_COL = /^(DT\w*|DATA\w*|\w*PERAQUIS)$/;
 
 function blocks(text) {
   const lines = text.replace(/\r\n/g, '\n').split('\n');
@@ -45,12 +45,14 @@ function adaptRm(sql) {
   if (!m) throw new Error(`consulta do RM fora do formato esperado:\n${sql}`);
   const cols = m[1].split(',').map((c) => c.trim()).filter(Boolean);
   const table = m[2].toUpperCase();
-  const sel = cols.map((c) => (DATE_COL.test(c) ? `CONVERT(VARCHAR(19), ${c}, 120) AS ${c}` : c));
-  return { table, cols, sql: `SELECT\n  ${sel.join(',\n  ')}\nFROM ${table}\nWHERE CODCOLIGADA = {{CODCOLIGADA}}` };
+  if (cols.some((c) => !/^[A-Z][A-Z0-9_]*$/i.test(c))) throw new Error(`consulta do RM com expressão (só colunas simples):\n${sql}`);
+  return { table, cols, sql: `SELECT\n  ${cols.join(',\n  ')}\nFROM ${table}\nWHERE CODCOLIGADA = {{CODCOLIGADA}}` };
 }
 
 function adaptValidation(sql, table) {
-  return sql.replace(new RegExp(`FORMAT\\(\\s*${table}\\.(\\w+)\\s*,`, 'g'), (_, c) => `FORMAT(CAST(${table}.${c} AS DATE),`)
+  const day = (c) => `CAST(LEFT(${table}.${c}, 10) AS DATE)`;
+  return sql.replace(new RegExp(`CAST\\(\\s*${table}\\.(\\w+)\\s+AS\\s+DATE\\s*\\)`, 'gi'), (_, c) => day(c))
+    .replace(new RegExp(`FORMAT\\(\\s*${table}\\.(\\w+)\\s*,`, 'g'), (_, c) => `FORMAT(${day(c)},`)
     .replace(/[ \t]+$/gm, '').replace(/\t/g, ' ');
 }
 
@@ -61,8 +63,8 @@ const tables = blocks(fs.readFileSync(SRC, 'utf8')).map((b) => {
 });
 
 const head = `// GERADO por scripts/gera-catalogo-folha.js a partir de docs/fontes/"SQL FOLHA - VERIFICA DIFERENCA ENTRE RM E ORIGEM.txt".
-// Não editar à mão: rode o gerador. Adaptações (iguais às do Educacional): filtro da coligada, datas do RM em texto
-// (CONVERT 120) e CAST(... AS DATE) nas validações. Parâmetro: {{CODCOLIGADA}}.
+// Não editar à mão: rode o gerador. Adaptações: filtro da coligada (consulta do RM igual à da origem, roda em SQL Server ou
+// Oracle) e datas tratadas na base: CAST(LEFT(col, 10) AS DATE) nas validações. Parâmetro: {{CODCOLIGADA}}.
 // TABLES: ordem do arquivo de origem. rmSql roda NO RM (consulta temporária, sistema P); validations rodam NA BASE DE MIGRAÇÃO (só
 // leitura) e devolvem as linhas da carga (ZMIGRA_*) que não estão na cópia do RM. COMPLEMENT: vazio (não há chaves de TXT da Folha).
 'use strict';

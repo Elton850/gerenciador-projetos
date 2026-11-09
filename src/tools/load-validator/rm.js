@@ -63,8 +63,14 @@ async function soap(rm, op, fields, { allowWrite = false } = {}) {
   return m && m[1] !== undefined ? sanitize(unesc(m[1])) : '';
 }
 
-// Erro de falta de memória do próprio RM.Host: diz o que fazer (não é a ferramenta; insistir piora).
-const hostHint = (text) => (/OutOfMemoryException/i.test(String(text)) ? ' — O servidor do RM (RM.Host) está SEM MEMÓRIA. Nada foi feito pela ferramenta. Não tente de novo agora: aguarde ou peça à TOTVS/ao cliente o reinício do serviço do RM.' : '');
+// Erros do RM que pedem orientação: falta de memória do próprio RM.Host (não é a ferramenta; insistir piora) e erro do Oracle
+// (ORA-nnnnn: o banco do RM é Oracle e recusou o SQL ao interpretar — nada foi lido nem gravado; a consulta temporária é apagada).
+const hostHint = (text) => {
+  const t = String(text);
+  if (/OutOfMemoryException/i.test(t)) return ' — O servidor do RM (RM.Host) está SEM MEMÓRIA. Nada foi feito pela ferramenta. Não tente de novo agora: aguarde ou peça à TOTVS/ao cliente o reinício do serviço do RM.';
+  if (/\bORA-\d{5}\b/.test(t)) return ' — O banco deste RM é ORACLE e recusou a consulta ao interpretar o SQL: nada foi lido nem gravado, e a consulta temporária é apagada em seguida. A consulta do modelo usa algo que só existe no SQL Server: avise o desenvolvimento da ferramenta com esta mensagem.';
+  return '';
+};
 
 const ctx = (rm, codSistema = 'S') => `CODCOLIGADA=0;CODSISTEMA=${codSistema};CODUSUARIO=${rm.user}`;
 const tagText = (xml, tag) => { const m = String(xml).match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`)); return m ? unesc(m[1]) : null; };

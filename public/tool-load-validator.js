@@ -32,13 +32,48 @@
       sys.ready ? body(sys) : h('section', { class: 'card lv-section' }, h('h2', null, `${sys.name}: em breve`), h('p', { class: 'muted' }, 'O modelo de consultas e validações da Folha ainda não está disponível nesta versão. Por enquanto, a ferramenta atende o Educacional.'))));
   }
 
-  const sec = (n, title, sub, ...content) => h('section', { class: 'card lv-section' },
-    h('div', { class: 'lv-head' }, h('span', { class: 'lv-step' }, String(n)), h('div', null, h('h2', null, title), sub ? h('div', { class: 'muted small' }, sub) : null)), ...content);
+  const sec = (n, title, sub, ...content) => secB(n, title, sub, null, ...content);
+  // seção numerada com selo de estado à direita (Pronto / Falta …)
+  const secB = (n, title, sub, badge, ...content) => h('section', { class: 'card lv-section' },
+    h('div', { class: 'lv-head' }, h('span', { class: 'lv-step' }, String(n)), h('div', { class: 'grow' }, h('h2', null, title), sub ? h('div', { class: 'muted small' }, sub) : null), badge), ...content);
+
+  // Grupos de tabelas (só apresentação): nome do grupo e descrição curta de cada tabela do RM. Tabela fora dos grupos → "Outras".
+  const GROUPS = {
+    folha: [
+      ['Dependentes', [['PFDEPEND', 'Dependentes']]],
+      ['Férias', [['PFUFERIAS', 'Período aquisitivo'], ['PFUFERIASPER', 'Período de gozo'], ['PFUFERIASRECIBO', 'Recibo de férias'], ['PFUFERIASVERBAS', 'Verbas de férias']]],
+      ['Históricos', [['PFHSTSAL', 'Salário'], ['PFHSTFCO', 'Função'], ['PFHSTSEC', 'Seção'], ['PFHSTSIT', 'Situação'], ['PFHSTCSD', 'Contribuição sindical'], ['PFHSTNDP', 'Nº de dependentes'], ['PFHSTAFT', 'Afastamento']]],
+      ['Ficha financeira', [['PFPERFF', 'Períodos da ficha'], ['PFFINANC', 'Ficha financeira']]],
+    ],
+    educacional: [
+      ['Pessoas', [['PPESSOA', 'Pessoas'], ['SALUNO', 'Alunos'], ['SPROFESSOR', 'Professores']]],
+      ['Cursos e habilitações', [['SGRADE', 'Grades'], ['SPERIODO', 'Períodos da grade'], ['SDISCGRADE', 'Disciplinas da grade'], ['SHABILITACAOFILIAL', 'Habilitação × filial'], ['SHABILITACAOFILIALPL', 'Habilitação × período letivo'], ['SHABILITACAOALUNO', 'Habilitação do aluno']]],
+      ['Turmas e horários', [['STURMA', 'Turmas'], ['STURMADISC', 'Turma × disciplina'], ['SPROFESSORTURMA', 'Professor da turma'], ['SHORARIOTURMA', 'Horários da turma'], ['SHORARIOPROFESSOR', 'Horários do professor']]],
+      ['Matrículas, notas e frequência', [['SETAPAS', 'Etapas'], ['SMATRICPL', 'Matrícula no período'], ['SMATRICULA', 'Matrícula na disciplina'], ['SPROVAS', 'Provas'], ['SNOTAETAPA', 'Notas/faltas por etapa'], ['SNOTAS', 'Notas das provas'], ['SPLANOAULA', 'Plano de aula'], ['SFREQUENCIA', 'Frequência']]],
+      ['Histórico escolar', [['SHISTALUNOCOL', 'Histórico do aluno'], ['SHISTDISCCOL', 'Histórico de disciplinas']]],
+    ],
+  };
+  function groupsOf(sys) {
+    const byName = new Map(sys.tables.map((t) => [t.table, t])); const used = new Set();
+    const out = (GROUPS[sys.id] || []).map(([name, list]) => [name, list.filter(([t]) => byName.has(t)).map(([t, desc]) => { used.add(t); return { ...byName.get(t), desc }; })]).filter(([, l]) => l.length);
+    const rest = sys.tables.filter((t) => !used.has(t.table));
+    if (rest.length) out.push(['Outras', rest]);
+    return out;
+  }
+  // Mesma regra do servidor (catalog.cleanColigadas): inteiros 0–32767, até 50, sem repetir.
+  function parseColigadas(text) {
+    const parts = String(text || '').split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean);
+    if (!parts.length) return { list: [], error: null };
+    const bad = parts.find((x) => !/^\d{1,5}$/.test(x) || Number(x) > 32767);
+    if (bad) return { list: [], error: `“${bad}” não é uma coligada válida (use números separados por vírgula).` };
+    const list = [...new Set(parts.map(Number))].sort((a, b) => a - b);
+    return list.length > 50 ? { list: [], error: 'No máximo 50 coligadas por execução.' } : { list, error: null };
+  }
 
   function body(sys) {
     const L = last();
     // ---- 1. Conexões ----
-    const rmSel = h('select', { onchange: () => { saveLast({ rmId: rmSel.value }); LV.plan = null; drawPlan(); } },
+    const rmSel = h('select', { onchange: () => { saveLast({ rmId: rmSel.value }); LV.plan = null; drawPlan(); refresh(); } },
       h('option', { value: '' }, LV.state.rm.length ? 'Escolha a conexão do RM…' : 'Nenhuma conexão do RM cadastrada'),
       LV.state.rm.map((c) => h('option', { value: c.id, selected: c.id === L.rmId }, `${c.name} — ${c.url} (${c.user})`)));
     const rmStatus = h('span', { class: 'muted small' });
@@ -49,6 +84,7 @@
         if (!rmSel.value) throw new Error('Escolha uma conexão do RM.');
         const r = await api('POST', `${BASE}/rm/${rmSel.value}/test`);
         rmStatus.replaceChildren(r.ok ? pill('ok', `Conectado (${r.ms} ms)`) : pill('overdue', 'Falhou', r.error), r.ok ? null : h('span', null, ` ${r.error}`));
+        LV.tested.rm = r.ok ? rmSel.value : null; refresh();
       }, 'Testando…') }, 'Testar'),
       h('button', { class: 'btn ghost', onclick: async () => {
         const c = LV.state.rm.find((x) => x.id === rmSel.value); if (!c) return;
@@ -56,7 +92,7 @@
         try { await api('DELETE', `${BASE}/rm/${c.id}`); toast('Conexão removida.', 'ok'); rerender(); } catch (e) { fail(e); }
       } }, 'Remover'));
     const sqlConns = LV.conns.filter((c) => c.server);
-    const connSel = h('select', { onchange: () => { const c = LV.conns.find((x) => x.id === connSel.value); if (c && c.database && !dbIn.value) dbIn.value = c.database; saveLast({ connectionId: connSel.value }); LV.plan = null; drawPlan(); } },
+    const connSel = h('select', { onchange: () => { const c = LV.conns.find((x) => x.id === connSel.value); if (c && c.database && !dbIn.value) dbIn.value = c.database; saveLast({ connectionId: connSel.value }); LV.plan = null; drawPlan(); refresh(); } },
       h('option', { value: '' }, sqlConns.length ? 'Escolha a conexão da base de migração…' : 'Nenhuma conexão cadastrada'),
       sqlConns.map((c) => h('option', { value: c.id, selected: c.id === L.connectionId }, `${c.name} — ${c.server}${c.env ? ` [${c.env}]` : ''}`)));
     const dbIn = h('input', { type: 'text', value: L.database || '', placeholder: 'Banco da base de migração', onchange: () => { saveLast({ database: dbIn.value.trim() }); LV.plan = null; drawPlan(); } });
@@ -65,6 +101,7 @@
       const r = await api('POST', `${BASE}/base/test`, { connectionId: connSel.value, database: dbIn.value.trim() });
       baseStatus.replaceChildren(r.ok ? pill('ok', `Conectado como ${r.login}`) : pill('overdue', 'Falhou', r.error),
         r.ok ? h('span', null, ` · ${r.connectedTo} · ${r.database}${r.canCreate && r.canAlter && r.canInsert ? ' · pode criar/gravar tabelas' : ' · SEM permissão para criar/gravar tabelas'}`) : h('span', null, ` ${r.error}`));
+      LV.tested.base = r.ok ? `${connSel.value}|${dbIn.value.trim()}` : null; refresh();
     }, 'Testando…') }, 'Testar');
 
     // ---- 2. Parâmetros ----
@@ -72,11 +109,60 @@
     const colIn = h('input', { type: 'text', value: L.coligadas ?? (L.coligada ?? ''), placeholder: 'Ex.: 1 ou 1, 2, 5', onchange: () => { saveLast({ coligadas: colIn.value.trim() }); LV.plan = null; drawPlan(); } });
     const perIn = h('input', { type: 'text', value: L.periods || '', placeholder: "Ex.: 2026, 2027 (vazio = todos)", onchange: () => { saveLast({ periods: perIn.value }); LV.plan = null; drawPlan(); } });
     const outF = pathField({ value: L.outDir || '', kind: 'folder', title: 'Pasta de saída da Validação de Carga' });
-    outF.input.addEventListener('change', () => { saveLast({ outDir: outF.get() }); LV.plan = null; drawPlan(); });
-    const chosen = new Set(Array.isArray(L.tables) && L.tables.length ? L.tables : sys.tables.map((t) => t.table));
-    const tblBoxes = sys.tables.map((t) => h('label', { class: 'check lv-tbl', title: `Consulta temporária no RM: ${t.code}\nValidações: ${t.validations.join(', ')}` },
-      h('input', { type: 'checkbox', checked: chosen.has(t.table), onchange: (e) => { if (e.target.checked) chosen.add(t.table); else chosen.delete(t.table); saveLast({ tables: [...chosen] }); LV.plan = null; drawPlan(); } }), h('span', { class: 'mono' }, t.table)));
-    const allBtn = (on) => h('button', { class: 'btn ghost sm', onclick: () => { if (on) sys.tables.forEach((t) => chosen.add(t.table)); else chosen.clear(); saveLast({ tables: [...chosen] }); rerender(); } }, on ? 'Todas' : 'Nenhuma');
+    outF.input.addEventListener('change', () => { saveLast({ outDir: outF.get() }); LV.plan = null; drawPlan(); refresh(); });
+    // tabelas escolhidas: só as deste sistema (a escolha salva pode ser do outro); nenhuma salva = todas
+    const savedTables = (Array.isArray(L.tables) ? L.tables : []).filter((t) => sys.tables.some((x) => x.table === t));
+    const chosen = new Set(savedTables.length ? savedTables : sys.tables.map((t) => t.table));
+    const cbs = new Map();
+    const groupUi = groupsOf(sys).map(([name, list]) => {
+      const count = h('span', { class: 'lv-count' });
+      const toggle = h('button', { class: 'lv-link', type: 'button', onclick: () => { const allOn = list.every((t) => chosen.has(t.table)); list.forEach((t) => (allOn ? chosen.delete(t.table) : chosen.add(t.table))); syncTables(); } });
+      const items = list.map((t) => {
+        const cb = h('input', { type: 'checkbox', checked: chosen.has(t.table), onchange: (e) => { if (e.target.checked) chosen.add(t.table); else chosen.delete(t.table); syncTables(); } });
+        cbs.set(t.table, cb);
+        return h('label', { class: 'lv-tbl', title: `Consulta temporária no RM: ${t.code}${t.validations.length ? `\nValidação: ${t.validations.join(', ')}` : '\nSem validação no modelo: só extrai do RM'}` },
+          cb, h('span', { class: 'lv-tbl-txt' }, h('span', { class: 'mono lv-tbl-name' }, t.table), t.desc ? h('span', { class: 'lv-tbl-desc' }, t.desc) : null),
+          t.validations.length ? null : h('span', { class: 'lv-tag', title: 'O modelo não tem consulta de validação para esta tabela' }, 'só extrai'));
+      });
+      const update = () => { const n = list.filter((t) => chosen.has(t.table)).length; count.textContent = `${n}/${list.length}`; count.classList.toggle('on', n > 0); toggle.textContent = n === list.length ? 'desmarcar' : 'marcar todas'; };
+      return { el: h('fieldset', { class: 'lv-group' }, h('legend', null, h('span', null, name), count, toggle), h('div', { class: 'lv-group-items' }, items)), update };
+    });
+    const tblTotal = h('span', { class: 'lv-count on' });
+    function syncTables() {
+      for (const [t, cb] of cbs) cb.checked = chosen.has(t);
+      groupUi.forEach((g) => g.update());
+      tblTotal.textContent = `${chosen.size} de ${sys.tables.length}`;
+      saveLast({ tables: [...chosen] }); LV.plan = null; drawPlan(); refresh();
+    }
+    const allBtn = (on) => h('button', { class: 'btn ghost sm', type: 'button', onclick: () => { if (on) sys.tables.forEach((t) => chosen.add(t.table)); else chosen.clear(); syncTables(); } }, on ? 'Todas' : 'Nenhuma');
+
+    // coligadas conferidas na hora (o servidor valida de novo): chips com as que vão entrar, ou o erro
+    const colInfo = h('div', { class: 'lv-colinfo' });
+    colIn.addEventListener('input', () => refresh());
+    dbIn.addEventListener('input', () => refresh());
+
+    // estado de cada passo (selo no cabeçalho) e o que ainda falta para conferir
+    const badge1 = h('span'); const badge2 = h('span'); const missingHint = h('span', { class: 'muted small' });
+    LV.tested = LV.tested || {};
+    function refresh() {
+      const cols = parseColigadas(colIn.value);
+      colInfo.replaceChildren(...(cols.error ? [h('span', { class: 'lv-colerr' }, cols.error)]
+        : cols.list.length ? [h('span', { class: 'muted small' }, `${cols.list.length} coligada(s):`), ...cols.list.map((c) => h('span', { class: 'lv-colchip' }, String(c)))] : []));
+      const connOk = !!(rmSel.value && connSel.value && dbIn.value.trim());
+      const tested = LV.tested.rm === rmSel.value && LV.tested.base === `${connSel.value}|${dbIn.value.trim()}`;
+      badge1.replaceChildren(connOk ? pill('ok', tested ? 'Testado' : 'Escolhido', tested ? 'RM e base testados nesta tela' : 'Conexões escolhidas (use Testar para conferir)') : pill('soon', 'Falta escolher'));
+      const miss = [];
+      if (!rmSel.value) miss.push('conexão do RM');
+      if (!connSel.value || !dbIn.value.trim()) miss.push('base de migração');
+      if (cols.error || !cols.list.length) miss.push('coligada(s)');
+      if (!chosen.size) miss.push('tabelas');
+      if (!outF.get()) miss.push('pasta de saída');
+      const p2 = !cols.error && cols.list.length && chosen.size && outF.get();
+      badge2.replaceChildren(p2 ? pill('ok', `${chosen.size} tabela(s) · ${cols.list.length} coligada(s)`) : pill('soon', 'Falta preencher'));
+      conferir.disabled = miss.length > 0;
+      soValidar.disabled = !connSel.value || !dbIn.value.trim() || !chosen.size || !outF.get() || !!cols.error;
+      missingHint.textContent = miss.length ? `Para conferir, falta: ${miss.join(', ')}.` : '';
+    }
     const params = () => ({ system: sys.id, rmId: rmSel.value, connectionId: connSel.value, database: dbIn.value.trim(), coligadas: colIn.value.trim(), periods: sys.usesPeriods ? perIn.value : '', outDir: outF.get(), tables: sys.tables.map((t) => t.table).filter((t) => chosen.has(t)) });
 
     // ---- 3. Conferir / executar ----
@@ -242,7 +328,7 @@
         j.log && j.log.length ? h('details', { class: 'lv-log' }, h('summary', null, `Registro (${j.log.length})`), h('pre', null, j.log.join('\n'))) : null));
     }
 
-    const conferir = h('button', { class: 'btn', onclick: (e) => busy(e.currentTarget, async () => { LV.plan = null; drawPlan(); const r = await api('POST', `${BASE}/precheck`, params()); follow(r.jobId); }, 'Iniciando…') }, 'Conferir');
+    const conferir = h('button', { class: 'btn primary', onclick: (e) => busy(e.currentTarget, async () => { LV.plan = null; drawPlan(); const r = await api('POST', `${BASE}/precheck`, params()); follow(r.jobId); }, 'Iniciando…') }, 'Conferir');
     const soValidar = h('button', { class: 'btn', onclick: (e) => busy(e.currentTarget, async () => { const p = params(); const r = await api('POST', `${BASE}/validate`, { system: p.system, connectionId: p.connectionId, database: p.database, coligadas: p.coligadas, tables: p.tables, outDir: p.outDir }); follow(r.jobId); }, 'Iniciando…') }, 'Só validar (somente leitura)');
 
     // ---- 4. Complemento ----
@@ -257,21 +343,28 @@
     }, 'Iniciando…') }, 'Gerar complemento');
 
     const wrap = h('div', { class: 'lv-flow' },
-      sec(1, 'Conexões', 'API do RM do cliente (senha protegida pelo Windows) e a base de migração (conexão cadastrada).',
+      secB(1, 'Conexões', 'API do RM do cliente (senha protegida pelo Windows) e a base de migração onde estão as ZMIGRA.', badge1,
+        h('div', { class: 'lv-grid lv-conn' },
+          h('div', { class: 'lv-box' }, h('div', { class: 'lv-box-title' }, 'API do RM'), h('div', { class: 'lv-row-ctl' }, rmSel), rmButtons, rmStatus,
+            h('div', { class: 'muted small' }, 'Usuário com permissão de incluir, executar e excluir Consultas SQL.')),
+          h('div', { class: 'lv-box' }, h('div', { class: 'lv-box-title' }, 'Base de migração'), h('div', { class: 'lv-row-ctl' }, connSel), h('div', { class: 'lv-row-ctl' }, dbIn, testBase), baseStatus,
+            sqlConns.length ? h('div', { class: 'muted small' }, 'As cópias do RM são gravadas aqui (dbo.<TABELA>).') : h('a', { class: 'small', href: '#/settings' }, 'Cadastrar conexão em Configurações → Conexões')))),
+      secB(2, 'Parâmetros', `Só ${sys.usesPeriods ? 'a coligada e os períodos letivos entram' : 'a coligada entra'} nas consultas; o SQL é o modelo embutido ${sys.id === 'folha' ? 'da Folha' : `do ${sys.name}`}.`, badge2,
         h('div', { class: 'lv-grid' },
-          field('API do RM', h('div', null, h('div', { class: 'inline' }, rmSel), rmButtons, rmStatus), 'Usuário com permissão de incluir, executar e excluir Consultas SQL. Endereço: https://servidor:porta.'),
-          field('Base de migração', h('div', null, h('div', { class: 'inline' }, connSel), h('div', { class: 'inline' }, dbIn, testBase), baseStatus), sqlConns.length ? 'Onde estão as ZMIGRA. As cópias do RM são gravadas aqui (dbo.<TABELA>).' : h('a', { href: '#/settings' }, 'Cadastrar conexão em Configurações → Conexões')))),
-      sec(2, 'Parâmetros', `Só ${sys.usesPeriods ? 'a coligada e os períodos letivos entram' : 'a coligada entra'} nas consultas; o SQL é o modelo embutido ${sys.id === 'folha' ? 'da Folha' : `do ${sys.name}`}.`,
-        h('div', { class: 'lv-grid' }, field('Coligada(s)', colIn, 'Uma ou várias, separadas por vírgula. O RM traz só essas coligadas e a validação conta só elas na carga (ZMIGRA com várias coligadas), com o resultado por coligada.'), sys.usesPeriods ? field('Períodos letivos (frequência)', perIn) : null, field('Pasta de saída', outF.el, 'Cada execução cria uma pasta nova em ValidacaoCarga\\ (resumo, linhas que não subiram, cópias das tabelas substituídas).')),
-        h('div', { class: 'field' }, h('label', null, 'Tabelas'), h('div', { class: 'inline' }, allBtn(true), allBtn(false)), h('div', { class: 'lv-tables' }, tblBoxes))),
-      sec(3, 'Extrair do RM e validar', 'Conferir lê a base e conta as linhas no RM. Executar cria/executa/apaga, uma por vez, as consultas temporárias no RM (tabelas grandes em partes) e substitui a tabela na base (uma transação por tabela).',
-        h('div', { class: 'inline' }, conferir, soValidar), planHost),
+          field('Coligada(s)', h('div', null, colIn, colInfo), 'Uma ou várias, separadas por vírgula. O RM traz só essas e a validação conta só elas na carga, com o resultado por coligada.'),
+          sys.usesPeriods ? field('Períodos letivos (frequência)', perIn) : null,
+          field('Pasta de saída', outF.el, 'Cada execução cria uma pasta nova em ValidacaoCarga\\ (protegida contra commit no Git).')),
+        h('div', { class: 'lv-tables-head' }, h('b', null, 'Tabelas'), tblTotal, h('span', { class: 'grow' }), allBtn(true), allBtn(false)),
+        h('div', { class: 'lv-groups' }, groupUi.map((g) => g.el))),
+      secB(3, 'Extrair do RM e validar', 'Conferir lê a base e conta as linhas no RM (nada é gravado). Depois, Executar extrai uma tabela por vez e substitui a cópia na base (uma transação por tabela).', null,
+        h('div', { class: 'lv-actions' }, conferir, soValidar, missingHint), planHost),
       sys.complementReady ? sec(4, 'Gerar complemento', 'Compara os TXT do Hop com as tabelas do RM já gravadas na base e gera, numa pasta nova, só as linhas que ainda não estão no RM.',
         h('div', { class: 'lv-grid' }, field('Pasta dos TXT do Hop', txtF.el), h('label', { class: 'check' }, incl, h('span', null, 'Copiar inteiros os TXT de tabelas ainda sem referência na base'))),
         h('div', { class: 'inline' }, gerar))
         : sec(4, 'Gerar complemento', `Ainda não disponível ${sys.id === 'folha' ? 'para a Folha' : `para ${sys.name}`}: o modelo não tem as chaves dos TXT do Hop. Extrair do RM e validar funcionam normalmente.`),
       jobHost);
-    drawPlan(); drawJob();
+    groupUi.forEach((g) => g.update()); tblTotal.textContent = `${chosen.size} de ${sys.tables.length}`;
+    drawPlan(); drawJob(); refresh();
     return wrap;
   }
 

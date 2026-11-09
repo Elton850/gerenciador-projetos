@@ -11,6 +11,7 @@
 'use strict';
 const fs = require('fs');
 const { checkReadOnly } = require('../db-explorer/readonly');
+const C = require('./catalog'); // regras puras (filtro de coligada na validação)
 
 const q = (s) => `[${String(s).replace(/\]/g, ']]')}]`;
 const NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
@@ -58,17 +59,21 @@ async function precheck(core, conn, password, { rmTables, sourceTables }) {
 }
 
 const csvCell = (v) => { if (v === null || v === undefined) return ''; if (v instanceof Date) v = v.toISOString().replace('T', ' ').replace(/\.000Z$|Z$/, ''); const s = String(v); return /[;"\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-// Lê uma consulta em streaming e grava em CSV (;, UTF-8 com BOM). Devolve { columns, rows }.
+// Lê uma consulta em streaming e grava em CSV (;, UTF-8 com BOM). Devolve { columns, rows, byColigada } — byColigada conta as
+// linhas pela primeira coluna CODCOLIGADA (a da carga: as validações começam por ZMIGRA_*.*), se houver.
 function streamToCsv(req, sql, file) {
   return new Promise((resolve, reject) => {
     const out = fs.createWriteStream(file, { encoding: 'utf8' });
     out.write('﻿');
-    let columns = null; let rows = 0; let failed = null;
+    let columns = null; let rows = 0; let failed = null; let colIdx = -1; const byColigada = {};
     req.stream = true; req.arrayRowMode = true;
-    req.on('recordset', (cols) => { columns = (Array.isArray(cols) ? cols : Object.values(cols).sort((a, b) => a.index - b.index)).map((c) => c.name); out.write(`${columns.map(csvCell).join(';')}\r\n`); });
-    req.on('row', (r) => { rows++; out.write(`${columns.map((c, i) => csvCell(Array.isArray(r) ? r[i] : r[c])).join(';')}\r\n`); });
+    req.on('recordset', (cols) => { columns = (Array.isArray(cols) ? cols : Object.values(cols).sort((a, b) => a.index - b.index)).map((c) => c.name); colIdx = columns.findIndex((c) => String(c).toUpperCase() === 'CODCOLIGADA'); out.write(`${columns.map(csvCell).join(';')}\r\n`); });
+    req.on('row', (r) => {
+      rows++; out.write(`${columns.map((c, i) => csvCell(Array.isArray(r) ? r[i] : r[c])).join(';')}\r\n`);
+      if (colIdx >= 0) { const v = Number(Array.isArray(r) ? r[colIdx] : r[columns[colIdx]]); const k = Number.isInteger(v) ? v : '?'; byColigada[k] = (byColigada[k] || 0) + 1; }
+    });
     req.on('error', (e) => { failed = e; });
-    req.on('done', () => out.end(() => (failed ? reject(failed) : resolve({ columns: columns || [], rows }))));
+    req.on('done', () => out.end(() => (failed ? reject(failed) : resolve({ columns: columns || [], rows, byColigada }))));
     req.query(sql);
   });
 }
@@ -158,20 +163,37 @@ async function replace(core, conn, password, { table, rowsFile, allowed, forceIn
 }
 
 // Validações embutidas (só leitura): por consulta, a contagem da carga e as linhas que não estão no RM (gravadas em CSV).
-async function validate(core, conn, password, { items }, { progress }) {
+// coligadas: só as linhas da carga dessas coligadas contam (quando a carga tem CODCOLIGADA), com a quebra por coligada.
+// item.rmEmpty: o RM não tem linhas da tabela nas coligadas → toda a carga delas "não subiu" (não compara com cópia antiga).
+// item.skip: a tabela do RM não foi atualizada nesta execução → não valida (a cópia na base é de outra hora).
+async function validate(core, conn, password, { items, coligadas = null }, { progress }) {
   return readTx(core, conn, password, async (req) => {
     const out = [];
     let done = 0;
     for (const it of items) {
+      if (it.skip) { out.push({ label: it.label, source: it.source, error: it.skip, skipped: true }); progress({ done: ++done, total: items.length, table: it.label }); continue; }
       const chk = checkReadOnly(it.sql);
       if (!chk.ok) throw new Error(`Validação ${it.label} bloqueada: ${chk.errors.join(' ')}`);
       try {
-        const carga = await countOf(req, checkName(it.source, 'tabela'));
-        if (carga === null) out.push({ label: it.label, source: it.source, error: `Tabela da carga ${it.source} não existe na base.` });
+        const src = checkName(it.source, 'tabela');
+        const total = await countOf(req, src);
+        if (total === null) out.push({ label: it.label, source: it.source, error: `Tabela da carga ${it.source} não existe na base.` });
         else {
-          const r = await streamToCsv(req(), chk.sql, it.file);
+          const scoped = !!(coligadas && coligadas.length) && (await req().input('t', `[dbo].${q(src)}`).query("SELECT COL_LENGTH(@t, 'CODCOLIGADA') AS l")).recordset[0].l !== null;
+          const sql = it.rmEmpty ? C.allRowsSql(src, scoped ? coligadas : null) : scoped ? C.scopeValidation(chk.sql, src, coligadas) : chk.sql;
+          const chk2 = checkReadOnly(sql);
+          if (!chk2.ok) throw new Error(`Validação ${it.label} bloqueada: ${chk2.errors.join(' ')}`);
+          let carga = total; let byColigada = null;
+          if (scoped) {
+            const g = (await req().query(`SELECT TRY_CAST([CODCOLIGADA] AS INT) AS c, COUNT_BIG(*) AS n FROM [dbo].${q(src)} WHERE ${C.coligadaWhere(src, coligadas)} GROUP BY TRY_CAST([CODCOLIGADA] AS INT)`)).recordset;
+            const byC = Object.fromEntries(g.map((x) => [Number(x.c), Number(x.n)]));
+            carga = g.reduce((s, x) => s + Number(x.n), 0);
+            byColigada = coligadas.map((c) => ({ coligada: c, carga: byC[c] || 0, missing: 0 }));
+          }
+          const r = await streamToCsv(req(), chk2.sql, it.file);
           if (!r.rows) fs.rmSync(it.file, { force: true });
-          out.push({ label: it.label, source: it.source, carga, missing: r.rows, file: r.rows ? it.file : null });
+          if (byColigada) for (const b of byColigada) b.missing = r.byColigada[b.coligada] || 0;
+          out.push({ label: it.label, source: it.source, carga, missing: r.rows, file: r.rows ? it.file : null, scoped, byColigada, rmEmpty: !!it.rmEmpty, cargaTotal: total });
         }
       } catch (e) {
         fs.rmSync(it.file, { force: true });

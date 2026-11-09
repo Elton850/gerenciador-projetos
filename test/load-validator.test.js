@@ -48,9 +48,36 @@ test('modelo Educacional: 24 tabelas, parâmetros só coligada/períodos, todas 
 });
 
 test('parâmetros da tela não entram no SQL sem validação', () => {
-  assert.throws(() => C.cleanParams({ coligada: '7; DROP TABLE X' }), /coligada/);
+  assert.throws(() => C.cleanParams({ coligada: '7; DROP TABLE X' }), /coligada/i);
+  assert.throws(() => C.cleanParams({ coligadas: '1, 2) OR (1=1' }), /Coligada inválida/);
+  assert.throws(() => C.cleanParams({ coligadas: '' }), /Informe a\(s\) coligada/);
+  assert.throws(() => C.cleanParams({ coligadas: '40000' }), /Coligada inválida/);
+  assert.throws(() => C.cleanParams({ coligadas: Array.from({ length: 51 }, (_, i) => i + 1) }), /No máximo 50/);
   assert.throws(() => C.cleanParams({ coligada: 7, periods: "2030'); DELETE FROM SALUNO --" }), /Período letivo inválido/);
-  assert.deepEqual(C.cleanParams({ coligada: '7', periods: '2030;2031 2030' }), { coligada: 7, periods: ['2030', '2031'] });
+  assert.deepEqual(C.cleanParams({ coligada: '7', periods: '2030;2031 2030' }), { coligada: 7, coligadas: [7], periods: ['2030', '2031'] });
+  assert.deepEqual(C.cleanParams({ coligadas: '9, 2; 3 2' }), { coligada: 2, coligadas: [2, 3, 9], periods: [] }, 'ordenadas e sem repetição');
+});
+
+test('várias coligadas: "= n" ou "IN (...)" no RM (SQL comum) e filtro na validação da base só quando a carga tem CODCOLIGADA', () => {
+  for (const id of ['educacional', 'folha']) {
+    for (const t of C.systemOf(id).tables) {
+      const one = C.renderRm(t, { coligadas: '2', periods: '' });
+      const many = C.renderRm(t, { coligadas: '1, 2, 5', periods: '' });
+      if (t.rmSql.includes('{{CODCOLIGADA}}')) { // PPESSOA (Educacional) é global: sem filtro de coligada
+        assert.match(one, /CODCOLIGADA = 2\b/, t.table); assert.doesNotMatch(one, /\bIN \(1, 2, 5\)/);
+        assert.match(many, /CODCOLIGADA IN \(1, 2, 5\)/, t.table); assert.doesNotMatch(many, /= 2\b/);
+      } else assert.equal(one, many, t.table);
+      for (const v of t.validations) {
+        const s = C.scopeValidation(v.sql, C.sourceOf(v.sql), [1, 2]);
+        assert.ok(checkReadOnly(s).ok, v.label);
+        assert.match(s, new RegExp(String.raw`\nWHERE \([\s\S]+\)\n  AND TRY_CAST\(\[${C.sourceOf(v.sql)}\]\.\[CODCOLIGADA\] AS INT\) IN \(1, 2\)(\n|$)`), v.label);
+        if (/ORDER BY/i.test(v.sql)) assert.match(s, /ORDER BY[^\n]*$/, `${v.label}: ORDER BY continua no fim`);
+      }
+    }
+  }
+  assert.equal(C.allRowsSql('ZMIGRA_PFHSTSAL', [2]), 'SELECT [ZMIGRA_PFHSTSAL].* FROM [ZMIGRA_PFHSTSAL]\nWHERE TRY_CAST([ZMIGRA_PFHSTSAL].[CODCOLIGADA] AS INT) IN (2)');
+  assert.throws(() => C.scopeValidation('SELECT 1', 'X;DROP', [1]), /inválida/);
+  assert.throws(() => C.coligadaWhere('ZMIGRA_X', ['1) OR (1=1']), /Coligada inválida/);
 });
 
 test('código das consultas temporárias: ZMV.*, até 16 caracteres, único e igual ao extrator em Python', () => {
@@ -183,7 +210,10 @@ db.runWorker = async (op, args, opts = {}) => {
   if (op === 'tool:lv-precheck') return { identity: id, canCreate: true, canAlter: true, canInsert: true, canSelect: true, rm: Object.fromEntries(args.input.rmTables.map((t) => [t, sim.current[t] ?? null])), src: Object.fromEntries(args.input.sourceTables.map((t) => [t, 3])) };
   if (op === 'tool:lv-dump') { fs.writeFileSync(args.input.file, 'X\r\n'); return { rows: sim.current[args.input.table] || 0 }; }
   if (op === 'tool:lv-replace') { const d = JSON.parse(fs.readFileSync(args.input.rowsFile, 'utf8')); assert.ok(args.input.allowed.includes(args.input.table)); opts.onProgress && opts.onProgress(d.rows.length, d.rows.length); return { rows: d.rows.length }; }
-  if (op === 'tool:lv-validate') return args.input.items.map((i) => ({ label: i.label, source: i.source, carga: 3, missing: 0, file: null }));
+  // validação simulada: devolve o que recebeu (coligadas, rmEmpty, skip) para os testes conferirem a ligação com a api
+  if (op === 'tool:lv-validate') return args.input.items.map((i) => (i.skip ? { label: i.label, source: i.source, error: i.skip, skipped: true }
+    : { label: i.label, source: i.source, carga: 3, missing: i.rmEmpty ? 3 : 0, file: null, rmEmpty: !!i.rmEmpty, scoped: !!args.input.coligadas,
+      byColigada: args.input.coligadas ? args.input.coligadas.map((c) => ({ coligada: c, carga: c === args.input.coligadas[0] ? 3 : 0, missing: i.rmEmpty && c === args.input.coligadas[0] ? 3 : 0 })) : null }));
   if (op === 'tool:lv-keys') return { rows: [{ CODFILIAL: 3, CODPERLET: '2030', CODTURMA: 'T1', CODCOLIGADA: 7 }] };
   throw new Error(`op inesperada ${op}`);
 };
@@ -456,4 +486,43 @@ test('RM sobre ORACLE (BOA LOCAÇÃO): Folha confere e extrai; sintaxe só de SQ
   assert.equal(job.status, 'done', JSON.stringify(job.log));
   assert.deepEqual(job.result.extraction.map((e) => [e.table, e.rows]), [['PFHSTSAL', 1]]);
   assert.equal(fake.consultas.size, 0);
+});
+
+test('API: várias coligadas no RM e na validação; RM vazio nas coligadas = nada subiu; tabela não atualizada não é validada contra cópia antiga', async (t) => {
+  fake.consultas.clear(); fake.ops.length = 0; fake.urls.length = 0; sim.calls.length = 0;
+  // PFHSTSAL: RM sem linhas nas coligadas (como a BOA LOCAÇÃO em 09/11/2026) e a base com uma cópia antiga (5 linhas)
+  fake.rows['ZMV.PFHSTSAL'] = [];
+  fake.rows['ZMV.PFHSTFCO'] = [{ CODCOLIGADA: 1, CHAPA: '1', DTMUDANCA: '2024-01-01T00:00:00-03:00', MOTIVO: '01', CODFUNCAO: '10' }];
+  sim.current.PFHSTSAL = 5; sim.current.PFHSTFCO = null;
+  t.after(() => { delete sim.current.PFHSTSAL; delete sim.current.PFHSTFCO; });
+  const conn = store.data.connections[0];
+  const rmId = store.data.tools.loadValidator.rm[0].id;
+  const out = fs.mkdtempSync(path.join(tmp, 'saida-'));
+  const plan = await conferir({ system: 'folha', rmId, connectionId: conn.id, database: 'BASE_TESTE', coligadas: '2, 1, 9', periods: '', tables: ['PFHSTSAL', 'PFHSTFCO'], outDir: out });
+  assert.deepEqual(plan.params.coligadas, [1, 2, 9]);
+  fake.sentences.length = 0;
+  const go = await api('POST', `${B}/plans/${plan.planId}/execute`, { hash: plan.hash, authorized: true, confirmed: true });
+  const job = await waitJob(go.json.jobId);
+  assert.equal(job.status, 'done', JSON.stringify(job.log));
+  assert.ok(fake.sentences.every((s) => /WHERE CODCOLIGADA IN \(1, 2, 9\)/.test(s)), 'o RM recebe só as coligadas escolhidas');
+  assert.match(job.result.extraction[0].status, /NÃO SUBSTITUÍDA.*a validação considera que nada desta carga subiu/);
+  const val = sim.calls.find((c) => c.op === 'tool:lv-validate').input;
+  assert.deepEqual(val.coligadas, [1, 2, 9]);
+  assert.deepEqual(val.items.map((i) => [i.label, !!i.rmEmpty, !!i.skip]), [['PFHSTSAL', true, false], ['PFHSTFCO', false, false]]);
+  assert.deepEqual(job.result.validation.map((v) => [v.label, v.carga, v.missing]), [['PFHSTSAL', 3, 3], ['PFHSTFCO', 3, 0]]);
+  const resumo = fs.readFileSync(path.join(job.result.dir, 'RESUMO.txt'), 'utf8');
+  assert.match(resumo, /coligada\(s\) 1, 2, 9/);
+  assert.match(resumo, /RM sem linhas nas coligadas: nada desta carga subiu/);
+  assert.match(resumo, /coligada 1\s+3\s+3\s+0\.0/);
+  // erro no RM numa tabela: ela NÃO é validada (a cópia na base seria de outra hora)
+  fake.consultas.clear(); sim.calls.length = 0; fake.restFail = true;
+  t.after(() => { fake.restFail = false; });
+  const plan2 = await (async () => { fake.restFail = false; const p = await conferir({ system: 'folha', rmId, connectionId: conn.id, database: 'BASE_TESTE', coligadas: '1', periods: '', tables: ['PFHSTFCO'], outDir: out }); fake.restFail = true; return p; })();
+  const job2 = await waitJob((await api('POST', `${B}/plans/${plan2.planId}/execute`, { hash: plan2.hash, authorized: true, confirmed: true })).json.jobId);
+  fake.restFail = false;
+  assert.equal(job2.result.validation[0].skipped, true);
+  assert.match(job2.result.validation[0].error, /NÃO VALIDADA: a tabela PFHSTFCO do RM não foi atualizada nesta execução/);
+  // complemento: uma coligada por vez
+  const comp = await api('POST', `${B}/complement`, { system: 'educacional', connectionId: conn.id, database: 'BASE_TESTE', coligadas: '1, 2', txtDir: out, outDir: out });
+  assert.equal(comp.json.code, 'LV_ONE_COLIGADA');
 });

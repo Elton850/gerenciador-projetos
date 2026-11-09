@@ -128,7 +128,7 @@ function mount(app, deps, base) {
   // ---------- Conferir (só leitura) → plano ----------
   function inputOf(b) {
     let sys; try { sys = C.systemOf(b.system); } catch (e) { throw httpError(400, e.message); }
-    let params; try { params = C.cleanParams({ coligada: b.coligada, periods: b.periods }); } catch (e) { throw httpError(400, e.message); }
+    let params; try { params = C.cleanParams({ coligada: b.coligada, coligadas: b.coligadas, periods: b.periods }); } catch (e) { throw httpError(400, e.message); }
     let defs; try { defs = C.pickTables(sys, b.tables); } catch (e) { throw httpError(400, e.message); }
     if (!defs.length) throw httpError(400, 'Escolha ao menos uma tabela.');
     return { sys, params, defs };
@@ -216,22 +216,39 @@ function mount(app, deps, base) {
   app.get(`${base}/jobs/:id`, (req, res) => { const j = jobs.get(str(req.params.id, 40)); if (!j) throw httpError(404, 'Trabalho não encontrado.'); res.json(publicJob(j)); });
   app.post(`${base}/jobs/:id/cancel`, (req, res) => { const j = jobs.get(str(req.params.id, 40)); if (!j) throw httpError(404, 'Trabalho não encontrado.'); j.cancelRequested = true; if (j.abort) j.abort(); j.say('Cancelamento pedido: a etapa em andamento termina (ou é desfeita) e as próximas não começam.'); res.json({ ok: true }); });
 
-  async function runValidations(conn, defs, dir, job) {
-    const items = defs.flatMap((d) => d.validations.map((v) => ({ label: v.label, sql: v.sql, source: C.sourceOf(v.sql), file: path.join(dir, `NAO_SUBIU_${fileSafe(v.label)}.csv`) })));
+  // status (só na execução): tabela → 'ok' (cópia do RM gravada agora) | 'empty' (RM sem linhas nas coligadas). Tabela fora do
+  // status não é validada: a cópia na base é de outra hora e daria um resultado falso.
+  async function runValidations(conn, defs, dir, job, { coligadas = null, status = null } = {}) {
+    const items = defs.flatMap((d) => d.validations.map((v) => {
+      const it = { label: v.label, sql: v.sql, source: C.sourceOf(v.sql), file: path.join(dir, `NAO_SUBIU_${fileSafe(v.label)}.csv`) };
+      if (status) {
+        const s = status.get(d.table);
+        if (s === 'empty') it.rmEmpty = true;
+        else if (s !== 'ok') it.skip = `NÃO VALIDADA: a tabela ${d.table} do RM não foi atualizada nesta execução (${s || 'sem dados'}); comparar com a cópia antiga daria um resultado falso.`;
+      }
+      return it;
+    }));
     job.current = 'Validando contra a carga (só leitura)…';
-    const r = await worker(conn, 'lv-validate', { items }, { onProgress: (done, total, inf) => { job.current = `Validando ${inf && inf.table ? inf.table : ''} (${done}/${total})`; job.updatedAt = Date.now(); } });
-    for (const v of r) job.say(v.error ? `[${v.label}] validação: ERRO ${v.error}` : `[${v.label}] carga ${v.carga} · não subiu ${v.missing}`);
+    const r = await worker(conn, 'lv-validate', { items, coligadas }, { onProgress: (done, total, inf) => { job.current = `Validando ${inf && inf.table ? inf.table : ''} (${done}/${total})`; job.updatedAt = Date.now(); } });
+    for (const v of r) job.say(v.error ? `[${v.label}] validação: ${v.skipped ? '' : 'ERRO '}${v.error}` : `[${v.label}] carga ${v.carga} · não subiu ${v.missing}${v.byColigada ? ` · ${v.byColigada.map((b) => `col. ${b.coligada}: ${b.missing}/${b.carga}`).join(' · ')}` : ''}`);
     return r;
   }
+  const pct = (carga, missing) => (carga ? (100 * (carga - missing) / carga).toFixed(1) : '-');
   function writeSummary(dir, { target, rm, params, extraction, validation, snapshot, partial }) {
     const L = [`Validação de Carga — ${new Date().toLocaleString('pt-BR')}`, `Base: ${target.connectionName} · ${target.server} · ${target.database}`];
     if (partial) L.unshift(`EM ANDAMENTO (ou interrompida): ${partial.done} de ${partial.total} tabela(s) processada(s) na base. Se este aviso ficou, a execução não terminou.`, '');
-    if (rm) L.push(`RM: ${rm.url} (usuário ${rm.user}) · coligada ${params.coligada}${params.periods.length ? ` · períodos ${params.periods.join(', ')}` : ''}`);
+    if (rm) L.push(`RM: ${rm.url} (usuário ${rm.user}) · coligada(s) ${params.coligadas.join(', ')}${params.periods.length ? ` · períodos ${params.periods.join(', ')}` : ''}`);
+    else if (params && params.coligadas) L.push(`Coligada(s): ${params.coligadas.join(', ')}`);
     if (snapshot) L.push(`Consultas temporárias ZMV.* no RM: antes ${snapshot.before} · depois ${snapshot.after} · restantes ${snapshot.leftovers.length ? snapshot.leftovers.join(', ') : 'nenhuma'}`);
     if (extraction) { L.push('', 'EXTRAÇÃO (RM → base)'); for (const e of extraction) L.push(`  ${e.table.padEnd(22)} ${String(e.rows ?? '').padStart(8)}  ${e.status}`); }
     if (validation) {
       L.push('', 'VALIDAÇÃO (carga × RM)', `  ${'TABELA'.padEnd(32)} ${'ORIGEM'.padEnd(28)} ${'CARGA'.padStart(8)} ${'NÃO SUBIU'.padStart(10)} ${'% NO RM'.padStart(8)}`);
-      for (const v of validation) L.push(v.error ? `  ${v.label.padEnd(32)} ${String(v.source).padEnd(28)} ERRO: ${v.error}` : `  ${v.label.padEnd(32)} ${v.source.padEnd(28)} ${String(v.carga).padStart(8)} ${String(v.missing).padStart(10)} ${(v.carga ? (100 * (v.carga - v.missing) / v.carga).toFixed(1) : '-').padStart(8)}`);
+      for (const v of validation) {
+        if (v.error) { L.push(`  ${v.label.padEnd(32)} ${String(v.source).padEnd(28)} ${v.skipped ? '' : 'ERRO: '}${v.error}`); continue; }
+        L.push(`  ${v.label.padEnd(32)} ${v.source.padEnd(28)} ${String(v.carga).padStart(8)} ${String(v.missing).padStart(10)} ${pct(v.carga, v.missing).padStart(8)}${v.rmEmpty ? '  (RM sem linhas nas coligadas: nada desta carga subiu)' : ''}`);
+        if (v.byColigada && v.byColigada.length > 1) for (const b of v.byColigada) L.push(`  ${''.padEnd(32)} ${`  coligada ${b.coligada}`.padEnd(28)} ${String(b.carga).padStart(8)} ${String(b.missing).padStart(10)} ${pct(b.carga, b.missing).padStart(8)}`);
+        if (params && params.coligadas && v.scoped === false) L.push(`  ${''.padEnd(32)} ${v.source} não tem CODCOLIGADA: comparada a carga inteira`);
+      }
     }
     fs.writeFileSync(path.join(dir, 'RESUMO.txt'), `﻿${L.join('\r\n')}\r\n`, 'utf8');
   }
@@ -311,16 +328,18 @@ function mount(app, deps, base) {
       if (leftovers.length) job.say(`ATENÇÃO: sobraram consultas desta ferramenta no RM: ${leftovers.join(', ')}`);
       // 2) Base: uma tabela por vez (cópia da atual → substituição em transação, gravação em massa com plano B)
       let bulkOk = true;
+      const status = new Map(); // tabela → 'ok' | 'empty' | motivo (o que a validação pode usar)
       try { writeSummary(dir, { target: info, rm: rmc, params, extraction, snapshot, partial: { done: 0, total: defs.length } }); } catch { /* idem */ }
       for (const d of defs) {
         const f = fetched.get(d.table);
         if (job.cancelRequested) { extraction.push({ table: d.table, rows: null, status: 'NÃO GRAVADA (cancelado)' }); continue; }
-        if (!f || f.error) { extraction.push({ table: d.table, rows: null, status: `NÃO GRAVADA (erro no RM): ${f ? f.error : 'sem dados'}` }); job.done++; continue; }
+        if (!f || f.error) { extraction.push({ table: d.table, rows: null, status: `NÃO GRAVADA (erro no RM): ${f ? f.error : 'sem dados'}` }); status.set(d.table, 'erro no RM'); job.done++; continue; }
         job.current = `Base: ${d.table}`;
         try {
           const pre = await worker(conn, 'lv-precheck', { rmTables: [d.table], sourceTables: [] });
           const current = pre.rm[d.table];
-          if (!f.rows && current) { extraction.push({ table: d.table, rows: 0, status: `NÃO SUBSTITUÍDA: o RM devolveu 0 linhas e a tabela atual tem ${current}` }); job.done++; continue; }
+          // RM sem linhas nas coligadas: a cópia anterior fica (proteção), mas a validação NÃO a usa — considera que nada subiu
+          if (!f.rows && current) { extraction.push({ table: d.table, rows: 0, status: `NÃO SUBSTITUÍDA: o RM devolveu 0 linhas nas coligadas escolhidas; a cópia anterior (${current} linhas) foi mantida e a validação considera que nada desta carga subiu` }); status.set(d.table, 'empty'); job.done++; continue; }
           if (current !== null) {
             const bk = await worker(conn, 'lv-dump', { table: d.table, file: path.join(bkDir, `${d.table}_${stamp()}.csv`) });
             job.say(`[${d.table}] cópia da tabela atual: ${bk.rows} linhas (backup\\${d.table}_….csv)`);
@@ -331,10 +350,12 @@ function mount(app, deps, base) {
           job.abort = null;
           if (r.bulkError) { bulkOk = false; job.say(`[${d.table}] gravação em massa recusada pelo servidor (${r.bulkError}); gravada pelo método de lotes, que será usado nas próximas tabelas.`); }
           extraction.push({ table: d.table, rows: r.rows, status: `gravada: ${r.rows} linhas${current !== null ? ' (substituiu a anterior)' : ' (nova)'}` });
+          status.set(d.table, 'ok');
           job.say(`[${d.table}] base: gravada (${r.rows} linhas, ${r.mode === 'bulk' ? 'em massa' : 'em lotes'}, ${((Date.now() - t0) / 1000).toFixed(1)} s)`);
           audit.log({ action: 'lv-tabela-substituida', ...meta, tabela: d.table, linhas: r.rows, anterior: current, modo: r.mode });
         } catch (e) {
           extraction.push({ table: d.table, rows: null, status: `ERRO ao gravar (tabela anterior mantida): ${db.friendly(e)}` });
+          status.set(d.table, 'erro ao gravar na base');
           job.say(`[${d.table}] ERRO ao gravar (tabela anterior mantida): ${db.friendly(e)}`);
         }
         job.done++;
@@ -342,7 +363,7 @@ function mount(app, deps, base) {
         try { writeSummary(dir, { target: info, rm: rmc, params, extraction, snapshot, partial: { done: extraction.length, total: defs.length } }); } catch { /* o resumo final tenta de novo */ }
       }
       // 3) Validação (só leitura)
-      if (!job.cancelRequested) validation = await runValidations(conn, defs, dir, job);
+      if (!job.cancelRequested) validation = await runValidations(conn, defs, dir, job, { coligadas: params.coligadas, status });
       job.done = job.total;
       writeSummary(dir, { target: info, rm: rmc, params, extraction, validation, snapshot });
       job.result = { dir, extraction, validation, snapshot };
@@ -364,6 +385,9 @@ function mount(app, deps, base) {
     const b = req.body || {};
     let sys; try { sys = C.systemOf(b.system); } catch (e) { throw httpError(400, e.message); }
     let defs; try { defs = C.pickTables(sys, b.tables); } catch (e) { throw httpError(400, e.message); }
+    // coligadas: opcional aqui (sem elas, compara a carga inteira, como antes)
+    const hasCol = [b.coligadas, b.coligada].some((x) => x !== undefined && x !== null && String(x).trim() !== '');
+    let coligadas = null; try { if (hasCol) coligadas = C.cleanColigadas({ coligadas: b.coligadas, coligada: b.coligada }); } catch (e) { throw httpError(400, e.message); }
     const { saved, conn, info } = sqlTarget(b.connectionId, b.database);
     const outDir = outDirOf(b.outDir);
     if (running()) throw httpError(409, 'Já existe um trabalho da Validação de Carga em andamento.', { code: 'LV_BUSY' });
@@ -371,8 +395,8 @@ function mount(app, deps, base) {
     res.json({ jobId: job.id });
     const dir = runDir(outDir, 'validacao');
     try {
-      const validation = await runValidations(conn, defs, dir, job);
-      writeSummary(dir, { target: info, validation });
+      const validation = await runValidations(conn, defs, dir, job, { coligadas });
+      writeSummary(dir, { target: info, validation, params: coligadas ? { coligadas, periods: [] } : null });
       job.result = { dir, validation }; job.status = 'done'; job.done = 1;
       audit.log({ action: 'lv-validacao', by: whoAmI(), detalhe: saved.name, server: db.label(saved), database: info.database, tabelas: defs.length });
     } catch (e) { job.status = 'error'; job.error = db.friendly(e); job.say(`ERRO: ${job.error}`); }
@@ -383,7 +407,8 @@ function mount(app, deps, base) {
   app.post(`${base}/complement`, async (req, res) => {
     cleanup();
     const b = req.body || {};
-    let sys; let params; try { sys = C.systemOf(b.system); params = C.cleanParams({ coligada: b.coligada, periods: '' }); } catch (e) { throw httpError(400, e.message); }
+    let sys; let params; try { sys = C.systemOf(b.system); params = C.cleanParams({ coligada: b.coligada, coligadas: b.coligadas, periods: '' }); } catch (e) { throw httpError(400, e.message); }
+    if (params.coligadas.length !== 1) throw httpError(400, 'O complemento é gerado para UMA coligada por vez (os TXT do Hop não trazem a coligada na chave). Informe só uma.', { code: 'LV_ONE_COLIGADA' });
     if (!sys.complement.length) throw httpError(400, `O complemento ainda não está disponível para ${sys.name} (o modelo não tem as chaves dos TXT).`, { code: 'LV_NO_COMPLEMENT' });
     const { saved, conn, info } = sqlTarget(b.connectionId, b.database);
     const txtDir = outDirOf(b.txtDir, 'pasta dos TXT do Hop');

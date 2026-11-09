@@ -68,7 +68,8 @@
     }, 'Testando…') }, 'Testar');
 
     // ---- 2. Parâmetros ----
-    const colIn = h('input', { type: 'number', min: '0', max: '32767', value: L.coligada ?? '', placeholder: 'Ex.: 1', onchange: () => { saveLast({ coligada: Number(colIn.value) }); LV.plan = null; drawPlan(); } });
+    // uma ou várias coligadas ("1, 2, 5"): o RM traz só elas e a validação conta só elas na carga (com a quebra por coligada)
+    const colIn = h('input', { type: 'text', value: L.coligadas ?? (L.coligada ?? ''), placeholder: 'Ex.: 1 ou 1, 2, 5', onchange: () => { saveLast({ coligadas: colIn.value.trim() }); LV.plan = null; drawPlan(); } });
     const perIn = h('input', { type: 'text', value: L.periods || '', placeholder: "Ex.: 2026, 2027 (vazio = todos)", onchange: () => { saveLast({ periods: perIn.value }); LV.plan = null; drawPlan(); } });
     const outF = pathField({ value: L.outDir || '', kind: 'folder', title: 'Pasta de saída da Validação de Carga' });
     outF.input.addEventListener('change', () => { saveLast({ outDir: outF.get() }); LV.plan = null; drawPlan(); });
@@ -76,7 +77,7 @@
     const tblBoxes = sys.tables.map((t) => h('label', { class: 'check lv-tbl', title: `Consulta temporária no RM: ${t.code}\nValidações: ${t.validations.join(', ')}` },
       h('input', { type: 'checkbox', checked: chosen.has(t.table), onchange: (e) => { if (e.target.checked) chosen.add(t.table); else chosen.delete(t.table); saveLast({ tables: [...chosen] }); LV.plan = null; drawPlan(); } }), h('span', { class: 'mono' }, t.table)));
     const allBtn = (on) => h('button', { class: 'btn ghost sm', onclick: () => { if (on) sys.tables.forEach((t) => chosen.add(t.table)); else chosen.clear(); saveLast({ tables: [...chosen] }); rerender(); } }, on ? 'Todas' : 'Nenhuma');
-    const params = () => ({ system: sys.id, rmId: rmSel.value, connectionId: connSel.value, database: dbIn.value.trim(), coligada: colIn.value, periods: sys.usesPeriods ? perIn.value : '', outDir: outF.get(), tables: sys.tables.map((t) => t.table).filter((t) => chosen.has(t)) });
+    const params = () => ({ system: sys.id, rmId: rmSel.value, connectionId: connSel.value, database: dbIn.value.trim(), coligadas: colIn.value.trim(), periods: sys.usesPeriods ? perIn.value : '', outDir: outF.get(), tables: sys.tables.map((t) => t.table).filter((t) => chosen.has(t)) });
 
     // ---- 3. Conferir / executar ----
     const planHost = h('div'); const jobHost = h('div');
@@ -89,7 +90,7 @@
         h('div', { class: 'lv-facts' },
           h('div', null, h('b', null, 'RM: '), `${p.rm.url} · usuário ${p.rm.user} · ${N(p.rm.consultas)} consulta(s) temporária(s) ZMV.* encontrada(s)`),
           h('div', null, h('b', null, 'Base: '), `${p.target.connectionName} · ${p.target.server} · ${p.target.database} · login ${p.target.login}`, ' ', pill(p.target.env === 'prod' ? 'prod' : p.target.env === 'local' ? 'local' : 'soon', p.target.env || '—')),
-          h('div', null, h('b', null, 'Parâmetros: '), `coligada ${p.params.coligada}${!sys.usesPeriods ? '' : p.params.periods.length ? ` · períodos ${p.params.periods.join(', ')}` : ' · todos os períodos'}`),
+          h('div', null, h('b', null, 'Parâmetros: '), `coligada(s) ${(p.params.coligadas || [p.params.coligada]).join(', ')}${!sys.usesPeriods ? '' : p.params.periods.length ? ` · períodos ${p.params.periods.join(', ')}` : ' · todos os períodos'}`),
           h('div', null, h('b', null, 'Saída: '), h('span', { class: 'mono' }, p.outDir))),
         p.warnings.length ? h('ul', { class: 'lv-warn' }, p.warnings.map((w) => h('li', null, w))) : null,
         h('div', { class: 'tablewrap' }, h('table', { class: 'compact' },
@@ -139,7 +140,14 @@
         res.dir ? h('p', { class: 'small' }, 'Arquivos em ', h('span', { class: 'mono' }, res.dir)) : null,
         res.snapshot ? h('p', { class: 'small' }, `Consultas temporárias ZMV.* no RM: ${N(res.snapshot.before)} antes · ${N(res.snapshot.after)} depois · restantes: `, res.snapshot.leftovers.length ? pill('overdue', res.snapshot.leftovers.join(', ')) : pill('ok', 'nenhuma')) : null,
         res.extraction ? resultTable(['Tabela', 'Linhas do RM', 'Situação'], res.extraction.map((e) => [h('span', { class: 'mono' }, e.table), N(e.rows), e.status.startsWith('gravada') ? pill('ok', e.status) : pill('overdue', e.status)])) : null,
-        res.validation ? resultTable(['Validação', 'Origem', 'Carga', 'Não subiu', '% no RM'], res.validation.map((v) => v.error ? [v.label, v.source, '—', pill('overdue', 'erro', v.error), v.error] : [v.label, h('span', { class: 'mono' }, v.source), N(v.carga), v.missing ? pill('overdue', N(v.missing)) : pill('ok', '0'), v.carga ? `${(100 * (v.carga - v.missing) / v.carga).toFixed(1)}%` : '—'])) : null,
+        // uma linha por validação e, com mais de uma coligada, uma linha por coligada logo abaixo
+        res.validation ? resultTable(['Validação', 'Origem', 'Carga', 'Não subiu', '% no RM'], res.validation.flatMap((v) => {
+          if (v.error) return [[v.label, v.source, '—', pill(v.skipped ? 'soon' : 'overdue', v.skipped ? 'não validada' : 'erro', v.error), v.error]];
+          const pc = (c, m) => (c ? `${(100 * (c - m) / c).toFixed(1)}%` : '—');
+          const head = [v.label, h('span', { class: 'mono', title: v.scoped === false ? 'A carga não tem CODCOLIGADA: comparada inteira' : null }, v.source, v.scoped === false ? ' (sem coligada)' : ''), N(v.carga), v.missing ? pill('overdue', N(v.missing)) : pill('ok', '0'), v.rmEmpty ? h('span', { title: 'O RM não tem linhas desta tabela nas coligadas escolhidas' }, pc(v.carga, v.missing), ' · RM vazio') : pc(v.carga, v.missing)];
+          const rows = (v.byColigada && v.byColigada.length > 1 ? v.byColigada : []).map((b) => [h('span', { class: 'muted small' }, `↳ coligada ${b.coligada}`), '', N(b.carga), b.missing ? pill('overdue', N(b.missing)) : pill('ok', '0'), pc(b.carga, b.missing)]);
+          return [head, ...rows];
+        })) : null,
         res.rows ? resultTable(['TXT', 'No RM', 'Linhas no TXT', 'A subir', 'Só no RM', 'Situação'], res.rows.map((r) => [h('span', { class: 'mono' }, r.table), N(r.inRm), N(r.txtLines), r.toLoad ? pill('soon', N(r.toLoad)) : N(r.toLoad), N(r.onlyRm), r.status])) : null,
         res.warnings && res.warnings.length ? h('ul', { class: 'lv-warn' }, res.warnings.map((w) => h('li', null, w))) : null,
         j.log && j.log.length ? h('details', { class: 'lv-log' }, h('summary', null, `Registro (${j.log.length})`), h('pre', null, j.log.join('\n'))) : null));
@@ -147,7 +155,7 @@
     const resultTable = (head, rows) => h('div', { class: 'tablewrap tall' }, h('table', { class: 'compact' }, h('thead', null, h('tr', null, head.map((x) => h('th', null, x)))), h('tbody', null, rows.map((r) => h('tr', null, r.map((c) => h('td', null, c)))))));
 
     const conferir = h('button', { class: 'btn', onclick: (e) => busy(e.currentTarget, async () => { LV.plan = null; drawPlan(); const r = await api('POST', `${BASE}/precheck`, params()); follow(r.jobId); }, 'Iniciando…') }, 'Conferir');
-    const soValidar = h('button', { class: 'btn', onclick: (e) => busy(e.currentTarget, async () => { const p = params(); const r = await api('POST', `${BASE}/validate`, { system: p.system, connectionId: p.connectionId, database: p.database, tables: p.tables, outDir: p.outDir }); follow(r.jobId); }, 'Iniciando…') }, 'Só validar (somente leitura)');
+    const soValidar = h('button', { class: 'btn', onclick: (e) => busy(e.currentTarget, async () => { const p = params(); const r = await api('POST', `${BASE}/validate`, { system: p.system, connectionId: p.connectionId, database: p.database, coligadas: p.coligadas, tables: p.tables, outDir: p.outDir }); follow(r.jobId); }, 'Iniciando…') }, 'Só validar (somente leitura)');
 
     // ---- 4. Complemento ----
     const txtF = pathField({ value: L.txtDir || '', kind: 'folder', title: 'Pasta dos TXT gerados pelo Hop' });
@@ -156,7 +164,7 @@
     const gerar = h('button', { class: 'btn', onclick: (e) => busy(e.currentTarget, async () => {
       const p = params();
       saveLast({ txtDir: txtF.get() });
-      const r = await api('POST', `${BASE}/complement`, { system: p.system, connectionId: p.connectionId, database: p.database, coligada: p.coligada, txtDir: txtF.get(), outDir: p.outDir, includeUnreferenced: incl.checked });
+      const r = await api('POST', `${BASE}/complement`, { system: p.system, connectionId: p.connectionId, database: p.database, coligadas: p.coligadas, txtDir: txtF.get(), outDir: p.outDir, includeUnreferenced: incl.checked });
       follow(r.jobId);
     }, 'Iniciando…') }, 'Gerar complemento');
 
@@ -166,7 +174,7 @@
           field('API do RM', h('div', null, h('div', { class: 'inline' }, rmSel), rmButtons, rmStatus), 'Usuário com permissão de incluir, executar e excluir Consultas SQL. Endereço: https://servidor:porta.'),
           field('Base de migração', h('div', null, h('div', { class: 'inline' }, connSel), h('div', { class: 'inline' }, dbIn, testBase), baseStatus), sqlConns.length ? 'Onde estão as ZMIGRA. As cópias do RM são gravadas aqui (dbo.<TABELA>).' : h('a', { href: '#/settings' }, 'Cadastrar conexão em Configurações → Conexões')))),
       sec(2, 'Parâmetros', `Só ${sys.usesPeriods ? 'a coligada e os períodos letivos entram' : 'a coligada entra'} nas consultas; o SQL é o modelo embutido ${sys.id === 'folha' ? 'da Folha' : `do ${sys.name}`}.`,
-        h('div', { class: 'lv-grid' }, field('Coligada', colIn), sys.usesPeriods ? field('Períodos letivos (frequência)', perIn) : null, field('Pasta de saída', outF.el, 'Cada execução cria uma pasta nova em ValidacaoCarga\\ (resumo, linhas que não subiram, cópias das tabelas substituídas).')),
+        h('div', { class: 'lv-grid' }, field('Coligada(s)', colIn, 'Uma ou várias, separadas por vírgula. O RM traz só essas coligadas e a validação conta só elas na carga (ZMIGRA com várias coligadas), com o resultado por coligada.'), sys.usesPeriods ? field('Períodos letivos (frequência)', perIn) : null, field('Pasta de saída', outF.el, 'Cada execução cria uma pasta nova em ValidacaoCarga\\ (resumo, linhas que não subiram, cópias das tabelas substituídas).')),
         h('div', { class: 'field' }, h('label', null, 'Tabelas'), h('div', { class: 'inline' }, allBtn(true), allBtn(false)), h('div', { class: 'lv-tables' }, tblBoxes))),
       sec(3, 'Extrair do RM e validar', 'Conferir lê a base e conta as linhas no RM. Executar cria/executa/apaga, uma por vez, as consultas temporárias no RM (tabelas grandes em partes) e substitui a tabela na base (uma transação por tabela).',
         h('div', { class: 'inline' }, conferir, soValidar), planHost),

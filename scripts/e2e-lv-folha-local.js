@@ -54,16 +54,27 @@ function cargaValue(col, rmCol) { // valor da carga para a coluna da ZMIGRA, a p
         const list = [...used];
         await run(conn, `CREATE TABLE dbo.${q(src)} (${list.map((c) => `${q(c)} NVARCHAR(200) NULL`).join(', ')})`);
         const vals = list.map((c) => { const rv = rmOf(c); const cv = c === 'Data final' && rv === null ? null : cargaValue(c, rv); return cv === null ? 'NULL' : `N'${String(cv).replace(/'/g, "''")}'`; });
-        await run(conn, `INSERT dbo.${q(src)} VALUES (${vals.join(', ')}), (${list.map((c) => (/^CHAPA$|^Chapa$/.test(c) ? "N'99999'" : vals[list.indexOf(c)])).join(', ')})`);
+        // carga com DUAS coligadas num arquivo só (como as ZMIGRA da BOA LOCAÇÃO): coligada 1 = linha igual ao RM + CHAPA 99999
+        // (não subiu); coligada 3 = linha que não está no RM (o RM só tem a coligada 1)
+        const other = list.map((c, i) => (c.toUpperCase() === 'CODCOLIGADA' ? "N'3'" : vals[i]));
+        await run(conn, `INSERT dbo.${q(src)} VALUES (${vals.join(', ')}), (${list.map((c) => (/^CHAPA$|^Chapa$/.test(c) ? "N'99999'" : vals[list.indexOf(c)])).join(', ')}), (${other.join(', ')})`);
       }
     }
     const items = sys.tables.flatMap((t) => t.validations.map((v) => ({ label: v.label, sql: v.sql, source: C.sourceOf(v.sql), file: path.join(tmp, `NAO_SUBIU_${v.label}.csv`) })));
-    const res = await SQLM.validate(core, conn, '', { items }, { progress: () => {} });
-    for (const v of res) {
+    const val = (extra) => SQLM.validate(core, conn, '', { items, ...extra }, { progress: () => {} });
+    // sem coligadas (como antes): a carga inteira — a coligada 3 entra como "não subiu"
+    for (const v of await val({})) { assert.equal(v.error, undefined, `${v.label}: ${v.error}`); assert.deepEqual([v.label, v.carga, v.missing], [v.label, 3, 2], v.label); }
+    // só a coligada 1: a coligada 3 da carga fica de fora
+    for (const v of await val({ coligadas: [1] })) {
       assert.equal(v.error, undefined, `${v.label}: ${v.error}`);
-      assert.deepEqual([v.label, v.carga, v.missing], [v.label, 2, 1], `${v.label}: a linha igual ao RM sobe; só a CHAPA 99999 "não subiu"`);
+      assert.deepEqual([v.label, v.carga, v.missing, v.scoped, v.byColigada], [v.label, 2, 1, true, [{ coligada: 1, carga: 2, missing: 1 }]], `${v.label}: a linha igual ao RM sobe; só a CHAPA 99999 "não subiu"`);
     }
-    console.log(`e2e Validação de Carga (Folha): OK — ${res.length} validações compilaram e casaram com a cópia em texto`);
+    // coligadas 1 e 3: quebra por coligada (a 3 não está no RM: 100% "não subiu")
+    for (const v of await val({ coligadas: [1, 3] })) assert.deepEqual([v.carga, v.missing, v.byColigada], [3, 2, [{ coligada: 1, carga: 2, missing: 1 }, { coligada: 3, carga: 1, missing: 1 }]], v.label);
+    // RM sem linhas nas coligadas: toda a carga delas "não subiu", sem comparar com a cópia da base
+    const empty = await SQLM.validate(core, conn, '', { items: items.map((i) => ({ ...i, rmEmpty: true })), coligadas: [3] }, { progress: () => {} });
+    for (const v of empty) assert.deepEqual([v.carga, v.missing, v.rmEmpty], [1, 1, true], v.label);
+    console.log(`e2e Validação de Carga (Folha): OK — ${items.length} validações compilaram e casaram com a cópia em texto, por coligada`);
   } finally {
     await run(master, `ALTER DATABASE [${DB}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [${DB}]`).catch(() => {});
     fs.rmSync(tmp, { recursive: true, force: true });

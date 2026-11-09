@@ -43,23 +43,39 @@ function consultaCode(table) {
   return code;
 }
 
-// Parâmetros vindos da tela: coligada (inteiro) e períodos letivos (texto curto, sem aspas). Nada mais entra no SQL.
+// Parâmetros vindos da tela: coligada(s) (inteiros) e períodos letivos (texto curto, sem aspas). Nada mais entra no SQL.
+// coligadas: "1, 2, 5" (ou lista) — uma ou várias; `coligada` (a primeira) continua para o contexto da API e o complemento.
+const MAX_COLIGADAS = 50;
+function cleanColigadas(p = {}) {
+  const raw = p.coligadas !== undefined && p.coligadas !== null && p.coligadas !== '' ? p.coligadas : p.coligada;
+  const list = (Array.isArray(raw) ? raw : String(raw ?? '').split(/[,;\s]+/)).map((x) => String(x).trim()).filter(Boolean);
+  if (!list.length) throw new Error('Informe a(s) coligada(s): números inteiros separados por vírgula (ex.: 1, 2, 5).');
+  const nums = list.map((x) => {
+    if (!/^\d{1,5}$/.test(x) || Number(x) > 32767) throw new Error(`Coligada inválida: "${x}" (use números inteiros separados por vírgula).`);
+    return Number(x);
+  });
+  const out = [...new Set(nums)].sort((a, b) => a - b);
+  if (out.length > MAX_COLIGADAS) throw new Error(`No máximo ${MAX_COLIGADAS} coligadas por execução.`);
+  return out;
+}
 function cleanParams(p = {}) {
-  const coligada = Number(p.coligada);
-  if (!Number.isInteger(coligada) || coligada < 0 || coligada > 32767) throw new Error('Informe a coligada (número inteiro).');
+  const coligadas = cleanColigadas(p);
   const raw = Array.isArray(p.periods) ? p.periods : String(p.periods || '').split(/[,;\s]+/);
   const periods = [...new Set(raw.map((x) => String(x).trim()).filter(Boolean))];
   for (const x of periods) if (!/^[A-Za-z0-9._/-]{1,20}$/.test(x)) throw new Error(`Período letivo inválido: "${x}" (use só letras, números, ponto, hífen ou barra).`);
   if (periods.length > 20) throw new Error('No máximo 20 períodos letivos.');
-  return { coligada, periods };
+  return { coligada: coligadas[0], coligadas, periods };
 }
+// Filtro de coligada no RM: "= 2" ou "IN (1, 2, 5)" (SQL comum a SQL Server e Oracle).
+const coligadaFilter = (coligadas) => (coligadas.length === 1 ? `= ${coligadas[0]}` : `IN (${coligadas.join(', ')})`);
 
 // Consulta do RM pronta: troca os parâmetros. Sem período informado, a linha do filtro de períodos sai inteira.
+// Os modelos só usam a coligada na forma "<coluna> = {{CODCOLIGADA}}"; qualquer outra forma sobra e é recusada abaixo.
 function renderRm(def, params) {
-  const { coligada, periods } = cleanParams(params);
+  const { coligadas, periods } = cleanParams(params);
   let sql = def.rmSql;
   if (!periods.length) sql = sql.split('\n').filter((l) => !l.includes('{{CODPERLETS}}')).join('\n');
-  sql = sql.replace(/\{\{CODCOLIGADA\}\}/g, String(coligada)).replace(/\{\{CODPERLETS\}\}/g, periods.map((x) => `'${x}'`).join(', '));
+  sql = sql.replace(/=\s*\{\{CODCOLIGADA\}\}/g, coligadaFilter(coligadas)).replace(/\{\{CODPERLETS\}\}/g, periods.map((x) => `'${x}'`).join(', '));
   if (/\{\{\w+\}\}/.test(sql)) throw new Error(`Parâmetro sem valor na consulta de ${def.table}.`);
   checkSelect(sql);
   return sql;
@@ -171,6 +187,38 @@ function pickTables(system, names) {
 // Origem (tabela da carga) de uma consulta de validação: o primeiro FROM.
 const sourceOf = (sql) => (String(sql).match(/\bFROM\s+\[?(\w+)\]?/i) || [])[1] || null;
 
+// ---------- Coligadas na validação (roda NA BASE DE MIGRAÇÃO, SQL Server) ----------
+// A carga (ZMIGRA_*) pode ter várias coligadas num arquivo só: a validação conta só as coligadas escolhidas.
+// TRY_CAST: a coluna da carga é texto; valor que não é número não entra (nem derruba a consulta).
+const SRC_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
+function coligadaWhere(source, coligadas) {
+  if (!SRC_RE.test(String(source))) throw new Error(`Tabela da carga inválida: ${source}`);
+  const list = cleanColigadas({ coligadas });
+  return `TRY_CAST([${source}].[CODCOLIGADA] AS INT) IN (${list.join(', ')})`;
+}
+// A validação do modelo termina em "WHERE <condição> [ORDER BY ...]": a condição vai entre parênteses e ganha o filtro.
+function scopeValidation(sql, source, coligadas) {
+  if (!SRC_RE.test(String(source))) throw new Error(`Tabela da carga inválida: ${source}`);
+  const s = String(sql);
+  const ws = [...s.matchAll(/\bWHERE\b/gi)];
+  if (!ws.length) throw new Error(`Validação sem WHERE (${source}): não dá para filtrar as coligadas.`);
+  const at = ws[ws.length - 1].index;
+  const rest = s.slice(at + 5);
+  const ob = rest.search(/\bORDER\s+BY\b/i);
+  const cond = (ob < 0 ? rest : rest.slice(0, ob)).trim();
+  const order = ob < 0 ? '' : `\n${rest.slice(ob).trim()}`;
+  const out = `${s.slice(0, at)}WHERE (${cond})\n  AND ${coligadaWhere(source, coligadas)}${order}`;
+  checkSelect(out);
+  return out;
+}
+// Tabela do RM sem nenhuma linha para as coligadas escolhidas: tudo o que está na carga dessas coligadas "não subiu".
+function allRowsSql(source, coligadas) {
+  if (!SRC_RE.test(String(source))) throw new Error(`Tabela da carga inválida: ${source}`);
+  const out = `SELECT [${source}].* FROM [${source}]${coligadas ? `\nWHERE ${coligadaWhere(source, coligadas)}` : ''}`;
+  checkSelect(out);
+  return out;
+}
+
 // ---------- Complemento (porta do gera_complemento.py) ----------
 // Mesmo valor vindo do TXT ou da base vira o mesmo texto: 8 = 8.0 = '8'; 07:00 = 07:00:00; datas em AAAA-MM-DD.
 const DATA_ISO = /^(\d{4})-(\d{2})-(\d{2})(?:[ T]00:00(?::00(?:\.0+)?)?)?$/;
@@ -233,4 +281,4 @@ function computeComplement(def, txtBuf, rmRows, coligada) {
 }
 
 module.exports = { SYSTEMS, PREFIX, MARKER, CODE_RE, TABLE_RE, consultaCode, cleanParams, renderRm, checkSelect, systemOf, pickTables, sourceOf, norm, splitTxt, keyOf, computeComplement, crc32,
-  LIMITS, outputColumns, partColumnOf, statsSql, planParts, partSql, partLabel };
+  LIMITS, outputColumns, partColumnOf, statsSql, planParts, partSql, partLabel, cleanColigadas, coligadaFilter, coligadaWhere, scopeValidation, allRowsSql };

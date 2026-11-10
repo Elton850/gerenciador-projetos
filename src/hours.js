@@ -345,7 +345,7 @@ function cleanEntry(b, { data, nowMs, existing = null }) {
   const endMin = typeof b.endMin === 'number' ? b.endMin : parseHM(b.end);
   if (!Number.isInteger(startMin) || !Number.isInteger(endMin) || startMin < 0 || endMin > DAY_MIN) throw httpError(400, 'Informe o horário inicial e o final no formato HH:MM (dentro do mesmo dia).');
   if (endMin <= startMin) throw httpError(400, 'O horário final precisa ser depois do inicial.');
-  if (b.date === today.date && endMin > today.min + 1) throw httpError(400, 'O horário final está no futuro.');
+  // Horário futuro no dia de hoje é permitido (ex.: às 10:00 já apontar até 12:00); só a data futura é bloqueada.
   const pausedMin = b.pausedMin === undefined || b.pausedMin === '' || b.pausedMin === null ? 0 : Number(b.pausedMin);
   if (!Number.isInteger(pausedMin) || pausedMin < 0) throw httpError(400, 'As pausas devem ser um número de minutos (0 ou mais).');
   if (endMin - startMin - pausedMin < 1) throw httpError(400, 'O tempo líquido precisa ser de pelo menos 1 minuto (as pausas não podem ocupar todo o período).');

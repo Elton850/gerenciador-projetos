@@ -90,7 +90,7 @@ test('validação do apontamento: atividade obrigatória, futuro, horários, int
   assert.throws(() => H.cleanEntry({ ...base, activity: '  ' }, { data, nowMs: now }), /o que foi feito/);
   assert.throws(() => H.cleanEntry({ ...base, date: ds(1) }, { data, nowMs: now }), /futura/);
   assert.throws(() => H.cleanEntry({ ...base, end: '09:00' }, { data, nowMs: now }), /depois do inicial/);
-  assert.throws(() => H.cleanEntry({ ...base, start: '14:00', end: '16:00' }, { data, nowMs: now }), /futuro/);
+  assert.equal(H.cleanEntry({ ...base, start: '14:00', end: '16:00' }, { data, nowMs: now }).endMin, 960, 'horário futuro hoje é aceito');
   assert.throws(() => H.cleanEntry({ ...base, pausedMin: 150 }, { data, nowMs: now }), /1 minuto/);
   assert.throws(() => H.cleanEntry({ ...base, projectId: 'nada' }, { data, nowMs: now }), /projeto/);
   const internal = H.cleanEntry({ ...base, projectId: 'internal' }, { data, nowMs: now });
@@ -211,7 +211,9 @@ test('API: jornada → cronômetro → pausas → confirmação → correção �
     assert.equal(inPause.status, 200, 'cabe na pausa da outra atividade');
     assert.equal((await man({ start: '12:00', end: '13:00' })).status, 200);
     assert.equal((await man({ start: '14:00', end: '17:00', activity: '' })).status, 400);
-    assert.equal((await man({ start: '14:00', end: '16:00', projectId: 'internal', activity: 'Treinamento' })).status, 400, 'fim no futuro (agora são 15:00)');
+    const fut = await man({ start: '16:00', end: '17:00', projectId: 'internal', activity: 'Treinamento' });
+    assert.equal(fut.status, 200, 'horário futuro no dia de hoje é permitido (agora são 15:00)');
+    assert.equal((await api('DELETE', `/api/hours/entries/${fut.json.entry.id}`)).status, 200);
     assert.equal((await man({ start: '13:00', end: '14:30', projectId: 'internal', activity: 'Treinamento' })).json.entry.projectName, 'Interno / Administrativo');
     let day = (await api('GET', `/api/hours/day?date=${D0}`)).json;
     assert.deepEqual([day.confirmed, day.remaining, day.status, day.pct], [150 + 30 + 60 + 90, 510 - 330, 'pendente', 64.71]);

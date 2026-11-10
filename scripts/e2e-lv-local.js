@@ -79,6 +79,13 @@ async function waitJob(id) { for (let i = 0; i < 600; i++) { const j = ok(await 
     assert.equal(bk.length, 1); assert.match(fs.readFileSync(path.join(job.result.dir, 'backup', bk[0]), 'utf8'), /CODTURMA;ANTIGA\r\nVELHA;1/);
     const v = job.result.validation.find((x) => x.label === 'STURMA');
     assert.deepEqual([v.carga, v.missing], [3, 1]);
+    // "Copiar SQL": o texto roda como no SSMS (USE + GO, via sqlcmd) e devolve as mesmas linhas que a ferramenta contou
+    assert.match(v.sqlText, new RegExp(`USE \\[${DBN}\\];`));
+    const sqlFile = path.join(tmp, 'copiado.sql'); fs.writeFileSync(sqlFile, v.sqlText);
+    const outSql = require('child_process').execFileSync('sqlcmd', ['-S', 'localhost', '-E', '-C', '-b', '-h', '-1', '-W', '-s', ';', '-i', sqlFile], { encoding: 'utf8' });
+    const linhas = outSql.split(/\r?\n/).filter((l) => l.trim() && !/linhas? afetadas|rows? affected|Changed database context|contexto do banco/i.test(l));
+    assert.equal(linhas.length, v.missing, `SQL copiado devolveu ${linhas.length} linha(s):\n${outSql}`);
+    assert.ok(fs.existsSync(path.join(job.result.dir, 'CONSULTAS_VALIDACAO.sql')));
     assert.match(fs.readFileSync(v.file, 'utf8'), /2030;7;T9;Turma 9/);
     assert.match(fs.readFileSync(path.join(job.result.dir, 'RESUMO.txt'), 'utf8'), /STURMA\s+ZMIGRA_STURMA\s+3\s+1\s+66\.7/);
 

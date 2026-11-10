@@ -1761,3 +1761,49 @@ p.lv-callout { padding-left: 12px; }
 .lv-tbl .lv-tag { flex: none; }
 .lv-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .lv-actions .btn[disabled] { opacity: .5; cursor: not-allowed; }
+
+/* ---------- Validação de Carga: cores na paleta TOTVS (v1.26.3) ----------
+   Tons próprios da tela, derivados da marca (navy, ciano, verde-água, laranja, magenta, roxo), mais sóbrios no tema claro.
+   Cor só onde informa: barras de % e números "não subiu"; cartões com uma faixa fina no topo. */
+.lv-page {
+  --lv-ok: #00D9B5; --lv-ok-2: #00DBFF; --lv-warn: #FF9A1F; --lv-warn-2: #FFC24D; --lv-bad: #FF3FA4; --lv-bad-2: #C25BFF; --lv-info: #B57BFF;
+  --lv-track: color-mix(in srgb, var(--text) 10%, transparent);
+}
+:root[data-theme="light"] .lv-page {
+  --lv-ok: #0B8F76; --lv-ok-2: #0A7FC2; --lv-warn: #C46A00; --lv-warn-2: #E39A1F; --lv-bad: #C0007E; --lv-bad-2: #8A3FD1; --lv-info: #7A2BD1;
+  --lv-track: color-mix(in srgb, var(--navy) 9%, transparent);
+}
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) .lv-page {
+  --lv-ok: #0B8F76; --lv-ok-2: #0A7FC2; --lv-warn: #C46A00; --lv-warn-2: #E39A1F; --lv-bad: #C0007E; --lv-bad-2: #8A3FD1; --lv-info: #7A2BD1;
+  --lv-track: color-mix(in srgb, var(--navy) 9%, transparent);
+} }
+
+/* barras */
+.lv-meter-bar { height: 8px; background: var(--lv-track); }
+.lv-meter-bar > span { background: color-mix(in srgb, var(--text) 30%, transparent); }
+.lv-meter.ok .lv-meter-bar > span { background: linear-gradient(90deg, var(--lv-ok-2), var(--lv-ok)); }
+.lv-meter.warn .lv-meter-bar > span { background: linear-gradient(90deg, var(--lv-warn), var(--lv-warn-2)); }
+.lv-meter.bad .lv-meter-bar > span { background: linear-gradient(90deg, var(--lv-bad-2), var(--lv-bad)); }
+.lv-meter.bad .lv-meter-bar { background: color-mix(in srgb, var(--lv-bad) 14%, var(--lv-track)); }
+.lv-meter.ok .lv-meter-val { color: var(--lv-ok); } .lv-meter.warn .lv-meter-val { color: var(--lv-warn); } .lv-meter.bad .lv-meter-val { color: var(--lv-bad); }
+
+/* números "não subiu" na cor da faixa da linha */
+.lv-bad-n { color: var(--lv-bad); }
+.lv-row.warn .lv-bad-n { color: var(--lv-warn); }
+
+/* cartões do resumo: faixa fina no topo, valor neutro (cor só em "não subiu" e "no RM") */
+.lv-kpi { border-left-width: 1px; border-top: 3px solid var(--border); }
+.lv-kpi .lv-kpi-value { color: var(--text); }
+.lv-kpi.ok { border-top-color: var(--lv-ok); border-left-color: var(--border); }
+.lv-kpi.warn { border-top-color: var(--lv-warn); border-left-color: var(--border); }
+.lv-kpi.bad { border-top-color: var(--lv-bad); border-left-color: var(--border); }
+.lv-kpi.ok .lv-kpi-value { color: var(--lv-ok); } .lv-kpi.warn .lv-kpi-value { color: var(--lv-warn); } .lv-kpi.bad .lv-kpi-value { color: var(--lv-bad); }
+
+/* etiquetas: "RM sem linhas" no roxo da marca (informação sobre o RM), sem disputar com o vermelho dos números */
+.lv-tag.bad { color: var(--lv-info); background: color-mix(in srgb, var(--lv-info) 12%, transparent); border-color: color-mix(in srgb, var(--lv-info) 35%, transparent); }
+
+/* ações da linha (coligadas / copiar SQL) */
+.lv-row-acts { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 4px; }
+.lv-row-acts .lv-toggle { margin-top: 0; }
+.lv-table td:first-child { min-width: 240px; }
+.lv-row-acts { flex-wrap: nowrap; }

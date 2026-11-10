@@ -213,6 +213,7 @@ db.runWorker = async (op, args, opts = {}) => {
   // validação simulada: devolve o que recebeu (coligadas, rmEmpty, skip) para os testes conferirem a ligação com a api
   if (op === 'tool:lv-validate') return args.input.items.map((i) => (i.skip ? { label: i.label, source: i.source, error: i.skip, skipped: true }
     : { label: i.label, source: i.source, carga: 3, missing: i.rmEmpty ? 3 : 0, file: null, rmEmpty: !!i.rmEmpty, scoped: !!args.input.coligadas,
+      sql: i.rmEmpty ? C.allRowsSql(i.source, args.input.coligadas) : args.input.coligadas ? C.scopeValidation(i.sql, i.source, args.input.coligadas) : i.sql,
       byColigada: args.input.coligadas ? args.input.coligadas.map((c) => ({ coligada: c, carga: c === args.input.coligadas[0] ? 3 : 0, missing: i.rmEmpty && c === args.input.coligadas[0] ? 3 : 0 })) : null }));
   if (op === 'tool:lv-keys') return { rows: [{ CODFILIAL: 3, CODPERLET: '2030', CODTURMA: 'T1', CODCOLIGADA: 7 }] };
   throw new Error(`op inesperada ${op}`);
@@ -515,6 +516,18 @@ test('API: várias coligadas no RM e na validação; RM vazio nas coligadas = na
   assert.match(resumo, /coligada\(s\) 1, 2, 9/);
   assert.match(resumo, /RM sem linhas nas coligadas: nada desta carga subiu/);
   assert.match(resumo, /coligada 1\s+3\s+3\s+0\.0/);
+  // SQL para o SSMS: contexto + USE + a consulta exata (com as coligadas); RM sem linhas traz a comparação do modelo comentada
+  const fco = job.result.validation.find((v) => v.label === 'PFHSTFCO');
+  assert.match(fco.sqlText, /^-- Validação de Carga · PFHSTFCO/);
+  assert.match(fco.sqlText, /coligada\(s\) 1, 2, 9/);
+  assert.match(fco.sqlText, /RM: dbo\.PFHSTFCO = cópia do RM gravada nesta base por esta execução/);
+  assert.match(fco.sqlText, /USE \[BASE_TESTE\];\r\nGO\r\n\r\nSELECT ZMIGRA_PFHSTFCO\.\*[\s\S]*TRY_CAST\(\[ZMIGRA_PFHSTFCO\]\.\[CODCOLIGADA\] AS INT\) IN \(1, 2, 9\)\r?\nGO/);
+  const sal = job.result.validation.find((v) => v.label === 'PFHSTSAL');
+  assert.match(sal.sqlText, /lista TODA a carga delas/);
+  assert.match(sal.sqlText, /SELECT \[ZMIGRA_PFHSTSAL\]\.\* FROM \[ZMIGRA_PFHSTSAL\]/);
+  assert.match(sal.sqlText, /-- Comparação do modelo[\s\S]*-- LEFT JOIN PFHSTSAL/);
+  const arq = fs.readFileSync(path.join(job.result.dir, 'CONSULTAS_VALIDACAO.sql'), 'utf8');
+  assert.ok(arq.includes('-- Validação de Carga · PFHSTSAL') && arq.includes('-- Validação de Carga · PFHSTFCO'), 'arquivo com todas as consultas');
   // erro no RM numa tabela: ela NÃO é validada (a cópia na base seria de outra hora)
   fake.consultas.clear(); sim.calls.length = 0; fake.restFail = true;
   t.after(() => { fake.restFail = false; });

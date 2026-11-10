@@ -215,8 +215,10 @@
       tick();
     }
     // ---- Resultado do trabalho: resumo no topo → validação (principal) → extração (recolhível) → arquivos → registro ----
+    const copyText = (text, msg) => navigator.clipboard.writeText(text).then(() => toast(msg, 'ok'), fail);
     const pctOf = (carga, missing) => (carga ? (100 * (carga - missing)) / carga : null);
-    const tone = (p) => (p === null ? 'none' : p >= 99.95 ? 'ok' : p <= 0.05 ? 'bad' : 'warn');
+    // faixas: 100% = ok · 50%–99,9% = parcial · abaixo de 50% = crítico
+    const tone = (p) => (p === null ? 'none' : p >= 99.95 ? 'ok' : p >= 50 ? 'warn' : 'bad');
     const fmtPct = (p) => (p === null ? '—' : `${p.toFixed(1).replace('.', ',')}%`);
     // barra do "% no RM": verde = tudo subiu, laranja = parcial, vermelho = nada subiu
     const meter = (p, title) => h('div', { class: `lv-meter ${tone(p)}`, title: title || null },
@@ -271,7 +273,8 @@
             v.rmEmpty || v.scoped === false ? h('div', { class: 'lv-tags' },
               v.rmEmpty ? h('span', { class: 'lv-tag bad', title: 'O RM não tem linhas desta tabela nas coligadas escolhidas: toda a carga delas conta como "não subiu"' }, 'RM sem linhas') : null,
               v.scoped === false ? h('span', { class: 'lv-tag', title: 'A carga não tem a coluna CODCOLIGADA: comparada inteira' }, 'carga sem coligada') : null) : null,
-            toggle),
+            toggle || v.sqlText ? h('div', { class: 'lv-row-acts' }, toggle,
+              v.sqlText ? h('button', { class: 'lv-toggle', title: 'Copia a consulta de comparação exata desta execução (USE do banco + filtro de coligadas), para rodar no SSMS', onclick: () => copyText(v.sqlText, `SQL de ${v.label} copiado: cole no SSMS.`) }, '⧉ Copiar SQL') : null) : null),
           h('td', { class: 'num' }, N(v.carga)), h('td', { class: 'num' }, N((v.carga || 0) - (v.missing || 0))),
           h('td', { class: 'num' }, v.missing ? h('span', { class: 'lv-bad-n' }, N(v.missing)) : '0'),
           h('td', null, meter(p, v.file ? `Linhas que não subiram: ${v.file}` : null))));
@@ -323,8 +326,9 @@
             h('thead', null, h('tr', null, ['TXT', 'No RM', 'Linhas no TXT', 'A subir', 'Só no RM', 'Situação'].map((x, i) => h('th', { class: i && i < 5 ? 'num' : null }, x)))),
             h('tbody', null, res.rows.map((r) => h('tr', null, h('td', { class: 'mono lv-strong' }, r.table), h('td', { class: 'num' }, N(r.inRm)), h('td', { class: 'num' }, N(r.txtLines)), h('td', { class: 'num' }, r.toLoad ? pill('soon', N(r.toLoad)) : N(r.toLoad)), h('td', { class: 'num' }, N(r.onlyRm)), h('td', null, h('span', { class: 'lv-sub' }, r.status)))))))) : null,
         res.warnings && res.warnings.length ? h('ul', { class: 'lv-callout warn' }, res.warnings.map((w) => h('li', null, w))) : null,
-        res.dir ? h('div', { class: 'lv-files' }, h('span', { class: 'muted small' }, 'Arquivos (resumo, linhas que não subiram, cópias):'), h('code', { class: 'mono' }, res.dir),
-          h('button', { class: 'btn ghost sm', onclick: () => navigator.clipboard.writeText(res.dir).then(() => toast('Caminho copiado.', 'ok'), fail) }, 'Copiar caminho')) : null,
+        res.dir ? h('div', { class: 'lv-files' }, h('span', { class: 'muted small' }, 'Arquivos (resumo, linhas que não subiram, cópias, CONSULTAS_VALIDACAO.sql):'), h('code', { class: 'mono' }, res.dir),
+          h('button', { class: 'btn ghost sm', onclick: () => copyText(res.dir, 'Caminho copiado.') }, 'Copiar caminho'),
+          (res.validation || []).some((v) => v.sqlText) ? h('button', { class: 'btn ghost sm', title: 'Todas as consultas de comparação desta execução, uma depois da outra', onclick: () => copyText(res.validation.filter((v) => v.sqlText).map((v) => v.sqlText).join('\r\n'), 'Todas as consultas copiadas: cole no SSMS.') }, 'Copiar todas as consultas') : null) : null,
         j.log && j.log.length ? h('details', { class: 'lv-log' }, h('summary', null, `Registro (${j.log.length})`), h('pre', null, j.log.join('\n'))) : null));
     }
 

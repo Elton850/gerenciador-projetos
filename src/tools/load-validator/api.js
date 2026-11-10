@@ -226,7 +226,23 @@ function mount(app, deps, base) {
 
   // status (só na execução): tabela → 'ok' (cópia do RM gravada agora) | 'empty' (RM sem linhas nas coligadas). Tabela fora do
   // status não é validada: a cópia na base é de outra hora e daria um resultado falso.
-  async function runValidations(conn, defs, dir, job, { coligadas = null, status = null } = {}) {
+  // SQL de cada validação pronto para o SSMS: cabeçalho com o contexto + USE do banco + a consulta EXATA que rodou (com o filtro
+  // de coligadas). RM sem linhas: a consulta lista a carga inteira das coligadas, e a comparação do modelo vai comentada.
+  function sqlForSsms(v, { target, coligadas, modelSql, fresh }) {
+    const rmTable = (String(v.sql).match(/\bLEFT\s+JOIN\s+\[?(\w+)\]?/i) || [])[1] || v.label;
+    const H = [
+      `-- Validação de Carga · ${v.label} · gerado em ${new Date().toLocaleString('pt-BR')}`,
+      `-- Base de migração: ${target.database} (servidor ${target.server})${coligadas ? ` · coligada(s) ${coligadas.join(', ')}` : ' · todas as coligadas da carga'}`,
+      `-- Carga: dbo.${v.source} · RM: dbo.${rmTable} = cópia do RM ${fresh ? 'gravada nesta base por esta execução' : 'que já estava nesta base (Só validar)'}.`,
+      v.rmEmpty ? `-- O RM não tinha linhas de ${rmTable} nessas coligadas: a consulta abaixo lista TODA a carga delas (= o que não subiu).`
+        : '-- Linhas devolvidas = as que estão na carga e NÃO estão no RM (mesma regra da ferramenta).',
+      v.scoped === false && coligadas ? `-- A carga ${v.source} não tem CODCOLIGADA: comparada inteira.` : null,
+    ].filter(Boolean);
+    const body = [`USE ${'[' + String(target.database).replace(/]/g, ']]') + ']'};`, 'GO', '', String(v.sql).trim(), 'GO'];
+    if (v.rmEmpty && modelSql) body.push('', '-- Comparação do modelo, para quando o RM tiver dados desta tabela:', ...String(modelSql).trim().split('\n').map((l) => `-- ${l}`));
+    return `${[...H, '', ...body].join('\r\n')}\r\n`;
+  }
+  async function runValidations(conn, defs, dir, job, { coligadas = null, status = null, target = null } = {}) {
     const items = defs.flatMap((d) => d.validations.map((v) => {
       const it = { label: v.label, sql: v.sql, source: C.sourceOf(v.sql), file: path.join(dir, `NAO_SUBIU_${fileSafe(v.label)}.csv`) };
       if (status) {
@@ -239,6 +255,20 @@ function mount(app, deps, base) {
     job.current = 'Validando contra a carga (só leitura)…';
     const r = await worker(conn, 'lv-validate', { items, coligadas }, { onProgress: (done, total, inf) => { job.current = `Validando ${inf && inf.table ? inf.table : ''} (${done}/${total})`; job.updatedAt = Date.now(); } });
     for (const v of r) job.say(v.error ? `[${v.label}] validação: ${v.skipped ? '' : 'ERRO '}${v.error}` : `[${v.label}] carga ${v.carga} · não subiu ${v.missing}${v.byColigada ? ` · ${v.byColigada.map((b) => `col. ${b.coligada}: ${b.missing}/${b.carga}`).join(' · ')}` : ''}`);
+    // SQL para o SSMS (tela: "Copiar SQL"; pasta: CONSULTAS_VALIDACAO.sql). Só das validações que rodaram.
+    if (target) {
+      const modelOf = new Map(items.map((i) => [i.label, i]));
+      const texts = [];
+      for (const v of r) {
+        if (v.error || !v.sql) continue;
+        const it = modelOf.get(v.label);
+        let modelSql = null;
+        if (v.rmEmpty && it) { try { modelSql = v.scoped && coligadas ? C.scopeValidation(it.sql, it.source, coligadas) : it.sql; } catch { modelSql = it.sql; } }
+        v.sqlText = sqlForSsms(v, { target, coligadas: v.scoped === false ? null : coligadas, modelSql, fresh: !!status });
+        texts.push(v.sqlText);
+      }
+      if (texts.length) { try { fs.writeFileSync(path.join(dir, 'CONSULTAS_VALIDACAO.sql'), `﻿${texts.join('\r\n')}`, 'utf8'); } catch { /* o resumo segue sem o arquivo */ } }
+    }
     return r;
   }
   const pct = (carga, missing) => (carga ? (100 * (carga - missing) / carga).toFixed(1) : '-');
@@ -376,7 +406,7 @@ function mount(app, deps, base) {
         try { writeSummary(dir, { target: info, rm: rmc, params, extraction, snapshot, partial: { done: extraction.length, total: defs.length } }); } catch { /* o resumo final tenta de novo */ }
       }
       // 3) Validação (só leitura)
-      if (!job.cancelRequested) validation = await runValidations(conn, defs, dir, job, { coligadas: params.coligadas, status });
+      if (!job.cancelRequested) validation = await runValidations(conn, defs, dir, job, { coligadas: params.coligadas, status, target: info });
       job.done = job.total;
       writeSummary(dir, { target: info, rm: rmc, params, extraction, validation, snapshot });
       job.result = { dir, extraction, validation, snapshot };
@@ -408,7 +438,7 @@ function mount(app, deps, base) {
     res.json({ jobId: job.id });
     const dir = runDir(outDir, 'validacao');
     try {
-      const validation = await runValidations(conn, defs, dir, job, { coligadas });
+      const validation = await runValidations(conn, defs, dir, job, { coligadas, target: info });
       writeSummary(dir, { target: info, validation, params: coligadas ? { coligadas, periods: [] } : null });
       job.result = { dir, validation }; job.status = 'done'; job.done = 1;
       audit.log({ action: 'lv-validacao', by: whoAmI(), detalhe: saved.name, server: db.label(saved), database: info.database, tabelas: defs.length });

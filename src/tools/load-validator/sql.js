@@ -193,7 +193,8 @@ async function validate(core, conn, password, { items, coligadas = null }, { pro
           const r = await streamToCsv(req(), chk2.sql, it.file);
           if (!r.rows) fs.rmSync(it.file, { force: true });
           if (byColigada) for (const b of byColigada) b.missing = r.byColigada[b.coligada] || 0;
-          out.push({ label: it.label, source: it.source, carga, missing: r.rows, file: r.rows ? it.file : null, scoped, byColigada, rmEmpty: !!it.rmEmpty, cargaTotal: total });
+          // sql = exatamente o que rodou (com o filtro de coligadas), para o usuário repetir no SSMS
+          out.push({ label: it.label, source: it.source, carga, missing: r.rows, file: r.rows ? it.file : null, scoped, byColigada, rmEmpty: !!it.rmEmpty, cargaTotal: total, sql: chk2.sql });
         }
       } catch (e) {
         fs.rmSync(it.file, { force: true });

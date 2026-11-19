@@ -431,6 +431,20 @@ test('Folha: o catálogo é exatamente o que o gerador produz a partir do arquiv
   assert.equal(r.status, 0, `catalog-folha.js editado à mão ou desatualizado: rode node scripts/gera-catalogo-folha.js\n${r.stdout}${r.stderr}`);
 });
 
+test('Folha: valor convertido aceita vazio dos dois lados (NULL = NULL); chaves continuam com "="', () => {
+  const { TABLES } = require('../src/tools/load-validator/catalog-folha.js');
+  const sqlOf = (t) => TABLES.find((x) => x.table === t).validations[0].sql;
+  const perff = sqlOf('PFPERFF');
+  for (const c of ['BASEINSS', 'BASEIRRF', 'BASEFGTS']) {
+    assert.ok(perff.includes(`(PFPERFF.${c} = CAST(REPLACE(ZMIGRA_PFPERFF.${c},',','.') AS FLOAT) OR (PFPERFF.${c} IS NULL AND CAST(REPLACE(ZMIGRA_PFPERFF.${c},',','.') AS FLOAT) IS NULL))`), c);
+  }
+  assert.match(perff, /AND PFPERFF\.NROPERIODO = ZMIGRA_PFPERFF\.NROPERIODO\n/, 'chave sem OR');
+  assert.match(sqlOf('PFFINANC'), /PFFINANC\.VALOR IS NULL\)\)/);
+  for (const t of TABLES) for (const v of t.validations) {
+    for (const l of v.sql.split('\n')) if (/ AS FLOAT\)/i.test(l) && /^\s*AND /i.test(l)) assert.match(l, / IS NULL\)\)\s*$/, `${t.table}: ${l}`);
+  }
+});
+
 test('API Folha: conferir → executar no sistema P, uma consulta por vez, PFFINANC em partes por ANOCOMP, sem complemento', async (t) => {
   fake.consultas.clear(); fake.ops.length = 0; fake.urls.length = 0; sim.calls.length = 0;
   fake.rows['ZMV.PFFINANC'] = [2021, 2022, 2023, 2024, 2025].flatMap((ano) => [1, 2].map((m) => ({ CODCOLIGADA: 7, CHAPA: '0001', ANOCOMP: ano, MESCOMP: m, NROPERIODO: 1, CODEVENTO: '001', DTPAGTO: `${ano}-0${m}-05 00:00:00`, REF: 30, VALOR: 1234.5, VALORORIGINAL: 1234.5 })));

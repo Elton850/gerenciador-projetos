@@ -8,6 +8,10 @@
 //  2. Datas, tratadas NA BASE DE MIGRAÇÃO (SQL Server): a cópia do RM é texto e a API devolve "2026-02-04T00:00:00-03:00"; nas
 //     validações, FORMAT(<tabela RM>.<data>, ...) e CAST(<tabela RM>.<data> AS DATE) viram ...CAST(LEFT(<tabela RM>.<data>, 10) AS DATE)...
 //     (os 10 primeiros caracteres = AAAA-MM-DD; FORMAT não aceita texto e CAST não aceita o fuso).
+//  3. Valores numéricos que podem estar vazios dos dois lados: nas validações, a condição de valor convertido
+//     ("AND A = CAST(REPLACE(...) AS FLOAT)" ou o inverso) vira "AND (A = B OR (A IS NULL AND B IS NULL))".
+//     Com "=", NULL nunca é igual a NULL e o período aparecia como "não subiu" sem diferença real
+//     (BOA LOCAÇÃO, 19/11/2026: 30.638 linhas da PFPERFF com base vazia na carga e no RM).
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -49,9 +53,17 @@ function adaptRm(sql) {
   return { table, cols, sql: `SELECT\n  ${cols.join(',\n  ')}\nFROM ${table}\nWHERE CODCOLIGADA = {{CODCOLIGADA}}` };
 }
 
+// Adaptação 3: comparação de valor convertido (CAST(... AS FLOAT)) aceita vazio dos dois lados.
+function nullSafeValue(line) {
+  if (!/CAST\s*\([\s\S]*\sAS\s+FLOAT\s*\)/i.test(line)) return line;
+  const m = line.match(/^(\s*AND\s+)(.+?)\s+=\s+(.+?)\s*$/i);
+  if (!m || /=/.test(m[2]) || /=/.test(m[3])) return line;
+  return `${m[1]}(${m[2]} = ${m[3]} OR (${m[2]} IS NULL AND ${m[3]} IS NULL))`;
+}
+
 function adaptValidation(sql, table) {
   const day = (c) => `CAST(LEFT(${table}.${c}, 10) AS DATE)`;
-  return sql.replace(new RegExp(`CAST\\(\\s*${table}\\.(\\w+)\\s+AS\\s+DATE\\s*\\)`, 'gi'), (_, c) => day(c))
+  return sql.split('\n').map(nullSafeValue).join('\n').replace(new RegExp(`CAST\\(\\s*${table}\\.(\\w+)\\s+AS\\s+DATE\\s*\\)`, 'gi'), (_, c) => day(c))
     .replace(new RegExp(`FORMAT\\(\\s*${table}\\.(\\w+)\\s*,`, 'g'), (_, c) => `FORMAT(${day(c)},`)
     .replace(/[ \t]+$/gm, '').replace(/\t/g, ' ');
 }
@@ -64,7 +76,8 @@ const tables = blocks(fs.readFileSync(SRC, 'utf8')).map((b) => {
 
 const head = `// GERADO por scripts/gera-catalogo-folha.js a partir de docs/fontes/"SQL FOLHA - VERIFICA DIFERENCA ENTRE RM E ORIGEM.txt".
 // Não editar à mão: rode o gerador. Adaptações: filtro da coligada (consulta do RM igual à da origem, roda em SQL Server ou
-// Oracle) e datas tratadas na base: CAST(LEFT(col, 10) AS DATE) nas validações. Parâmetro: {{CODCOLIGADA}}.
+// Oracle), datas tratadas na base (CAST(LEFT(col, 10) AS DATE)) e valor convertido aceitando vazio dos dois lados
+// (A = B OR (A IS NULL AND B IS NULL)) nas validações. Parâmetro: {{CODCOLIGADA}}.
 // TABLES: ordem do arquivo de origem. rmSql roda NO RM (consulta temporária, sistema P); validations rodam NA BASE DE MIGRAÇÃO (só
 // leitura) e devolvem as linhas da carga (ZMIGRA_*) que não estão na cópia do RM. COMPLEMENT: vazio (não há chaves de TXT da Folha).
 'use strict';
